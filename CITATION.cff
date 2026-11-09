@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use karez or its research in your work, please cite it as below."
+title: "karez: standards-shaped database connectivity for Rust"
+type: software
+authors:
+  - given-names: Sudheesh
+    family-names: PM
+repository-code: "https://github.com/pmsudhi/karez"
+url: "https://github.com/pmsudhi/karez"
+license: Apache-2.0
+keywords:
+  - rust
+  - database
+  - database-driver
+  - jdbc
+  - odbc
+  - adbc
+  - apache-arrow
+  - postgresql
+  - mysql
+  - sql-server
+  - sqlite
+abstract: >-
+  karez is a planned Rust database connectivity library: one API and native drivers for
+  PostgreSQL, MySQL and MariaDB, SQL Server and SQLite that follows the JDBC, ODBC and ADBC
+  standards, decodes results into Apache Arrow columnar chunks, and is exported as ADBC, ODBC
+  and JDBC drivers. The repository currently holds the sourced research and the build plan;
+  no code has been released and nothing has been measured.
+references:
+  - type: software
+    title: "rdbc: Rust DataBase Connectivity"
+    url: "https://github.com/tokio-rs/rdbc"
+    repository-code: "https://github.com/tokio-rs/rdbc"
+    authors:
+      - family-names: Grove
+        given-names: Andy

@@ -1,17 +1,213 @@
+<p align="center">
+  <img src="assets/svg/karez-tile.svg" alt="karez: database connectivity for Rust" width="160">
+</p>
+
 # karez
 
-A fast, small, standards-shaped database connectivity library for Rust: one API and native
-drivers for PostgreSQL, MySQL and MariaDB, SQL Server and SQLite, with parity targets for JDBC,
-ODBC and ADBC. Results are decoded straight from the wire into Arrow-layout columnar chunks, with
-a zero-cost row view on top, and the same core is exported as an ADBC driver, an ODBC driver and
-a JDBC driver so other languages and tools can use it.
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Status: design stage](https://img.shields.io/badge/status-design%20stage-orange.svg)](docs/STATUS.md)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
+[![Standards: JDBC, ODBC, ADBC](https://img.shields.io/badge/standards-JDBC%20%C2%B7%20ODBC%20%C2%B7%20ADBC-informational.svg)](docs/design/plan.md#3-standards-parity)
+[![Part of Cameleer](https://img.shields.io/badge/part%20of-Cameleer-d4a017.svg)](https://github.com/pmsudhi/cameleer)
 
-A karez is an underground channel that carries water from a deep aquifer to where it is used, by
-gravity alone. karez is part of the [Cameleer](https://github.com/pmsudhi/cameleer) family, next
-to simoom, Cameleer's HTTP engine.
+### Database connectivity for Rust, shaped like JDBC, ODBC and ADBC.
 
-Status: design stage; nothing is built yet. See [docs/design/plan.md](docs/design/plan.md) for
-the plan and its go/no-go milestone, [docs/design/research.md](docs/design/research.md) for the
-evidence, and [docs/research/](docs/research/) for the seven research notes behind it.
+**karez** is an open-source database connectivity library for Rust: one API and native drivers for
+**PostgreSQL, MySQL and MariaDB, SQL Server and SQLite**. It follows the JDBC, ODBC and ADBC
+standards, decodes results straight from the wire into **Apache Arrow** columnar chunks, and is
+exported as an **ADBC driver, an ODBC driver and a JDBC driver**, so Python, Java, Go, .NET, R,
+BI tools and query engines can use the same core. It is designed to be **fast, small and safe**.
 
-Licensed under the Apache License 2.0.
+> **Status: design stage.** Nothing is built yet and nothing is measured. The research and the
+> build plan are written; the first milestone is a three-week PostgreSQL spike that must clear
+> stated numbers before any other work starts (see [Design targets](#design-targets-not-measurements)).
+> Every number on this page that is not a published third-party result is a target, not a result.
+
+[Plan](docs/design/plan.md) · [Research](docs/design/research.md) · [Status](docs/STATUS.md) ·
+[Why](#why-another-database-library) · [Planned API](#the-planned-api) · [Targets](#design-targets-not-measurements) ·
+[Roadmap](#roadmap) · [The name](#what-the-name-means) · [FAQ](#faq)
+
+---
+
+## Why another database library
+
+Rust has good database crates, and each makes a trade-off that karez is designed to avoid.
+The evidence behind each point is in [docs/design/research.md](docs/design/research.md), with its
+source and the date it was checked.
+
+- **The client library, not the language, decides OLTP speed.** On TechEmpower Round 23 (Fortunes,
+  identical hardware), the same web framework served 1,114,265 requests per second with
+  tokio-postgres and 38,712 with sqlx, a 20 to 40 times spread. Every fast entry used a dedicated
+  connection task with pipelining.
+- **Row-by-row transfer is the expensive part of bulk reads.** A 2017 VLDB study found that
+  mainstream database protocols were 10 to 60 times slower than shipping the same data over a raw
+  socket, because of per-row headers and per-value decoding, not because of query execution.
+  Column-major chunks of about 1 MB closed most of the gap.
+- **There is no common, standards-shaped Rust API.** [tokio-rs/rdbc](https://github.com/tokio-rs/rdbc)
+  tried and has been dormant since 2021. sqlx's `Any` driver covers nine scalar type kinds.
+  Pipelining in sqlx is an open issue since 2020; a pull request for it was closed unmerged in
+  September 2026 as needing a redesign.
+- **JDBC is the only way into Spark, Trino and Kafka Connect, and it is row-oriented.** In
+  published bulk-read measurements, Arrow-based transfer was 13 to 30 times faster than row-based
+  JDBC and ODBC paths, although one 2026 test measured a single-stream Flight SQL query 10 to 15
+  percent slower than JDBC. Arrow only helps where the consumer can use it.
+- **Rust has client-side ODBC bindings but we found no shipping Rust ODBC driver,** so BI tools
+  such as Power BI, Tableau and Excel cannot reach a Rust database core directly.
+
+karez's answer: one columnar decoding path under every API, a pipelined connection, a type model
+as wide as JDBC, ODBC and Arrow together, and three exports from one C ABI.
+
+## What karez will be
+
+| area | plan |
+|---|---|
+| Databases | PostgreSQL 13 to 18, MySQL 8.0 to 9.x, MariaDB 10.6 to 11.x, SQL Server 2017 and later (TDS 7.4 and 8.0 strict), SQLite 3.45 and later, and an ODBC bridge for everything else |
+| Core | one API with blocking and async forms, transactions and savepoints, prepared-statement caching, pipelining, batches and bulk load, metadata, SQLSTATE errors, cancellation, a fair connection pool |
+| Results | decoded from the receive buffer into Arrow-layout chunks (about 1,024 rows or 1 MiB), with a zero-allocation row view on top and a zero-copy columnar view |
+| Standards | JDBC 4.3 plus the 4.4 and 4.5 surface, ODBC 3.8 Core and Level 1, ADBC 1.1.0, and a port of the R2DBC test suite for the async API. Parity is declared per standard and per level |
+| Exports | an ADBC driver (one shared library plus a manifest), a JDBC driver for Java 22 and later through the foreign function API, an ODBC driver, Python wheels with DB-API 2.0 and an Arrow stream, and Node bindings |
+| Safety | server-side parameter binding only, verified TLS by default, an allow-list for authentication methods, checked length arithmetic, fuzzed decoders, `forbid(unsafe_code)` outside two crates |
+| Size | no dependencies in the core, per-driver Cargo features, and a stripped PostgreSQL hello-world of at most 600 KB as a design target |
+
+## The planned API
+
+This is a sketch from [docs/design/plan.md](docs/design/plan.md), **not code that exists**.
+It shows the intent: JDBC-shaped use with no per-row allocation, and the same cursor as Arrow.
+
+```rust
+use karez::{Value, Url, Isolation};
+
+let url = Url::parse("karez:pg://app@db.internal:5432/sales?sslmode=verify-full")?;
+let mut conn = karez::drivers().get(&url)?.connect(&url, &Credentials::from_env()?)?;
+
+let stmt = conn.prepare("SELECT id, total FROM orders WHERE customer = ?")?;   // cached per connection
+
+// Row view: JDBC-shaped, zero allocation.
+let mut cur = stmt.query(&[Value::i64(7)])?;
+while let Some(row) = cur.next()? {
+    let id: i64 = row.get(0)?;
+    let total: Decimal128 = row.get(1)?;
+}
+
+// Columnar view: the same cursor, whole chunks, zero copy into Arrow.
+while let Some(chunk) = stmt.query(&[Value::i64(7)])?.next_chunk()? {
+    let stream = chunk.to_arrow_c_stream();
+}
+
+// Pipelining, transactions, bulk.
+let results = conn.pipeline().query(&stmt, &[Value::i64(1)]).query(&stmt, &[Value::i64(2)]).run()?;
+let mut tx = conn.begin(Isolation::RepeatableRead)?;
+tx.commit()?;
+```
+
+## Design targets, not measurements
+
+Nothing has been measured. These are the pass marks for Milestone 0, the go or no-go spike, on
+PostgreSQL, with an open-loop benchmark on separate machines that reports pipelined and
+unpipelined numbers separately. The method is in [docs/design/plan.md](docs/design/plan.md#6-benchmark-method).
+
+| scenario | must show to continue |
+|---|---|
+| Point query, unpipelined, 64 connections | within 5% of the fastest Rust client (tokio-postgres, zero-postgres or wtx), and at least 2x tuned pgJDBC |
+| Bulk scan of 1M rows into Arrow | at least 2x the best Rust row API, at least 3x tuned pgJDBC, at most one third of its memory |
+| Size | a stripped PostgreSQL hello-world of at most 600 KB, with zero direct dependencies |
+
+On single-row queries the evidence supports parity with the best existing clients, not a large
+margin. The large margin is on the bulk and columnar path, and every claim will name the API
+surface it applies to. If the bulk path misses its mark, the plan falls back to a thin
+standards-shaped API over tokio-postgres.
+
+## Roadmap
+
+About 49 engineer-weeks to 1.0, or roughly 30 calendar weeks with milestones in parallel.
+Details, exit targets and risks are in [docs/design/plan.md](docs/design/plan.md#8-milestones-and-measurable-targets).
+
+| milestone | what | effort |
+|---|---|---|
+| M0 | PostgreSQL measurement spike (go or no-go) | 3 weeks |
+| M1 | core API and the full PostgreSQL driver, TLS, pool, fuzzing | 8 weeks |
+| M2 | MySQL and MariaDB | 6 weeks |
+| M3 | SQL Server (TDS 7.4 and 8.0) | 7 weeks |
+| M4 | SQLite and the ODBC bridge | 4 weeks |
+| M5 | ADBC driver, C ABI, Python wheels, Node | 5 weeks |
+| M6 | JDBC driver for Java 22 and later | 6 weeks |
+| M7 | ODBC driver | 6 weeks |
+| M8 | hardening, audit and 1.0 | 4 weeks |
+
+## What the name means
+
+A **karez** (also written *kariz* or *kahriz*; *qanat* in Arabic and Persian contexts, *falaj*
+in Oman) is an ancient underground water channel. A tunnel with a very gentle slope carries water
+from a deep aquifer to a village and its fields by gravity alone, with no pumps, and the water
+does not evaporate in the desert sun. A row of vertical shafts along the tunnel lets people dig it
+and keep it clean. The Persian qanats are a UNESCO World Heritage Site.
+
+The database is the aquifer, your applications and data tools are the fields, and karez is the
+channel between them: it moves the precious thing a long way in bulk, with no pumping, and with
+access shafts along the way. The alternative it replaces is carrying water one bucket at a time,
+which is how row-by-row drivers work.
+
+karez belongs to the [Cameleer](https://github.com/pmsudhi/cameleer) family, a set of Rust
+projects with a desert and camel naming theme. Its siblings include Cameleer, the integration
+engine, and simoom, the HTTP server engine.
+
+## FAQ
+
+**What is karez?** An open-source database connectivity library for Rust, planned as one API plus
+native drivers for PostgreSQL, MySQL and MariaDB, SQL Server and SQLite, with JDBC, ODBC and ADBC
+parity and exports. It is the Rust counterpart of what JDBC and ODBC are for Java and C.
+
+**Can I use it today?** No. It is in the design stage. The repository holds the research, the
+plan and the brand assets. The first code is the Milestone 0 spike.
+
+**Is it a fork of tokio-rs/rdbc?** No. It starts fresh with no code or history from rdbc, which
+is cited as prior work. rdbc has been dormant since 2021.
+
+**Will it be faster than JDBC?** The target is at least twice tuned pgJDBC on point queries and
+at least three times on bulk scans, but nothing is measured yet. Existing Rust clients such as
+tokio-postgres already beat JDBC on point queries, so the aim there is parity with the fastest
+Rust client. The larger gain is expected on bulk reads into Arrow.
+
+**Why not just use sqlx, tokio-postgres or diesel?** They are good libraries. karez targets a
+different shape: one standards-shaped API across several databases, a columnar result path,
+pipelining on every driver that allows it, and exports for ADBC, ODBC and JDBC so other
+ecosystems can use it. diesel is an ORM and query builder, sqlx is an async toolkit, and
+tokio-postgres is a PostgreSQL driver; none of them is an ODBC or JDBC driver.
+
+**Will it be "JDBC compliant"?** Not in the formal sense. Formal JDBC compliance needs Oracle's
+licensed test kit. karez will claim "JDBC 4.3 API-complete" and publish its own test suite.
+Parity is declared per standard and per level.
+
+**Which databases?** PostgreSQL, MySQL, MariaDB, SQL Server and SQLite first. ClickHouse, DuckDB,
+a Flight SQL client and the Arrow-based cloud warehouses are candidates after 1.0. Oracle is held
+out pending a legal review of its undocumented protocol.
+
+**Is it async?** Both forms are planned. The blocking API drives the connection from the
+caller's thread with no thread hop. In diesel's published benchmark suite, async SQLite wrappers
+were 20 to 60 times slower than rusqlite, and the fastest async PostgreSQL client was about 37
+percent slower than the fastest synchronous one on single queries.
+
+**What licence?** Apache-2.0.
+
+## Documentation
+
+- [docs/design/plan.md](docs/design/plan.md): the decision, architecture, API, standards parity, size budget, benchmark method, security rules, milestones and risks.
+- [docs/design/research.md](docs/design/research.md): the evidence, in 13 sections with sources and check dates.
+- [docs/research/](docs/research/): the seven research notes behind it (Rust landscape, standards, wire protocols, papers and mathematics, JDBC baseline, security and testing, bridges).
+- [docs/STATUS.md](docs/STATUS.md): current state and next steps.
+- [docs/brand/](docs/brand/) and [assets/](assets/README.md): logo, icons and the generator that builds them.
+- [llms.txt](llms.txt) and [AGENTS.md](AGENTS.md): the same facts for LLMs and coding agents.
+
+## Contributing, security and citing
+
+Ideas, corrections to the research, and benchmark methodology reviews are welcome now; code
+follows the first milestone. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md)
+and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). To cite karez, use [CITATION.cff](CITATION.cff).
+
+## License and credits
+
+Licensed under the [Apache License 2.0](LICENSE). karez is an independent project. It is not
+affiliated with Oracle, Microsoft, the Apache Software Foundation or the owners of any database
+named here; JDBC, ODBC, ADBC, Apache Arrow, PostgreSQL, MySQL, MariaDB, SQL Server and SQLite are
+names of their respective owners. The prior work it builds on in spirit, and its research
+sources, are credited in [NOTICE](NOTICE) and in [docs/design/research.md](docs/design/research.md).

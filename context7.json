@@ -1,0 +1,15 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "karez",
+  "description": "Planned Rust database connectivity library: one API and native drivers for PostgreSQL, MySQL/MariaDB, SQL Server and SQLite with JDBC, ODBC and ADBC parity and exports, and Arrow-native results. Design stage: research and build plan only, no released code.",
+  "folders": ["docs", "README.md", "AGENTS.md"],
+  "excludeFolders": ["assets", "scripts", ".github", "docs/brand"],
+  "excludeFiles": [],
+  "rules": [
+    "karez is in the design stage: there is no released crate, driver or benchmark result. Describe anything not built as planned or as a design target.",
+    "Do not invent karez API. The only API is the sketch in docs/design/plan.md section 2.5.",
+    "Numbers in docs/design/research.md are tagged [vendor], [third party] or [paper] with a check date; never rank numbers from different machines together.",
+    "Never claim karez is faster than another library until a benchmark that follows docs/design/plan.md section 6 supports it.",
+    "karez is not a fork of tokio-rs/rdbc and copies no code from it."
+  ]
+}
