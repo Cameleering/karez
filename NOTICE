@@ -1,0 +1,26 @@
+karez
+Copyright 2026 The karez authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+karez is an independent project. It is written from scratch and contains no source code from
+other projects.
+
+Prior work and sources:
+
+- tokio-rs/rdbc (https://github.com/tokio-rs/rdbc), Rust DataBase Connectivity, by Andy Grove
+  and contributors, licensed under the Apache License, Version 2.0. karez is a fresh project
+  with the same goal and copies no code from it. It is cited as prior work in
+  docs/design/research.md.
+
+- The research in docs/research/ and docs/design/research.md cites papers, specifications,
+  benchmarks and project documentation from many third parties. Each source is credited with its
+  URL where it is used. Short paraphrases and measured numbers are attributed; no large passages
+  are reproduced.
+
+Trademarks. JDBC, Java and Oracle are trademarks of Oracle Corporation. ODBC, Microsoft and SQL
+Server are trademarks of Microsoft Corporation. Apache, Apache Arrow and ADBC are names of
+projects of The Apache Software Foundation. PostgreSQL, MySQL, MariaDB, SQLite and any other
+database named in this repository are names of their respective owners. karez is not
+affiliated with, endorsed by or sponsored by any of them, and uses these names only to say
+which standards and databases it targets.
