@@ -517,8 +517,9 @@ and M5 touch different crates and can run in parallel worktrees.
 | M8 | Hardening and 1.0: 30 CPU-days of fuzzing without a new crash, external audit of `karez-rt`, the three decoders and the C ABI, docs, the public release | 4 weeks | no open high or critical findings; parity matrix published; size table within §5; `docs/BENCHMARKS.md` reproducible from `bench/` |
 
 **Total to 1.0:** about 49 engineer-weeks; the first useful artefact (M1, a PostgreSQL driver
-that is measurably the fastest in Rust) at about week 11; M2–M5 in parallel compress the
-calendar to roughly 30 weeks.
+whose design target is parity with the fastest Rust client on single-row queries and the §1.3
+margin on bulk and columnar scans, to be confirmed by the M1 measurements) at about week 11;
+M2–M5 in parallel compress the calendar to roughly 30 weeks.
 
 ### 8.1 Project identity and release strategy
 
@@ -568,17 +569,19 @@ Expected, with the evidence for each. All on the §6 machines; nothing is measur
 
 ## 11. What the owner needs to decide
 
+Already decided on 2026-11-09, and no longer open: the name karez and the Apache-2.0 licence
+(as for simoom; permissive and patent-safe for the C, Java, Python and ODBC distributions).
+See [STATUS.md](../STATUS.md).
+
 1. **Go or no-go on Milestone 0.** It measures and writes about 3,000 lines of spike code; it
    changes nothing published.
-2. **Licence:** Apache-2.0, as for simoom; it is permissive and patent-safe for the C, Java,
-   Python and ODBC distributions.
-3. **Name reservation:** karez is decided (2026-11-09). Reserve the crates.io, PyPI and npm
-   names now or at M0 (§8.1); a trademark search before the public release is optional.
-4. **Scope of 1.0 exports:** ADBC and Python are cheap and high-leverage; the JDBC facade is
+2. **Name reservation:** reserve the crates.io, PyPI and npm names now or at M0 (§8.1); a
+   trademark search before the public release is optional.
+3. **Scope of 1.0 exports:** ADBC and Python are cheap and high-leverage; the JDBC facade is
    where the headline claim lives; the ODBC driver is the most work for the BI audience.
    Confirm all three or defer ODBC.
-5. **cameleer-tls:** opt-in only until audited; whether to fund the audit and the hardware
+4. **cameleer-tls:** opt-in only until audited; whether to fund the audit and the hardware
    AES path in the Cameleer repository, which would make the zero-dependency TLS configuration
    possible.
-6. **Oracle:** out of 1.0 pending a legal view on the thin protocol.
-7. **Budget for the external audit before 1.0** (§8, M8).
+5. **Oracle:** out of 1.0 pending a legal view on the thin protocol.
+6. **Budget for the external audit before 1.0** (§8, M8).
