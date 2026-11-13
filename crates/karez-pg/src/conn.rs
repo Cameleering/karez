@@ -184,6 +184,7 @@ pub struct Connection {
     process_id: i32,
     unsupported: UnsupportedTypes,
     secret: Vec<u8>,
+    max_message: usize,
     host: String,
     port: u16,
     connect_timeout: Option<Duration>,
@@ -314,6 +315,27 @@ impl CancelToken {
     }
 }
 
+/// An established connection taken apart: see [`Connection::into_raw_parts`].
+#[derive(Debug)]
+pub struct RawParts {
+    /// The connected, authenticated socket.
+    pub stream: TcpStream,
+    /// Backend process id.
+    pub process_id: i32,
+    /// Transaction state at the last ReadyForQuery.
+    pub tx_status: TxStatus,
+    /// Run-time parameters the server reported.
+    pub server_params: HashMap<String, String>,
+    /// Largest accepted message.
+    pub max_message: usize,
+    /// Statement cache capacity from the configuration.
+    pub statement_cache_size: usize,
+    /// Handling of types without a decoder.
+    pub unsupported: UnsupportedTypes,
+    /// A token that cancels the running statement.
+    pub cancel: CancelToken,
+}
+
 /// Quote an identifier for use in SQL the library builds itself (savepoint names).
 pub(crate) fn quote_ident(name: &str) -> Result<String> {
     if name.is_empty() || name.contains('\0') {
@@ -362,6 +384,7 @@ impl Connection {
             process_id: 0,
             unsupported: cfg.unsupported_types,
             secret: Vec::new(),
+            max_message: cfg.max_message,
             host: cfg.host.clone(),
             port: cfg.port,
             connect_timeout: cfg.connect_timeout,
@@ -510,6 +533,29 @@ impl Connection {
                 Step::Skip => {}
             }
         }
+    }
+
+    /// Give up the connection object and return its socket and session facts, for a layer that
+    /// drives the socket itself (`karez-rt`). Fails if the connection is broken or has bytes
+    /// buffered that were not consumed (an idle server sends none).
+    pub fn into_raw_parts(mut self) -> Result<RawParts> {
+        self.check_usable()?;
+        if self.io.reader.buffered() != 0 {
+            return Err(Error::Usage("the connection has unread bytes buffered"));
+        }
+        let stream = self.io.stream.try_clone()?;
+        let parts = RawParts {
+            stream,
+            process_id: self.process_id,
+            tx_status: self.tx_status,
+            server_params: self.side.params.clone(),
+            max_message: self.max_message,
+            statement_cache_size: self.cache_cap,
+            unsupported: self.unsupported,
+            cancel: self.cancel_token(),
+        };
+        self.closed = true; // Drop must not send Terminate
+        Ok(parts)
     }
 
     /// A token that cancels this connection's running statement from another thread.

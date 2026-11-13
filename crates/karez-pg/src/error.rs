@@ -7,6 +7,11 @@ use std::fmt;
 pub struct ServerError(Box<ErrorFields>);
 
 impl ServerError {
+    /// Wrap the fields of an ErrorResponse (for layers that parse the protocol themselves).
+    pub fn from_fields(f: ErrorFields) -> Self {
+        Self::new(f)
+    }
+
     pub(crate) fn new(f: ErrorFields) -> Self {
         ServerError(Box::new(f))
     }

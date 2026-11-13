@@ -4,6 +4,7 @@ members = [
     "crates/karez-chunk",
     "crates/karez-proto-pg",
     "crates/karez-pg",
+    "crates/karez-rt",
     "crates/karez",
 ]
 

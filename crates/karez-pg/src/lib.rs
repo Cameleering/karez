@@ -19,7 +19,7 @@ mod pool;
 mod tx;
 
 pub use config::{AuthPolicy, Config, UnsupportedTypes};
-pub use conn::{CancelToken, Connection, Cursor, Notification, Statement};
+pub use conn::{CancelToken, Connection, Cursor, Notification, RawParts, Statement};
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{Chunk, Column, ColumnType, Date, Field, RowRef, Timestamp};
 pub use karez_proto_pg::types::oid;
