@@ -1,4 +1,4 @@
-//! A small blocking connection pool.
+//! A small blocking connection pool. Waiters are served first come, first served.
 //!
 //! The pool opens connections lazily up to a maximum, hands them out one at a time and takes
 //! them back when the guard is dropped. A connection that is broken is discarded. One that is
@@ -10,6 +10,7 @@ use crate::config::Config;
 use crate::conn::Connection;
 use crate::error::{Error, Result};
 use karez_proto_pg::TxStatus;
+use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -18,6 +19,9 @@ struct State {
     idle: Vec<Connection>,
     /// Connections that exist: idle, checked out, or being opened.
     total: usize,
+    /// Tickets of the threads waiting for a connection, in arrival order.
+    waiters: VecDeque<u64>,
+    next_ticket: u64,
 }
 
 struct Shared {
@@ -66,6 +70,8 @@ impl Pool {
                 state: Mutex::new(State {
                     idle: Vec::new(),
                     total: 0,
+                    waiters: VecDeque::new(),
+                    next_ticket: 0,
                 }),
                 available: Condvar::new(),
             }),
@@ -94,21 +100,32 @@ impl Pool {
 
     fn get_inner(&self, deadline: Option<Instant>) -> Result<PooledConnection> {
         let mut st = self.shared.lock();
+        // First come, first served: a waiter proceeds only when it is at the front of the queue.
+        let ticket = st.next_ticket;
+        st.next_ticket += 1;
+        st.waiters.push_back(ticket);
         loop {
-            if let Some(c) = st.idle.pop() {
-                return Ok(self.guard(c));
-            }
-            if st.total < self.shared.max {
-                st.total += 1;
-                drop(st);
-                return match Connection::connect(&self.shared.cfg) {
-                    Ok(c) => Ok(self.guard(c)),
-                    Err(e) => {
-                        self.shared.lock().total -= 1;
-                        self.shared.available.notify_one();
-                        Err(e)
-                    }
-                };
+            if st.waiters.front() == Some(&ticket) {
+                if let Some(c) = st.idle.pop() {
+                    st.waiters.pop_front();
+                    drop(st);
+                    self.shared.available.notify_all();
+                    return Ok(self.guard(c));
+                }
+                if st.total < self.shared.max {
+                    st.total += 1;
+                    st.waiters.pop_front();
+                    drop(st);
+                    self.shared.available.notify_all();
+                    return match Connection::connect(&self.shared.cfg) {
+                        Ok(c) => Ok(self.guard(c)),
+                        Err(e) => {
+                            self.shared.lock().total -= 1;
+                            self.shared.available.notify_all();
+                            Err(e)
+                        }
+                    };
+                }
             }
             st = match deadline {
                 None => self
@@ -119,6 +136,9 @@ impl Pool {
                 Some(d) => {
                     let now = Instant::now();
                     if now >= d {
+                        st.waiters.retain(|t| *t != ticket);
+                        drop(st);
+                        self.shared.available.notify_all();
                         return Err(Error::Usage("timed out waiting for a pooled connection"));
                     }
                     self.shared
@@ -193,6 +213,6 @@ impl Drop for PooledConnection {
             None => st.total -= 1,
         }
         drop(st);
-        self.shared.available.notify_one();
+        self.shared.available.notify_all();
     }
 }

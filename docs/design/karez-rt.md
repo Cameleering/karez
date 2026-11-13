@@ -183,15 +183,34 @@ fastest; pipelined within 5% of the best pipelined client); they are targets, no
 
 ## 13. Build order and exit criteria
 
-| step | what | done when |
+Status as built on 2026-11-13 (branch `claude/m0-spike-1bacb7`). Deviations from the design above are
+listed under the table.
+
+| step | what | state |
 |---|---|---|
-| 0a | fix the `execute_many` write/read deadlock | **done**; verified on Linux: **not yet** |
-| 0b | extract `Engine` | 111 tests green; new engine split tests pass |
-| 1 | shared connection, leader and pump, slots, limits, close | the section 11 blocking tests pass on 14, 16, 17 |
-| 2 | implicit pipelining, `Pipeline`, `Stream` lease, `retry_safe` | the pipelining and failure tests pass |
-| 3 | `Future` API | the same tests run through `block_on` and through tokio (dev-only, behind a feature) |
-| 4 | `karez-pool` | fairness and timeout tests pass |
-| 5 | benchmark harness and baselines | the M0 gate table in plan.md 1.3 filled in, losses included |
+| 0a | fix the `execute_many` write/read deadlock | **done**; not yet verified on Linux (the hang never reproduced on Windows) |
+| 0b | sans-io `Engine` | **done** in `karez-rt` (6 tests with scripted bytes, split invariance, malformed input); `Connection` is **not** rebuilt on it |
+| 1 | shared connection, pump, slots, limits, close | **done** (11 real-server tests on 14.25, 16.15, 17.12) |
+| 2 | implicit pipelining, `Pipeline`, stream lease, `retry_safe` | **done**, with the deviations below |
+| 3 | `Future` API | **done**, tested on a hand-written `block_on`; **not** yet tested on tokio |
+| 4 | fair pool | **done** in `karez-pg` (first come, first served), not in a separate `karez-pool` crate; no pool of shared connections yet |
+| 5 | benchmark harness and baselines | **not done**; only a smoke run (see the results note) |
+
+Deviations and gaps:
+
+- `Connection` keeps its own blocking protocol code, so prepare, decode and error handling now exist twice
+  (`karez-pg` and the engine). Rebuilding `Connection` on the engine is optional follow-up; the tests of both
+  protect them.
+- The pump thread serves **every** command, including a lone blocking caller. The leader optimisation (the
+  caller reads the socket itself when one command is in flight) is not built. In the smoke run one-at-a-time
+  through `SharedConnection` is slower than through `Connection` (see the results note).
+- A dropped `Pending` or `Stream` discards its answer when it arrives, but a command still queued is **not**
+  removed: it runs. The design said it would be removed.
+- `LISTEN` notifications are read only while commands are in flight; an idle shared connection has no reader.
+- Statement-cache eviction and duplicate prepares queue a Close; a stale plan (0A000, 26000) drops the entry and
+  the error is returned (no retry).
+- The first use of a statement blocks the caller for one round trip, async callers included.
+- `Pipeline` takes owned values of the nine basic types only (`OwnedValue`).
 
 ## 14. Risks and open questions
 

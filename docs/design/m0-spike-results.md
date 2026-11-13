@@ -9,7 +9,7 @@ performance claims** in this note. Speed is measured later with the method in
 
 ## What was built
 
-Four crates, zero dependencies (not even dev-dependencies), `#![forbid(unsafe_code)]` in each,
+Five crates, zero dependencies (not even dev-dependencies), `#![forbid(unsafe_code)]` in each,
 edition 2021, MSRV 1.85 declared and tested (rustc 1.85.1 builds everything and passes the full suite against the server; the main runs used rustc 1.99.1).
 
 | crate | contents |
@@ -17,6 +17,7 @@ edition 2021, MSRV 1.85 declared and tested (rustc 1.85.1 builds everything and 
 | `karez-chunk` | Arrow-layout columns (validity bitmap, fixed-width little-endian data or `i32` offsets plus bytes, bit-packed bool); `ChunkBuilder` reused between chunks (`reset` keeps capacity, `abort_row` rolls back a partial row); checked typed readers (`get::<T>` and `get::<Option<T>>`); `RowRef` row view; in-repo SplitMix64 PRNG for tests |
 | `karez-proto-pg` | sans-io: `FrameReader` (incremental framing, default message limit 64 MiB), frontend encoders (startup, password, SASL, Parse, Bind, Describe, Close, Execute, Sync, Flush, Terminate, Query, CopyData, CopyDone, CopyFail, CancelRequest), backend parsers (authentication, ParameterStatus, BackendKeyData, ReadyForQuery, Error/NoticeResponse with SQLSTATE fields, row description, DataRow, CommandComplete, NotificationResponse, NegotiateProtocolVersion, the COPY messages), `ResultPlan` decoding binary rows into a chunk (with a renderer that turns `numeric`, `jsonb`, `interval`, `inet`, arrays and others into their exact text form), `Value` parameter encoding, SHA-256, HMAC-SHA-256, PBKDF2, base64 and a SCRAM-SHA-256 client (no channel binding), all in-repo |
 | `karez-pg` | `Config` and URL parsing, blocking `Connection` (`TCP_NODELAY`, one write per request), authentication allow-list (default SCRAM only), prepare with an LRU statement cache keyed by SQL and parameter types, `query` / `execute` with server-side binding only, streaming `Cursor` (`next` row view, `next_chunk`), `Transaction` guard with isolation levels and savepoints, `ServerError` with SQLSTATE, `CancelToken` (cancel the running statement from another thread), `LISTEN`/`NOTIFY` (`wait_for_notification`, `take_notifications`), `copy_in` / `copy_out`, `execute_many` (a batch in one round trip), and a blocking `Pool` |
+| `karez-rt` | second slice (see below): sans-io `Engine` (command FIFO, statement cache, chunk decoding, Sync groups, `retry_safe`), `SharedConnection` (one mutex, a reader thread only while commands are in flight, blocking and `Future` APIs, streams with back-pressure, one-Sync pipelines, bounded queue, deadlines with cancel, graceful close) |
 | `karez` | re-exports; one doc example; `examples/orders.rs` |
 
 Native column types: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`,
@@ -37,9 +38,10 @@ Counts from the final run (below). "Needs a server" means the test skips loudly 
 |---|---|---|
 | `karez-chunk` | 16 unit (randomised round trips with the in-repo PRNG, rollback of partial rows, corrupt-buffer detection) | no |
 | `karez-proto-pg` | 37 unit, 4 integration in `tests/split_decoding.rs` | no |
-| `karez-pg` | 4 unit (URL parsing), 8 in `tests/mock_server.rs` (scripted in-process server), 41 in `tests/pg_integration.rs` | the 41 yes |
+| `karez-pg` | 4 unit (URL parsing), 8 in `tests/mock_server.rs` (scripted in-process server), 42 in `tests/pg_integration.rs` | the 42 yes |
+| `karez-rt` | 6 engine tests (scripted server bytes), 11 in `tests/shared_pg.rs` | the 11 yes |
 | `karez` | 1 doc test (compiled, not run: `no_run`) | no |
-| total | 111 | 41 |
+| total | 129 | 53 |
 
 What the test families check:
 
@@ -98,6 +100,47 @@ The passwords in it are public test values.
 | container | `karez-test-pg16`, memory limit 1 GiB, port bound to `127.0.0.1:54316`; container and volume removed after each run |
 | client | Windows 11, rustc 1.99.1, cargo 1.99.1, Docker Desktop 29.9.2 on WSL2 |
 
+## Second slice: the shared, pipelined connection (karez-rt)
+
+Built 2026-11-13 from [karez-rt.md](karez-rt.md). What the tests check, all on PostgreSQL 14.25, 16.15 and
+17.12 unless noted:
+
+- **Engine (no server):** the same server bytes cut one byte at a time, in 997-byte pieces and at random
+  positions give identical events and chunk sizes; a stream delivers chunks before completion; an error in a
+  one-Sync group fails that statement, reports the later members as skipped and leaves the next command
+  alone; after a lost connection a command whose bytes were handed out is not retry-safe and one still queued is;
+  wrong parameters queue nothing; a stale plan leaves the cache; 500 random garbage byte strings never panic.
+- **Shared connection:** 16 threads x 400 queries over one connection all see the same backend process;
+  500 queued commands come back in order; a stream holds the connection while another thread's command waits,
+  a slow consumer pauses the reader, and a stream dropped early frees the connection; an error in one
+  independent command leaves its neighbours alone; a pipeline is atomic (a duplicate key skips the rest and
+  nothing is stored); futures work on a hand-written executor; a deadline cancels the running statement and the
+  next command still gets its own answer; a backend killed mid-query fails the running command as not
+  retry-safe and later ones as retry-safe; a full queue gives `QueueFull` and close is graceful; notifications
+  are kept while commands run; 200 dropped or waited commands in a row never desynchronise the stream.
+- **Pool:** five waiters on a one-connection pool are served in arrival order, and a waiter that times out
+  leaves the queue without blocking the others.
+
+**Smoke run, not a benchmark** (`crates/karez-rt/examples/pipeline_smoke.rs`, 2026-11-13, `[measured here]`,
+one run, 20,000 `SELECT $1::int8`, release build, a Windows 11 client talking to PostgreSQL 16.15 in Docker
+Desktop through its port proxy, which is a poor network and the only one used):
+
+| how | queries per second |
+|---|---|
+| blocking `Connection`, one at a time | 2,540 |
+| `SharedConnection`, one at a time | 2,196 |
+| `SharedConnection`, 16 in flight | 20,634 |
+| `SharedConnection`, 128 in flight | 33,671 |
+| `SharedConnection`, 512 in flight | 34,554 |
+| `SharedConnection`, 8 threads on one connection | 16,683 |
+
+What it shows: queueing many commands on one connection is about 13 times faster than one round trip each,
+on this setup. What it also shows, and it is a loss: through the shared connection a lone caller is **about
+14% slower** than through the blocking `Connection`, because every command crosses to the reader thread (the
+leader optimisation in the design is not built). What it does not show: anything about other clients, other
+machines, other networks or larger loads. No competitor was run, so no ranking exists, and none may be quoted
+from this table. The plan's benchmark method (open-loop p99, Linux machines, baselines) is not started.
+
 ## Known limits
 
 - **No TLS.** Connecting requires `sslmode=disable`; every other `sslmode` is rejected, so a connection is never silently downgraded. This departs from the plan's "verified TLS by default" until TLS exists. Building TLS inside a dependency-free core means writing the protocol, X.509 and the ciphers from scratch; the plan treats TLS as an optional backend (`cameleer-tls` or a vetted crate), which needs an issue and a decision first. Channel binding (`SCRAM-SHA-256-PLUS`) depends on TLS and is not offered.
@@ -110,7 +153,7 @@ The passwords in it are public test values.
 - **`execute_many` and large batches.** A batch above 64 KiB is now written by a helper thread while the caller reads the results, because a server that cannot write its output stops reading its input, and a client that writes everything first could then block forever. **I could not reproduce the hang on this machine**: the Windows client accepts hundreds of megabytes of unread writes (400 MB out, 200 MB back, finished in under a second), so neither the real-server test (18 MB out, 60 MB back) nor the in-process stalling-server test fails on the old code. The fix is by reasoning; the two tests only show that large overlapped batches complete correctly. Run the stalling-server test on Linux, where it is expected to hang on the old code, before relying on it.
 - **COPY** takes the statement as written (COPY has no bound parameters), so build its SQL only from trusted text; the data is never part of the SQL.
 - **Pool.** Connections are not tested before they are handed out; a dead idle connection fails on first use and is then replaced.
-- **Not built:** async (it needs a runtime or an executor; the plan puts it in `karez-rt`), a pipeline that reads results of different shapes in one round trip (`execute_many` covers write batches), portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
+- **Not built:** the leader optimisation and a `Connection` rebuilt on the engine (see karez-rt.md section 13), a pool of shared connections, tokio-tested futures, portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
 - **Not measured:** speed, memory and binary size. The plan's Milestone 0 gate (plan section 1.3) is therefore still open.
 
 ## Final run (2026-11-13)
@@ -128,7 +171,9 @@ KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 cargo test --workspace
   split_decoding              4 passed
   karez_pg                    4 passed
   mock_server                 8 passed
-  pg_integration             41 passed
+  pg_integration             42 passed
+  karez_rt engine             6 passed
+  karez_rt shared_pg         11 passed
   karez doc test              1 passed
   (0 failed, 0 ignored)
 example orders: audit_log: 400000 rows in 391 chunks; rolled back; orders still 150000

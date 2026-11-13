@@ -1799,3 +1799,35 @@ fn a_failing_statement_in_a_large_batch_leaves_the_connection_usable() -> R {
     assert_eq!(c.execute_many(&items)?, vec![1u64; 20]);
     Ok(())
 }
+
+#[test]
+fn the_pool_serves_waiters_in_arrival_order() -> R {
+    let addr = need_server!();
+    let cfg = Config::from_url(&url(&addr, "karez_scram", Some(SCRAM_PW), "karez", ""))?;
+    let pool = karez_pg::Pool::new(cfg, 1)?;
+    let held = pool.get()?;
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut hs = Vec::new();
+    for i in 0..5 {
+        let (p, o) = (pool.clone(), order.clone());
+        hs.push(thread::spawn(move || -> Result<(), Error> {
+            let _c = p.get()?;
+            o.lock().unwrap().push(i);
+            thread::sleep(Duration::from_millis(30));
+            Ok(())
+        }));
+        thread::sleep(Duration::from_millis(150)); // waiter i is queued before waiter i + 1
+    }
+    drop(held);
+    for h in hs {
+        h.join().unwrap()?;
+    }
+    assert_eq!(*order.lock().unwrap(), vec![0, 1, 2, 3, 4]);
+    // A waiter that times out leaves the queue without blocking the ones behind it.
+    let held = pool.get()?;
+    let r = pool.get_timeout(Duration::from_millis(100));
+    assert!(matches!(r, Err(Error::Usage(_))));
+    drop(held);
+    assert!(pool.get_timeout(Duration::from_secs(5)).is_ok());
+    Ok(())
+}

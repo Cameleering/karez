@@ -74,7 +74,7 @@ Details, test counts and commands are in [docs/design/m0-spike-results.md](docs/
 
 Limits, stated plainly:
 
-- **PostgreSQL only, blocking only.** No MySQL, SQL Server, SQLite, async or TLS. Built, all blocking: a small connection pool, batches in one round trip (`execute_many`), `COPY` in and out, `LISTEN`/`NOTIFY`, and cancelling a running statement from another thread.
+- **PostgreSQL only.** No MySQL, SQL Server, SQLite or TLS. A shared connection (`karez-rt`) lets many threads or futures on any executor pipeline over one connection, with no async runtime. Built for the blocking client: a small first-come-first-served connection pool, batches in one round trip (`execute_many`), `COPY` in and out, `LISTEN`/`NOTIFY`, and cancelling a running statement from another thread.
 - **No TLS.** A connection needs an explicit `sslmode=disable`; every other `sslmode` is refused rather than downgraded. Do not use it across an untrusted network.
 - **Three server versions tested.** Real-server tests ran on PostgreSQL 14.25, 16.15 and 17.12. Versions 13, 15 and 18 were not run. The 13 to 18 range in the plan is a target, not something tested.
 - **Types.** Native columns: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`, `name`, `bytea`, `uuid`, `date`, `timestamp`, `timestamptz`, `oid` and NULL. `numeric`, `json`, `jsonb`, `interval`, `time`, `timetz`, `inet`, `cidr`, `macaddr`, `bit`, enums and arrays of these are read in binary and delivered as exact text (not as Arrow decimal, interval or list columns). Any other type (for example `money`, ranges, `tsvector`) fails with an error that names the type, or is read as text with `unsupported_types=text`.
