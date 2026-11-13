@@ -6,7 +6,7 @@ SQLite, with JDBC, ODBC and ADBC parity and exports, and Arrow-native results.
 
 ## Know the status first
 
-karez is in the **design stage with a first working slice**: a blocking PostgreSQL client with no TLS, verified against a real server on PostgreSQL 16.15 only (14 and 17 were not run). There is no release and no measurement yet. Other databases, async, TLS and the exports are not built.
+karez is in the **design stage with a first working slice**: a blocking PostgreSQL client with no TLS, verified against a real server on PostgreSQL 14.25, 16.15 and 17.12 (13, 15 and 18 were not run). There is no release and no measurement yet. Other databases, async, TLS and the exports are not built.
 The repository holds the research, the build plan and the brand assets.
 
 - Do not describe any crate, driver, wheel, JAR or benchmark result as existing. When you write

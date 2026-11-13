@@ -6,8 +6,8 @@ _Updated 2026-11-13. Read this first, then [plan.md](design/plan.md)._
 
 karez is in the **design stage with a first working slice** on the branch `claude/m0-spike-1bacb7`
 (local, not pushed, not merged): a blocking PostgreSQL client with no TLS. It has no release and
-**no measurement**. It was verified against a real server on **PostgreSQL 16.15 only; versions 14
-and 17 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
+**no measurement**. It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
+versions 13, 15 and 18 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
 tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-results.md).
 
 | area | state |
@@ -45,11 +45,11 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
       (prompts in [brand/gemini-prompts.md](brand/gemini-prompts.md)).
 - [ ] Upload the social preview in the repository settings (GitHub has no API for it).
 - [x] Workspace with `karez-chunk`, `karez-proto-pg`, `karez-pg` and `karez`, and a PostgreSQL
-      integration fixture in `tests/docker/` (done on the spike branch; PostgreSQL 16.15 only).
+      integration fixture in `tests/docker/` (done on the spike branch).
 - [x] Blocking pool, `COPY` in and out, `LISTEN`/`NOTIFY`, cancel, write batches, and decoders for
       `numeric`, `json`, `jsonb`, `interval`, `time`, `inet`, enums, arrays and more (rendered to
-      text); MSRV 1.85 tested (PostgreSQL 16.15 only).
-- [ ] Run the same suite on PostgreSQL 14 and 17 (needs `postgres:14` and `postgres:17` images; not run).
+      text); MSRV 1.85 tested.
+- [x] Run the same suite on PostgreSQL 14.25 and 17.12 (all 39 real-server tests pass on both). 13, 15 and 18 are not run.
 - [ ] Add TLS (`sslmode=verify-full` by default per plan section 1.2); until then the client refuses
       anything but `sslmode=disable`.
 - [ ] Add `karez-rt` (async connection task, pipelining) and the `bench/` load generator.

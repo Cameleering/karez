@@ -3,7 +3,7 @@
 _2026-11-13. Branch `claude/m0-spike-1bacb7`, local, not pushed, not merged._
 
 **Scope in one line:** a blocking PostgreSQL client with no TLS, **verified against a real server
-on PostgreSQL 16.15 only; versions 14 and 17 were not run.** There are **no benchmarks and no
+on PostgreSQL 14.25, 16.15 and 17.12; versions 13, 15 and 18 were not run.** There are **no benchmarks and no
 performance claims** in this note. Speed is measured later with the method in
 [plan.md](plan.md) section 6, on separate machines.
 
@@ -46,7 +46,7 @@ What the test families check:
 - **Published vectors:** SHA-256 (NIST: empty, `abc`, the 448-bit message, one million `a`), HMAC-SHA-256 (RFC 4231 cases 1, 2, 3, 6), PBKDF2-HMAC-SHA-256 (iterations 1, 2, 4096), Base64 (RFC 4648), the full SCRAM-SHA-256 exchange of RFC 7677 section 3. The vectors were written from memory and every one passed, so none had to be corrected.
 - **Split invariance:** the same server byte stream, cut at every single position, at every pair of positions (in the frame tests), byte by byte, and in 300 random chunkings, gives identical messages and identical decoded rows. A garbage-input test feeds 2,000 random byte strings to the parsers and requires no panic.
 - **Limits:** a message over the size limit is rejected as soon as its header arrives; lengths and counts are checked; a NUL in an outgoing string is refused.
-- **Real server, PostgreSQL 16.15:** every supported type including NULL and extremes (integer limits; `float4`/`float8` NaN, infinities, negative zero, smallest subnormals, largest finite; empty, 1 MiB, multi-byte, emoji, quote/backslash/newline text; dates from 4713 BC to 5874897; timestamps including the minimum, `infinity`, `-infinity` and a daylight-saving change; `bytea` from 0 bytes to 5 MiB; uuids; booleans; all-NULL and never-NULL columns), parameter round trips, a 400,000-row read through `next_chunk` (391 chunks) and through the row view with identical sums, a six-table report of more than 40,000 rows, the view and the sequence, a ten-parameter search with NULL parameters, order-placement transactions (commit, failure with rollback, drop rolls back, savepoints), 5,000 and 3,000 reuses of a cached statement, `ALTER TABLE` between executions, 8 threads each with their own connection and transactions.
+- **Real server (all of these on 14.25, 16.15 and 17.12):** every supported type including NULL and extremes (integer limits; `float4`/`float8` NaN, infinities, negative zero, smallest subnormals, largest finite; empty, 1 MiB, multi-byte, emoji, quote/backslash/newline text; dates from 4713 BC to 5874897; timestamps including the minimum, `infinity`, `-infinity` and a daylight-saving change; `bytea` from 0 bytes to 5 MiB; uuids; booleans; all-NULL and never-NULL columns), parameter round trips, a 400,000-row read through `next_chunk` (391 chunks) and through the row view with identical sums, a six-table report of more than 40,000 rows, the view and the sequence, a ten-parameter search with NULL parameters, order-placement transactions (commit, failure with rollback, drop rolls back, savepoints), 5,000 and 3,000 reuses of a cached statement, `ALTER TABLE` between executions, 8 threads each with their own connection and transactions.
 - **Errors with SQLSTATE, from a real server:** 23505, 23503, 23502, 23514, 42601, 42P01, 22012, 28P01 (wrong password; the password is not in the error text), 3D000, 40001 (two serializable transactions), 40P01 (a real deadlock; exactly one side fails), 57014 (statement timeout), 57P01 (backend terminated with `pg_terminate_backend` in the middle of a 400,000-row result: the cursor ended with `FATAL: terminating connection due to administrator command (SQLSTATE 57P01)`, no hang). Also 42501 for the read-only cleartext user and 25P02 inside a failed transaction.
 - **Rendered types against the server's own text:** for `numeric` (17 hand-picked values including `NaN`, `Infinity`, 1e100, 30-digit and `0.000`, plus 2,000 generated values of varying scale and sign), `interval` (iso_8601 style), `time`, `timetz`, `inet` (including the IPv6 compression rules and IPv4-mapped forms; `abbrev()` is `inet`'s own output form, because `inet::text` always appends the netmask), `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`, `json`, `jsonb`, `xml`, enums and arrays (`int2` `int4` `int8` `text` with quoting cases, `numeric`, `uuid`, `bytea`, `bool`, `jsonb`, `inet`, `interval`, `time`, `varchar`, multi-dimensional, a lower bound other than 1, NULL elements, a 100,000-element array), the rendered text equals the server's `::text` in every row. `oid` and `"char"` are checked by value.
 - **Cancel:** `SELECT pg_sleep(30)` cancelled from another thread after 300 ms fails with SQLSTATE 57014 well inside 20 seconds, and the connection works afterwards.
@@ -93,13 +93,15 @@ The passwords in it are public test values.
 | `RepoDigests` | `postgres@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657` |
 | image created / size | 2026-11-05 / 636,323,268 bytes |
 | server | PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on x86_64-pc-linux-gnu |
+| image `postgres:14` | id and digest `sha256:980b7cb415aa0f812f65bdec8f6f599be408d8ed9c83ffcaa12650eac397b264`, created 2026-11-12, 648,136,844 bytes; server PostgreSQL 14.25 (Debian 14.25-1.pgdg13+1); pulled 2026-11-13 with the owner's confirmation |
+| image `postgres:17` | id and digest `sha256:846a7ddaa67a4b354ae1d21087b683901aa6113a4ed626d3787cfbf6c85e3e07`, created 2026-11-12, 665,162,665 bytes; server PostgreSQL 17.12 (Debian 17.12-1.pgdg13+1); pulled 2026-11-13 with the owner's confirmation |
 | container | `karez-test-pg16`, memory limit 1 GiB, port bound to `127.0.0.1:54316`; container and volume removed after each run |
 | client | Windows 11, rustc 1.99.1, cargo 1.99.1, Docker Desktop 29.9.2 on WSL2 |
 
 ## Known limits
 
 - **No TLS.** Connecting requires `sslmode=disable`; every other `sslmode` is rejected, so a connection is never silently downgraded. This departs from the plan's "verified TLS by default" until TLS exists. Building TLS inside a dependency-free core means writing the protocol, X.509 and the ciphers from scratch; the plan treats TLS as an optional backend (`cameleer-tls` or a vetted crate), which needs an issue and a decision first. Channel binding (`SCRAM-SHA-256-PLUS`) depends on TLS and is not offered.
-- **One server version.** Verified on PostgreSQL 16.15 only; 14 and 17 were not run, because their images are not on the machine and pulling them needs the owner's confirmation. The plan's 13 to 18 range is a target.
+- **Three server versions.** Verified on PostgreSQL 14.25, 16.15 and 17.12 (the owner confirmed pulling the 14 and 17 images). 13, 15 and 18 were not run, so the plan's 13 to 18 range is still partly a target.
 - **Timestamp range.** Values are stored as microseconds since 1970 in an `i64`, the Arrow layout. PostgreSQL timestamps after about year 294246 cannot be represented and give `Error::Value`; the connection stays usable. This follows from the column format, not from a missing feature. The largest PostgreSQL date does fit. `infinity` and `-infinity` are stored as `i32`/`i64` `MAX`/`MIN`, and a finite value that would collide with them is an error.
 - **Types without a decoder.** `money`, geometric types, ranges and multiranges, `tsvector`, `hstore`, composite types, arrays of enums, arrays of dates and timestamps, domains over unsupported types and every other type not listed above fail the query with `Error::UnsupportedType` naming the type, or are read as server text with `unsupported_types=text`. `numeric`, `interval` and arrays arrive as strings, not as Arrow decimal, interval or list columns.
 - **SCRAM.** No SASLprep: it needs Unicode NFKC tables, which a dependency-free core does not carry. An ASCII password is unaffected; a non-ASCII password may fail against a server that normalised it. The client nonce comes from `/dev/urandom` where it exists (Unix) and otherwise from std's OS-seeded `RandomState`. Password wiping on drop is best effort, because safe Rust cannot guarantee it.
@@ -113,7 +115,7 @@ The passwords in it are public test values.
 ## Final run (2026-11-13)
 
 Quoted from the run that produced the counts above; the commands are the ones listed under
-"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1).
+"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
 
 ```text
 cargo fmt --all --check            -> clean
