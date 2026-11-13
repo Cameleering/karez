@@ -1858,6 +1858,14 @@ mod tls {
         cfg
     }
 
+    /// Like `tls_config`, but connecting through `localhost`, a name the fixture certificate
+    /// covers. The certificate does NOT cover the address 127.0.0.1.
+    fn tls_config_by_name(addr: &str, mode: SslMode, root: Option<String>) -> Config {
+        let mut cfg = tls_config(addr, mode, root);
+        cfg.host = "localhost".into();
+        cfg
+    }
+
     fn assert_encrypted(c: &mut Connection) -> R {
         let mut cur = c.query(
             "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
@@ -1872,7 +1880,11 @@ mod tls {
     #[test]
     fn verify_full_with_the_fixture_ca_is_encrypted_and_fully_usable() -> R {
         let addr = need_server!();
-        let mut c = Connection::connect(&tls_config(&addr, SslMode::VerifyFull, Some(ca(&addr))))?;
+        let mut c = Connection::connect(&tls_config_by_name(
+            &addr,
+            SslMode::VerifyFull,
+            Some(ca(&addr)),
+        ))?;
         assert_encrypted(&mut c)?;
         // A large parameter and result, a stream, a transaction, COPY and notifications.
         let big = "é日".repeat(300_000);
@@ -1926,13 +1938,14 @@ mod tls {
         assert_encrypted(&mut c)?;
         // The default roots do not know the fixture CA: verified modes must refuse.
         for mode in [SslMode::VerifyFull, SslMode::VerifyCa] {
-            match Connection::connect(&tls_config(&addr, mode, None)) {
+            match Connection::connect(&tls_config_by_name(&addr, mode, None)) {
                 Err(Error::Tls(m)) => assert!(m.to_lowercase().contains("certificate"), "{m}"),
                 other => panic!("{mode:?}: expected a TLS error, got {other:?}"),
             }
         }
         // A root file that does not exist or holds no certificate is a clear error.
-        let missing = tls_config(&addr, SslMode::VerifyFull, Some("no-such-file.pem".into()));
+        let missing =
+            tls_config_by_name(&addr, SslMode::VerifyFull, Some("no-such-file.pem".into()));
         assert!(matches!(Connection::connect(&missing), Err(Error::Tls(_))));
         let junk = tls_config(
             &addr,
@@ -1944,16 +1957,24 @@ mod tls {
     }
 
     #[test]
-    fn verify_full_accepts_the_names_the_certificate_covers() -> R {
+    fn a_name_the_certificate_does_not_cover_fails_verify_full_only() -> R {
         let addr = need_server!();
-        // The fixture certificate covers localhost, 127.0.0.1 and ::1. A name it does not cover
-        // cannot be tried here (the fixture listens on 127.0.0.1 only), so a mismatch is NOT
-        // tested; the verify-ca behaviour of ignoring a name mismatch is therefore unverified.
-        let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
-        let mut cfg = tls_config(&addr, SslMode::VerifyFull, Some(ca(&addr)));
-        cfg.host = "localhost".into();
-        cfg.port = port;
-        let mut c = Connection::connect(&cfg)?;
+        // Covered by name: verify-full works.
+        let mut c = Connection::connect(&tls_config_by_name(
+            &addr,
+            SslMode::VerifyFull,
+            Some(ca(&addr)),
+        ))?;
+        assert_encrypted(&mut c)?;
+        // The same server by its address, which the certificate does not cover: verify-full
+        // refuses, verify-ca (chain only) and require accept.
+        match Connection::connect(&tls_config(&addr, SslMode::VerifyFull, Some(ca(&addr)))) {
+            Err(Error::Tls(m)) => assert!(m.to_lowercase().contains("not valid for"), "{m}"),
+            other => panic!("expected a name mismatch, got {other:?}"),
+        }
+        let mut c = Connection::connect(&tls_config(&addr, SslMode::VerifyCa, Some(ca(&addr))))?;
+        assert_encrypted(&mut c)?;
+        let mut c = Connection::connect(&tls_config(&addr, SslMode::Require, None))?;
         assert_encrypted(&mut c)?;
         Ok(())
     }

@@ -36,7 +36,5 @@ feature off, karez has no dependencies. With it on, karez-pg depends on:
   and `execute_many` batches over 64 KiB (a clear error).
 - Cancel requests go over a fresh plaintext connection, as PostgreSQL accepts before 17.
 - No client certificates, no `SCRAM-SHA-256-PLUS` channel binding, no CRL or OCSP.
-- A name mismatch could not be tested with the fixture (it listens on 127.0.0.1 only), so the `verify-ca`
-  behaviour of ignoring a name mismatch is untested.
 - The dependency tree is rustls, rustls-webpki, ring, webpki-roots and their small helpers; it is audited
   by others, not by us, and is outside the pre-1.0 audit scope the owner set (core, protocol crates, ODBC FFI).

@@ -40,7 +40,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 
 ## Decisions of 2026-11-13 (owner)
 
-- **TLS:** an opt-in cargo feature backed by the `rustls` crate; the core stays dependency-free. **Built 2026-11-13** ([design/tls-decision.md](design/tls-decision.md) stands in for the issue AGENTS.md asks for; no issue was opened). Verified on 14.25, 16.15 and 17.12. Gaps: not over `karez-rt` yet, `execute_many` over 64 KiB refused, no name-mismatch test.
+- **TLS:** an opt-in cargo feature backed by the `rustls` crate; the core stays dependency-free. **Built 2026-11-13** ([design/tls-decision.md](design/tls-decision.md) stands in for the issue AGENTS.md asks for; no issue was opened). Verified on 14.25, 16.15 and 17.12. Gaps: not over `karez-rt` yet, `execute_many` over 64 KiB refused.
 - **Async (`karez-rt`):** a small design with no async runtime (std-only I/O threads and channels over the sans-io crates), informed by what the simoom project learnt. The simoom session answered: thread per connection with sans-io crates suits a database client, and a pump thread only helps from two requests in flight (see [research/simoom-io-learnings.md](research/simoom-io-learnings.md), second-hand and unchecked). The design is in [design/karez-rt.md](design/karez-rt.md); steps 0 to 4 are built (section 13 of it lists the gaps), step 5 (benchmarks) is not.
 - **Replay:** only commands never written to a dead connection move to a new one; a written command is never resent automatically.
 - **Slow streams:** a stream leases its connection; other commands wait in a bounded queue. No automatic second connection.
@@ -59,7 +59,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
       `numeric`, `json`, `jsonb`, `interval`, `time`, `inet`, enums, arrays and more (rendered to
       text); MSRV 1.85 tested.
 - [x] Run the same suite on PostgreSQL 14.25 and 17.12 (all 39 real-server tests pass on both). 13, 15 and 18 are not run.
-- [x] TLS (`sslmode=verify-full` default, `tls` feature, rustls). Next: TLS inside the `karez-rt` engine and a name-mismatch test.
+- [x] TLS (`sslmode=verify-full` default, `tls` feature, rustls). Next: TLS inside the `karez-rt` engine.
 - [x] `karez-rt`: shared pipelined connection with futures (built; see [design/karez-rt.md](design/karez-rt.md) section 13 for the gaps).
 - [ ] The `bench/` load generator.
 - [ ] Build the benchmark harness first, and baseline the competitors listed in plan section 6.3
