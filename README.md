@@ -5,7 +5,7 @@
 # karez
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Status: design stage](https://img.shields.io/badge/status-design%20stage-orange.svg)](docs/STATUS.md)
+[![Status: M0 spike, PostgreSQL only](https://img.shields.io/badge/status-M0%20spike%20%C2%B7%20PostgreSQL%20only-orange.svg)](docs/STATUS.md)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Standards: JDBC, ODBC, ADBC](https://img.shields.io/badge/standards-JDBC%20%C2%B7%20ODBC%20%C2%B7%20ADBC-informational.svg)](docs/design/plan.md#3-standards-parity)
 [![Part of Cameleer](https://img.shields.io/badge/part%20of-Cameleer-d4a017.svg)](https://github.com/pmsudhi/cameleer)
@@ -18,10 +18,13 @@ standards, decodes results straight from the wire into **Apache Arrow** columnar
 exported as an **ADBC driver, an ODBC driver and a JDBC driver**, so Python, Java, Go, .NET, R,
 BI tools and query engines can use the same core. It is designed to be **fast, small and safe**.
 
-> **Status: design stage.** Nothing is built yet and nothing is measured. The research and the
-> build plan are written; the first milestone is a three-week PostgreSQL spike that must clear
-> stated numbers before any other work starts (see [Design targets](#design-targets-not-measurements)).
-> Every number on this page that is not a published third-party result is a target, not a result.
+> **Status: design stage with a first working slice.** A small blocking PostgreSQL client now
+> exists (see [What exists today](#what-exists-today)). It has no TLS, it is **verified against a
+> real server on PostgreSQL 16.15 only (versions 14 and 17 were not run)**, and **nothing is
+> measured**: there are no benchmarks. Everything else on this page is a plan. The first milestone
+> is still a measurement spike that must clear stated numbers before other work starts (see
+> [Design targets](#design-targets-not-measurements)). Every number on this page that is not a
+> published third-party result is a target, not a result.
 
 [Plan](docs/design/plan.md) · [Research](docs/design/research.md) · [Status](docs/STATUS.md) ·
 [Why](#why-another-database-library) · [Planned API](#the-planned-api) · [Targets](#design-targets-not-measurements) ·
@@ -57,6 +60,27 @@ source and the date it was checked.
 karez's answer: one columnar decoding path under every API, a pipelined connection, a type model
 as wide as JDBC, ODBC and Arrow together, and three exports from one C ABI.
 
+## What exists today
+
+Three library crates and a facade, with zero dependencies and `#![forbid(unsafe_code)]` in each.
+Details, test counts and commands are in [docs/design/m0-spike-results.md](docs/design/m0-spike-results.md).
+
+| crate | what it is |
+|---|---|
+| `karez-chunk` | an Arrow-layout columnar chunk: validity bitmap plus fixed-width data, or offsets plus bytes; a reusable builder; checked typed readers |
+| `karez-proto-pg` | the PostgreSQL 3.0 wire protocol without any I/O: framing with a size limit, the startup, authentication and extended-query messages, binary row decoding into chunks, and SCRAM-SHA-256 with SHA-256, HMAC, PBKDF2 and base64 written in-repo |
+| `karez-pg` | a blocking connection: URL parsing, trust, cleartext and SCRAM authentication behind an allow-list, a per-connection prepared-statement cache, server-side parameter binding only, a streaming cursor (row view and `next_chunk`), transactions with savepoints, errors with SQLSTATE |
+| `karez` | re-exports the above; one runnable example in `crates/karez/examples/orders.rs` |
+
+Limits, stated plainly:
+
+- **PostgreSQL only, blocking only.** No MySQL, SQL Server, SQLite, async, pool, pipelining, COPY, LISTEN or cancel.
+- **No TLS.** A connection needs an explicit `sslmode=disable`; every other `sslmode` is refused rather than downgraded. Do not use it across an untrusted network.
+- **One server version tested.** Real-server tests ran on PostgreSQL 16.15 only. Versions 14 and 17 were not run. The 13 to 18 range in the plan is a target, not something tested.
+- **Types.** Decoded: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`, `name`, `bytea`, `uuid`, `date`, `timestamp`, `timestamptz` and NULL. Any other type (for example `numeric`, `jsonb`, arrays, `interval`, enums, `inet`) fails with an error that names the type, or is read as text with `unsupported_types=text`.
+- **Timestamp range.** Values are Unix-epoch microseconds, so PostgreSQL timestamps in roughly its last 30 years of range (after about year 294246) give an error. Dates, `infinity` and `-infinity` are handled.
+- **No performance claims.** There are no benchmarks yet; see [Design targets](#design-targets-not-measurements).
+
 ## What karez will be
 
 | area | plan |
@@ -71,7 +95,10 @@ as wide as JDBC, ODBC and Arrow together, and three exports from one C ABI.
 
 ## The planned API
 
-This is a sketch from [docs/design/plan.md](docs/design/plan.md), **not code that exists**.
+This is a sketch from [docs/design/plan.md](docs/design/plan.md), **not code that exists as
+written**: `Url`, the driver registry, `Decimal128`, `to_arrow_c_stream` and `pipeline` are not
+built. What does exist is in [What exists today](#what-exists-today); the same row and chunk views
+work there with `Connection::connect_url` and `Connection::query`.
 It shows the intent: JDBC-shaped use with no per-row allocation, and the same cursor as Arrow.
 
 ```rust
@@ -157,8 +184,9 @@ engine, and simoom, the HTTP server engine.
 native drivers for PostgreSQL, MySQL and MariaDB, SQL Server and SQLite, with JDBC, ODBC and ADBC
 parity and exports. It is the Rust counterpart of what JDBC and ODBC are for Java and C.
 
-**Can I use it today?** No. It is in the design stage. The repository holds the research, the
-plan and the brand assets. The first code is the Milestone 0 spike.
+**Can I use it today?** Only as a spike. A blocking PostgreSQL client exists, without TLS, tested
+against a real server on PostgreSQL 16.15 only, and not measured. It is not released and not
+published. The rest is research, the plan and the brand assets.
 
 **Is it a fork of tokio-rs/rdbc?** No. It starts fresh with no code or history from rdbc, which
 is cited as prior work. rdbc has been dormant since 2021.
@@ -200,8 +228,8 @@ percent slower than the fastest synchronous one on single queries.
 
 ## Contributing, security and citing
 
-Ideas, corrections to the research, and benchmark methodology reviews are welcome now; code
-follows the first milestone. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md)
+Ideas, corrections to the research, and benchmark methodology reviews are welcome now; the
+first code is the PostgreSQL spike described above. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md)
 and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). To cite karez, use [CITATION.cff](CITATION.cff).
 
 ## License and credits
