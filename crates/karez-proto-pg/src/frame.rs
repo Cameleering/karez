@@ -3,6 +3,7 @@
 //! The result does not depend on how the bytes were split between [`FrameReader::push`] calls.
 
 use crate::error::{ProtoError, Result};
+use std::ops::Range;
 
 /// Default largest accepted message (tag byte excluded): 64 MiB.
 pub const DEFAULT_MAX_MESSAGE: usize = 64 << 20;
@@ -60,6 +61,19 @@ impl FrameReader {
     /// The next complete frame, `Ok(None)` if more bytes are needed, or an error if the length
     /// field is invalid or over the limit (the connection must then be dropped).
     pub fn next_frame(&mut self) -> Result<Option<Frame<'_>>> {
+        match self.next_span()? {
+            None => Ok(None),
+            Some((tag, span)) => Ok(Some(Frame {
+                tag,
+                body: self.span(span),
+            })),
+        }
+    }
+
+    /// Like [`FrameReader::next_frame`] but returns the body as a span, so the caller can
+    /// decide what to do before borrowing the bytes with [`FrameReader::span`]. The span is valid
+    /// until the next [`FrameReader::push`].
+    pub fn next_span(&mut self) -> Result<Option<(u8, Range<usize>)>> {
         let avail = &self.buf[self.pos..];
         if avail.len() < 5 {
             return Ok(None);
@@ -82,10 +96,32 @@ impl FrameReader {
         }
         let start = self.pos + 5;
         self.pos += total;
-        Ok(Some(Frame {
-            tag,
-            body: &self.buf[start..start + body_len],
-        }))
+        Ok(Some((tag, start..start + body_len)))
+    }
+
+    /// The bytes of a span returned by [`FrameReader::next_span`].
+    pub fn span(&self, span: Range<usize>) -> &[u8] {
+        &self.buf[span]
+    }
+
+    /// True if a complete frame is buffered, without consuming it. Errors as `next_frame` does.
+    pub fn frame_ready(&self) -> Result<bool> {
+        let avail = &self.buf[self.pos..];
+        if avail.len() < 5 {
+            return Ok(false);
+        }
+        let len = i32::from_be_bytes([avail[1], avail[2], avail[3], avail[4]]);
+        if len < 4 {
+            return Err(ProtoError::InvalidLength(len));
+        }
+        let body_len = (len as usize) - 4;
+        if body_len > self.max_message {
+            return Err(ProtoError::MessageTooLarge {
+                len: body_len,
+                max: self.max_message,
+            });
+        }
+        Ok(avail.len() >= 5 + body_len)
     }
 }
 

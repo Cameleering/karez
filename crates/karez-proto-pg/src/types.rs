@@ -116,6 +116,7 @@ fn fixed<const N: usize>(v: &[u8], oid: u32) -> Result<[u8; N]> {
 /// its RowDescription.
 #[derive(Debug, Clone)]
 pub struct ResultPlan {
+    oids: Vec<u32>,
     kinds: Vec<Kind>,
     formats: Vec<i16>,
     fields: Vec<Field>,
@@ -135,15 +136,31 @@ impl ResultPlan {
             .map(|(d, k)| Field::new(d.name.clone(), k.column_type()))
             .collect();
         ResultPlan {
+            oids: desc.iter().map(|d| d.type_oid).collect(),
             kinds,
             formats,
             fields,
         }
     }
 
+    /// The server's type OID of each column.
+    pub fn type_oids(&self) -> &[u32] {
+        &self.oids
+    }
+
+    /// Index and OID of the first column whose type has no binary codec here (it would be
+    /// fetched as text), if any.
+    pub fn first_text_fallback(&self) -> Option<(usize, u32)> {
+        self.kinds
+            .iter()
+            .position(|k| *k == Kind::TextFallback)
+            .map(|i| (i, self.oids[i]))
+    }
+
     /// A plan for a statement that returns no columns.
     pub fn empty() -> Self {
         ResultPlan {
+            oids: Vec::new(),
             kinds: Vec::new(),
             formats: Vec::new(),
             fields: Vec::new(),
