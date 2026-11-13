@@ -40,10 +40,10 @@ Counts from the final run (below). "Needs a server" means the test skips loudly 
 | `karez-proto-pg` | 37 unit, 4 integration in `tests/split_decoding.rs` | no |
 | `karez-pg` | 4 unit (URL parsing, ssl options), 8 in `tests/mock_server.rs` (scripted in-process server), 42 in `tests/pg_integration.rs` | the 42 yes |
 | `karez-compat-tests` | 3 tests of the futures on tokio (a dev-dependency of this unpublished crate only) | the 3 yes |
-| `karez-rt` | 6 engine tests (scripted server bytes), 11 in `tests/shared_pg.rs` (13 with `tls`) | the 11 yes |
+| `karez-rt` | 6 engine tests (scripted server bytes), 12 in `tests/shared_pg.rs` (14 with `tls`) | the 12 yes |
 | `karez` | 1 doc test (compiled, not run: `no_run`) | no |
-| total | 132 | 56 |
-| with `--features tls` | 137 | 61 |
+| total | 133 | 57 |
+| with `--features tls` | 138 | 62 |
 
 What the test families check:
 
@@ -127,21 +127,23 @@ Built 2026-11-13 from [karez-rt.md](karez-rt.md). What the tests check, all on P
 one run, 20,000 `SELECT $1::int8`, release build, a Windows 11 client talking to PostgreSQL 16.15 in Docker
 Desktop through its port proxy, which is a poor network and the only one used):
 
-| how | queries per second |
-|---|---|
-| blocking `Connection`, one at a time | 2,540 |
-| `SharedConnection`, one at a time | 2,196 |
-| `SharedConnection`, 16 in flight | 20,634 |
-| `SharedConnection`, 128 in flight | 33,671 |
-| `SharedConnection`, 512 in flight | 34,554 |
-| `SharedConnection`, 8 threads on one connection | 16,683 |
+| how | first run, thread started per command | second run, reader lingers 50 ms |
+|---|---|---|
+| blocking `Connection`, one at a time | 2,540 | 2,505 |
+| `SharedConnection`, one at a time | 2,196 | 2,529 |
+| `SharedConnection`, 16 in flight | 20,634 | 22,915 |
+| `SharedConnection`, 128 in flight | 33,671 | 34,149 |
+| `SharedConnection`, 512 in flight | 34,554 | 32,548 |
+| `SharedConnection`, 8 threads on one connection | 16,683 | 16,585 |
 
 What it shows: queueing many commands on one connection is about 13 times faster than one round trip each,
-on this setup. What it also shows, and it is a loss: through the shared connection a lone caller is **about
-14% slower** than through the blocking `Connection`, because every command crosses to the reader thread (the
-leader optimisation in the design is not built). What it does not show: anything about other clients, other
-machines, other networks or larger loads. No competitor was run, so no ranking exists, and none may be quoted
-from this table. The plan's benchmark method (open-loop p99, Linux machines, baselines) is not started.
+on this setup. The first run also showed a loss: a lone caller through the shared connection was about 14%
+slower than through the blocking `Connection`, because the reader thread was started again for every command.
+The reader now stays for `Options::idle_linger` (default 50 ms) after its last command and then leaves, so an
+idle connection still has no thread; in the second run the lone caller is level with the blocking connection
+(2,529 against 2,505, one run each, so within noise). What it does not show: anything about other clients,
+other machines, other networks or larger loads. Each cell is one run. No competitor was run, so no ranking
+exists, and none may be quoted from this table. The plan's benchmark method (open-loop p99, Linux machines, baselines) is not started.
 
 ## Known limits
 
@@ -161,7 +163,7 @@ from this table. The plan's benchmark method (open-loop p99, Linux machines, bas
 ## Final run (2026-11-13)
 
 Quoted from the run that produced the counts above; the commands are the ones listed under
-"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), also with `--features karez-pg/tls,karez-rt/tls` (137 tests, TLS on 14.25, 16.15 and 17.12), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
+"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), also with `--features karez-pg/tls,karez-rt/tls` (138 tests, TLS on 14.25, 16.15 and 17.12), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
 
 ```text
 cargo fmt --all --check            -> clean
@@ -175,7 +177,7 @@ KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 cargo test --workspace
   mock_server                 8 passed
   pg_integration             42 passed
   karez_rt engine             6 passed
-  karez_rt shared_pg         11 passed
+  karez_rt shared_pg         12 passed
   karez doc test              1 passed
   (0 failed, 0 ignored)
 example orders: audit_log: 400000 rows in 391 chunks; rolled back; orders still 150000

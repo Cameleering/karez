@@ -36,6 +36,10 @@ pub struct Options {
     pub wait_timeout: Duration,
     /// How long `close` waits for commands in flight (default 5 s).
     pub close_grace: Duration,
+    /// How long the reader thread stays after the last command finished, in case another one
+    /// follows (default 50 ms). Starting a thread for every command would cost more than the
+    /// round trip itself. After this the connection has no thread; 0 means exit at once.
+    pub idle_linger: Duration,
 }
 
 impl Default for Options {
@@ -46,6 +50,7 @@ impl Default for Options {
             stream_queue_chunks: 4,
             wait_timeout: Duration::from_secs(30),
             close_grace: Duration::from_secs(5),
+            idle_linger: Duration::from_millis(50),
         }
     }
 }
@@ -281,7 +286,12 @@ impl Inner {
     }
 
     fn ensure_pump(self: &Arc<Self>, st: &mut State) {
-        if st.pump || st.dead.is_some() {
+        if st.pump {
+            // The reader is lingering after its last command: wake it for this one.
+            self.cv.notify_all();
+            return;
+        }
+        if st.dead.is_some() {
             return;
         }
         let rd = match self.reader.try_clone() {
@@ -311,13 +321,32 @@ impl Inner {
         loop {
             {
                 let mut st = self.state();
+                let mut idle_since: Option<Instant> = None;
                 loop {
-                    if st.engine.in_flight() == 0 || st.dead.is_some() {
+                    if st.dead.is_some() {
                         st.pump = false;
                         drop(st);
                         self.cv.notify_all();
                         return;
                     }
+                    if st.engine.in_flight() == 0 {
+                        // Linger briefly: the next command usually follows at once.
+                        let since = *idle_since.get_or_insert_with(Instant::now);
+                        let left = self.opts.idle_linger.saturating_sub(since.elapsed());
+                        if left.is_zero() {
+                            st.pump = false;
+                            drop(st);
+                            self.cv.notify_all();
+                            return;
+                        }
+                        st = self
+                            .cv
+                            .wait_timeout(st, left)
+                            .unwrap_or_else(|e| e.into_inner())
+                            .0;
+                        continue;
+                    }
+                    idle_since = None;
                     if self.blocked(&st) {
                         st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
                         continue;
@@ -478,6 +507,12 @@ impl SharedConnection {
     /// flight (the reader only runs then).
     pub fn take_notifications(&self) -> Vec<Notification> {
         self.inner.state().engine.take_notifications()
+    }
+
+    /// True while the reader thread exists. It exists only while commands are in flight and for
+    /// `Options::idle_linger` after the last one (diagnostics and tests).
+    pub fn reader_thread_running(&self) -> bool {
+        self.inner.state().pump
     }
 
     /// True once the connection is closed or has failed.

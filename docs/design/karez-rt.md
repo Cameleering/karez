@@ -197,7 +197,7 @@ listed under the table.
 |---|---|---|
 | 0a | fix the `execute_many` write/read deadlock | **done**; not yet verified on Linux (the hang never reproduced on Windows) |
 | 0b | sans-io `Engine` | **done** in `karez-rt` (6 tests with scripted bytes, split invariance, malformed input); `Connection` is **not** rebuilt on it |
-| 1 | shared connection, pump, slots, limits, close | **done** (11 real-server tests on 14.25, 16.15, 17.12) |
+| 1 | shared connection, pump, slots, limits, close | **done** (14 real-server tests on 14.25, 16.15, 17.12, with TLS) |
 | 2 | implicit pipelining, `Pipeline`, stream lease, `retry_safe` | **done**, with the deviations below |
 | 3 | `Future` API | **done**; tested on a hand-written `block_on` and on tokio (3 tests in `crates/karez-compat-tests`: 32 tasks on a multi-thread runtime, a current-thread runtime whose timer keeps ticking during a slow statement, a stream, and a future dropped by `tokio::time::timeout`) |
 | 4 | fair pool | **done** in `karez-pg` (first come, first served), not in a separate `karez-pool` crate; no pool of shared connections yet |
@@ -208,9 +208,10 @@ Deviations and gaps:
 - `Connection` keeps its own blocking protocol code, so prepare, decode and error handling now exist twice
   (`karez-pg` and the engine). Rebuilding `Connection` on the engine is optional follow-up; the tests of both
   protect them.
-- The pump thread serves **every** command, including a lone blocking caller. The leader optimisation (the
-  caller reads the socket itself when one command is in flight) is not built. In the smoke run one-at-a-time
-  through `SharedConnection` is slower than through `Connection` (see the results note).
+- The reader thread serves **every** command, including a lone blocking caller. The leader optimisation (the
+  caller reads the socket itself when one command is in flight) is **not** built; instead the reader lingers
+  for `Options::idle_linger` (default 50 ms) after its last command, which removed the cost of starting a
+  thread per command (smoke run in the results note). "No thread while idle" holds after the linger.
 - A dropped `Pending` or `Stream` discards its answer when it arrives, but a command still queued is **not**
   removed: it runs. The design said it would be removed.
 - `LISTEN` notifications are read only while commands are in flight; an idle shared connection has no reader.

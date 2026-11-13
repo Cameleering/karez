@@ -535,3 +535,46 @@ mod tls {
         Ok(())
     }
 }
+
+#[test]
+fn an_idle_connection_has_no_thread_and_a_busy_one_keeps_its_reader() -> R {
+    let addr = need_server!();
+    let opts = Options {
+        idle_linger: Duration::from_millis(100),
+        ..Options::default()
+    };
+    let c = shared_with(&addr, opts)?;
+    assert!(!c.reader_thread_running(), "no thread before any command");
+    one_i64(&c, "SELECT 1::int8", &[])?;
+    // The reader lingers briefly after the last command, then is gone.
+    assert!(c.reader_thread_running());
+    let t0 = Instant::now();
+    while c.reader_thread_running() {
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "the reader never left"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    // Commands that follow each other inside the linger reuse the one reader.
+    for i in 0..50 {
+        assert_eq!(one_i64(&c, "SELECT $1::int8", &[Value::i64(i)])?, i);
+        assert!(c.reader_thread_running());
+    }
+    // And a command after the reader left starts a new one.
+    thread::sleep(Duration::from_millis(400));
+    assert!(!c.reader_thread_running());
+    assert_eq!(one_i64(&c, "SELECT 9::int8", &[])?, 9);
+    // With no linger the reader leaves with the last command.
+    let c = shared_with(
+        &addr,
+        Options {
+            idle_linger: Duration::ZERO,
+            ..Options::default()
+        },
+    )?;
+    one_i64(&c, "SELECT 1::int8", &[])?;
+    thread::sleep(Duration::from_millis(100));
+    assert!(!c.reader_thread_running());
+    Ok(())
+}
