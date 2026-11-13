@@ -573,6 +573,13 @@ Already decided on 2026-11-09, and no longer open: the name karez and the Apache
 (as for simoom; permissive and patent-safe for the C, Java, Python and ODBC distributions).
 See [STATUS.md](../STATUS.md).
 
+**Decided on 2026-11-13 by the owner** (details in [STATUS.md](../STATUS.md)): TLS is an optional `rustls`
+feature ([tls-decision.md](tls-decision.md)); async is a runtime-free design ([karez-rt.md](karez-rt.md));
+**the ODBC driver is in 1.0** (a separate FFI crate with `unsafe`, covered by the audit; this adds months to the
+schedule above and the milestone table has not been updated for it); the external audit before 1.0 covers the
+core, the protocol crates and the ODBC FFI crate, not `cameleer-tls`; the `karez` and `karez-*` names are to be
+reserved now (the owner does it); after a lost connection only commands never written are moved to a new one.
+
 1. **Go or no-go on Milestone 0.** It measures and writes about 3,000 lines of spike code; it
    changes nothing published.
 2. **Name reservation:** reserve the crates.io, PyPI and npm names now or at M0 (§8.1); a
