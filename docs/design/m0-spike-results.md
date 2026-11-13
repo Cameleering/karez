@@ -9,7 +9,7 @@ performance claims** in this note. Speed is measured later with the method in
 
 ## What was built
 
-Five crates, zero dependencies by default (not even dev-dependencies; the optional `tls` feature adds rustls and webpki-roots), `#![forbid(unsafe_code)]` in each,
+Five crates, zero dependencies by default (not even dev-dependencies; the optional `tls` feature adds rustls and webpki-roots; a sixth, unpublished crate `karez-compat-tests` has tokio as a dev-dependency to test the futures), `#![forbid(unsafe_code)]` in each,
 edition 2021, MSRV 1.85 declared and tested (rustc 1.85.1 builds everything and passes the full suite against the server; the main runs used rustc 1.99.1).
 
 | crate | contents |
@@ -39,10 +39,11 @@ Counts from the final run (below). "Needs a server" means the test skips loudly 
 | `karez-chunk` | 16 unit (randomised round trips with the in-repo PRNG, rollback of partial rows, corrupt-buffer detection) | no |
 | `karez-proto-pg` | 37 unit, 4 integration in `tests/split_decoding.rs` | no |
 | `karez-pg` | 4 unit (URL parsing, ssl options), 8 in `tests/mock_server.rs` (scripted in-process server), 42 in `tests/pg_integration.rs` | the 42 yes |
+| `karez-compat-tests` | 3 tests of the futures on tokio (a dev-dependency of this unpublished crate only) | the 3 yes |
 | `karez-rt` | 6 engine tests (scripted server bytes), 11 in `tests/shared_pg.rs` (13 with `tls`) | the 11 yes |
 | `karez` | 1 doc test (compiled, not run: `no_run`) | no |
-| total | 129 | 53 |
-| with `--features tls` | 134 | 58 |
+| total | 132 | 56 |
+| with `--features tls` | 137 | 61 |
 
 What the test families check:
 
@@ -154,13 +155,13 @@ from this table. The plan's benchmark method (open-loop p99, Linux machines, bas
 - **`execute_many` and large batches.** A batch above 64 KiB is now written by a helper thread while the caller reads the results, because a server that cannot write its output stops reading its input, and a client that writes everything first could then block forever. **I could not reproduce the hang on this machine**: the Windows client accepts hundreds of megabytes of unread writes (400 MB out, 200 MB back, finished in under a second), so neither the real-server test (18 MB out, 60 MB back) nor the in-process stalling-server test fails on the old code. The fix is by reasoning; the two tests only show that large overlapped batches complete correctly. Run the stalling-server test on Linux, where it is expected to hang on the old code, before relying on it.
 - **COPY** takes the statement as written (COPY has no bound parameters), so build its SQL only from trusted text; the data is never part of the SQL.
 - **Pool.** Connections are not tested before they are handed out; a dead idle connection fails on first use and is then replaced.
-- **Not built:** the leader optimisation and a `Connection` rebuilt on the engine (see karez-rt.md section 13), a pool of shared connections, tokio-tested futures, portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
+- **Not built:** the leader optimisation and a `Connection` rebuilt on the engine (see karez-rt.md section 13), a pool of shared connections, portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
 - **Not measured:** speed, memory and binary size. The plan's Milestone 0 gate (plan section 1.3) is therefore still open.
 
 ## Final run (2026-11-13)
 
 Quoted from the run that produced the counts above; the commands are the ones listed under
-"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), also with `--features karez-pg/tls,karez-rt/tls` (134 tests, TLS on 14.25, 16.15 and 17.12), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
+"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), also with `--features karez-pg/tls,karez-rt/tls` (137 tests, TLS on 14.25, 16.15 and 17.12), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
 
 ```text
 cargo fmt --all --check            -> clean

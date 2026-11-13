@@ -1,0 +1,19 @@
+[package]
+name = "karez-compat-tests"
+description = "Tests that run karez-rt futures on real executors (tokio). Not published."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+karez-pg = { path = "../karez-pg" }
+karez-rt = { path = "../karez-rt" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

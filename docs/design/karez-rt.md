@@ -199,7 +199,7 @@ listed under the table.
 | 0b | sans-io `Engine` | **done** in `karez-rt` (6 tests with scripted bytes, split invariance, malformed input); `Connection` is **not** rebuilt on it |
 | 1 | shared connection, pump, slots, limits, close | **done** (11 real-server tests on 14.25, 16.15, 17.12) |
 | 2 | implicit pipelining, `Pipeline`, stream lease, `retry_safe` | **done**, with the deviations below |
-| 3 | `Future` API | **done**, tested on a hand-written `block_on`; **not** yet tested on tokio |
+| 3 | `Future` API | **done**; tested on a hand-written `block_on` and on tokio (3 tests in `crates/karez-compat-tests`: 32 tasks on a multi-thread runtime, a current-thread runtime whose timer keeps ticking during a slow statement, a stream, and a future dropped by `tokio::time::timeout`) |
 | 4 | fair pool | **done** in `karez-pg` (first come, first served), not in a separate `karez-pool` crate; no pool of shared connections yet |
 | 5 | benchmark harness and baselines | **not done**; only a smoke run (see the results note) |
 

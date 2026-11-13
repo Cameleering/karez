@@ -17,7 +17,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 | Name and identity | decided 2026-11-09: **karez**, in the Cameleer family; Apache-2.0; a fresh repository with no rdbc history |
 | Brand | K mark, icon set generator and assets are built; the logo and social preview are Gemini drafts that need small fixes ([brand/gemini-prompts.md](brand/gemini-prompts.md)) |
 | Repo metadata | About line and 20 topics set; README, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, `context7.json`, `CITATION.cff` and community files written |
-| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 76 tests that run without a server and 53 that need one (134 and 58 with `tls`); blocking client with pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches, plus a shared pipelined connection with futures (`karez-rt`); optional TLS (`tls` feature); no benchmarks |
+| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 76 tests that run without a server and 56 that need one (137 and 61 with `tls`, the latter counting tests on tokio); blocking client with pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches, plus a shared pipelined connection with futures (`karez-rt`); optional TLS (`tls` feature); no benchmarks |
 
 ## Decisions already made
 
