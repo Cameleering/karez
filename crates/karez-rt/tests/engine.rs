@@ -109,7 +109,7 @@ fn prepare_and_collect_with_any_split_gives_the_same_events() {
             _ => {
                 let mut at = 0;
                 while at < reply.len() {
-                    let n = (rng.range(1, 5000) as usize).min(reply.len() - at);
+                    let n = rng.range(1, 5000).min(reply.len() - at);
                     e.feed(&reply[at..at + n]).unwrap();
                     at += n;
                 }
@@ -127,7 +127,9 @@ fn prepare_and_collect_with_any_split_gives_the_same_events() {
         let sum: i64 = done
             .chunks
             .iter()
-            .flat_map(|c| (0..c.rows()).map(move |r| c.row(r).unwrap().get::<i32>(0).unwrap() as i64))
+            .flat_map(|c| {
+                (0..c.rows()).map(move |r| c.row(r).unwrap().get::<i32>(0).unwrap() as i64)
+            })
             .sum();
         assert_eq!(sum, (0..2500i64).sum::<i64>());
         results.push((sizes, e.in_flight(), e.tx_status()));
@@ -228,7 +230,9 @@ fn a_lost_connection_says_which_commands_were_never_sent() {
     let evs = drain(&mut e);
     assert_eq!(evs.len(), 2);
     for v in evs {
-        let Event::Done { id, result } = v else { panic!() };
+        let Event::Done { id, result } = v else {
+            panic!()
+        };
         let err = result.unwrap_err();
         if id == sent {
             assert!(!err.retry_safe(), "{err}");
@@ -255,9 +259,7 @@ fn bad_parameters_queue_nothing_and_a_stale_plan_is_dropped_from_the_cache() {
     assert!(!e.has_output() && e.in_flight() == 0);
     assert!(e.lookup("SELECT $1::int", &[23]).is_some());
     // The server rejects a cached plan whose result type changed: the entry must go.
-    let _ = e
-        .run(&stmt, &[Value::i32(1)], Class::Exec)
-        .unwrap();
+    let _ = e.run(&stmt, &[Value::i32(1)], Class::Exec).unwrap();
     let _ = e.take_output();
     let mut reply = msg(b'2', b"");
     reply.extend(msg(
@@ -277,7 +279,7 @@ fn malformed_server_bytes_are_an_error_not_a_panic() {
         let stmt = prepared(&mut e);
         let _ = e.run(&stmt, &[Value::i32(1)], Class::Collect);
         let _ = e.take_output();
-        let n = rng.range(0, 200) as usize;
+        let n = rng.range(0, 200);
         let junk: Vec<u8> = (0..n).map(|_| rng.range(0, 256) as u8).collect();
         let _ = e.feed(&junk);
         e.fail_all("test");

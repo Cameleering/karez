@@ -361,8 +361,8 @@ impl Engine {
         let n = items.len();
         let mut ids = Vec::with_capacity(n);
         for (i, (stmt, _, class)) in items.iter().enumerate() {
-            let builder = (*class != Class::Exec)
-                .then(|| ChunkBuilder::new(stmt.plan.fields().to_vec()));
+            let builder =
+                (*class != Class::Exec).then(|| ChunkBuilder::new(stmt.plan.fields().to_vec()));
             ids.push(self.core.push(
                 Kind::Run {
                     stmt: (*stmt).clone(),
@@ -496,9 +496,9 @@ impl Core {
         }
         let Some(head) = self.queue.front_mut() else {
             return Err(match msg {
-                BackendMessage::ErrorResponse(f) => Error::Pg(PgError::Server(
-                    ServerError::from_fields(f),
-                )),
+                BackendMessage::ErrorResponse(f) => {
+                    Error::Pg(PgError::Server(ServerError::from_fields(f)))
+                }
                 _ => proto("the server sent a message nobody asked for"),
             });
         };
@@ -628,11 +628,14 @@ impl Core {
         let id = e.id;
         let result = match (e.err, e.kind) {
             (Some(err), _) => Err(err),
-            (None, Kind::Prepare {
-                name,
-                param_oids,
-                fields,
-            }) => Ok(Done {
+            (
+                None,
+                Kind::Prepare {
+                    name,
+                    param_oids,
+                    fields,
+                },
+            ) => Ok(Done {
                 rows: 0,
                 chunks: Vec::new(),
                 prepared: Some(RawPrepared {
