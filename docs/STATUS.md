@@ -42,7 +42,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 ## Decisions of 2026-11-13 (owner)
 
 - **TLS:** an opt-in cargo feature backed by the `rustls` crate; the core stays dependency-free. AGENTS.md requires an issue that discusses the dependency first, so open that issue before any code. Until then the client refuses anything but `sslmode=disable`.
-- **Async (`karez-rt`):** a small design with no async runtime (std-only I/O threads and channels over the sans-io crates), informed by what the simoom project learnt. The simoom session answered: thread per connection with sans-io crates suits a database client, and a pump thread only helps from two requests in flight (see [research/simoom-io-learnings.md](research/simoom-io-learnings.md), second-hand and unchecked).
+- **Async (`karez-rt`):** a small design with no async runtime (std-only I/O threads and channels over the sans-io crates), informed by what the simoom project learnt. The simoom session answered: thread per connection with sans-io crates suits a database client, and a pump thread only helps from two requests in flight (see [research/simoom-io-learnings.md](research/simoom-io-learnings.md), second-hand and unchecked). The design is in [design/karez-rt.md](design/karez-rt.md); nothing of it is built.
 - **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
 
 ## Next steps
