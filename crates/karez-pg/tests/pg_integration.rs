@@ -456,12 +456,11 @@ fn unsupported_types_fail_with_the_type_name() -> R {
     let addr = need_server!();
     let mut c = connect(&addr)?;
     for (col, name) in [
-        ("n", "numeric"),
-        ("j", "jsonb"),
-        ("arr", "int4[]"),
-        ("iv", "interval"),
-        ("m", "mood"),
-        ("ip", "inet"),
+        ("mny", "money"),
+        ("pt", "point"),
+        ("rng", "int4range"),
+        ("tsv", "tsvector"),
+        ("ma", "_mood"),
     ] {
         let sql = format!("SELECT {col} FROM unsupported_zoo WHERE id = 1");
         match c.query(&sql, &[]) {
@@ -476,16 +475,16 @@ fn unsupported_types_fail_with_the_type_name() -> R {
         }
     }
     // The error is specific and not fatal.
-    let e = c.query("SELECT n FROM unsupported_zoo", &[]).err().unwrap();
-    assert!(e.to_string().contains("numeric") && !e.is_fatal());
+    let e = c
+        .query("SELECT mny FROM unsupported_zoo", &[])
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("money") && !e.is_fatal());
     assert!(!c.is_broken());
     assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1);
     // A cast makes the column readable.
-    let mut cur = c.query("SELECT n::text FROM unsupported_zoo", &[])?;
-    assert_eq!(
-        cur.next()?.unwrap().get::<&str>(0)?,
-        "12345678901234567890.123456789"
-    );
+    let mut cur = c.query("SELECT mny::numeric::text FROM unsupported_zoo", &[])?;
+    assert_eq!(cur.next()?.unwrap().get::<&str>(0)?, "12.34");
     drop(cur);
     Ok(())
 }
@@ -494,12 +493,112 @@ fn unsupported_types_fail_with_the_type_name() -> R {
 fn unsupported_types_can_be_read_as_text_when_asked() -> R {
     let addr = need_server!();
     let mut c = connect_with(&addr, "&unsupported_types=text")?;
+    let mut cur = c.query("SELECT mny, pt, rng, tsv, ma FROM unsupported_zoo", &[])?;
+    let r = cur.next()?.unwrap();
+    assert!(r.get::<&str>(0)?.contains("12.34"));
+    assert_eq!(r.get::<&str>(1)?, "(1,2)");
+    assert_eq!(r.get::<&str>(2)?, "[1,10)");
+    assert_eq!(r.get::<&str>(3)?, "'a':1 'b':2");
+    assert_eq!(r.get::<&str>(4)?, "{sad,happy}");
+    Ok(())
+}
+
+/// Run `sql` (two text columns: the rendered value and the server's `::text` of it) and require
+/// them to be equal in every row. Returns the number of rows.
+fn same_as_server(c: &mut Connection, sql: &str) -> Result<usize, Error> {
+    let mut cur = c.query(sql, &[])?;
+    let mut n = 0;
+    while let Some(r) = cur.next()? {
+        let (a, b) = (r.get::<Option<&str>>(0)?, r.get::<Option<&str>>(1)?);
+        assert_eq!(a, b, "{sql}: row {n}");
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[test]
+fn rendered_types_match_the_servers_own_text() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    c.execute("SET intervalstyle = 'iso_8601'", &[])?;
+    let cases = [
+        "SELECT v, v::text FROM (VALUES (0::numeric),(1),(-1),(0.5),(-0.0001),(0.0000000001),(10000),\
+         (99999999),(1e100),(-123456789012345678901234567890.1234567890123456789),('NaN'),\
+         ('Infinity'),('-Infinity'),(12345678901234567890.123456789),(5.10),(0.000),(NULL)) t(v)",
+        "SELECT v, v::text FROM (SELECT round((i * 7919)::numeric * 123456789.123456789 \
+         / (10::numeric ^ (i % 25)), i % 15) * (CASE WHEN i % 2 = 0 THEN -1 ELSE 1 END) AS v \
+         FROM generate_series(1, 2000) i) t",
+        "SELECT v, v::text FROM (VALUES ('0 microseconds'::interval),('1 microsecond'),\
+         ('-1 microsecond'),('100 hours'),('1 year'),('13 months'),('-1 day'),\
+         ('2147483647 months'),('1 year 2 mons 3 days 04:05:06.789'),\
+         ('-1 year -2 mons +3 days -04:05:06.5'),('00:00:00.5'),('-00:00:00.5')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('00:00:00'::time),('00:00:00.000001'),('12:34:56.789'),\
+         ('23:59:59.999999'),('24:00:00')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('00:00:00+00'::timetz),('12:00:00+05:30'),('12:00:00-08'),\
+         ('23:59:59.5-12:34:56'),('01:02:03+14:30:15')) t(v)",
+        // inet::text always adds the netmask; abbrev() is inet's own output form.
+        "SELECT v, abbrev(v) FROM (VALUES ('0.0.0.0/0'::inet),('255.255.255.255'),('::'),('::1'),\
+         ('::ffff:1.2.3.4'),('::1.2.3.4'),('2001:db8::1/64'),('2001:db8:0:0:1:0:0:1'),\
+         ('1:0:0:2:0:0:0:3'),('fe80::1'),('ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'),\
+         ('1:2:3:4:5:6:7:8'),('::ffff:0:0'),('192.168.1.0/24')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('10.0.0.0/8'::cidr),('::/0'),('2001:db8::/32'),\
+         ('192.168.1.0/32')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('08:00:2b:01:02:03'::macaddr),('ff:ff:ff:ff:ff:ff'),\
+         ('00:00:00:00:00:00')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('08:00:2b:01:02:03:04:05'::macaddr8)) t(v)",
+        "SELECT v, v::text FROM (VALUES (B'10110'::bit(5)),(B'00000'),(B'11111')) t(v)",
+        "SELECT v, v::text FROM (VALUES (B''::varbit),(B'1'),(B'1010101010101'),\
+         (repeat('10', 20)::varbit)) t(v)",
+        "SELECT v, v::text FROM (VALUES ('{\"a\": [1, 2, {\"b\": null}]}'::json),('[]'),\
+         ('\"é日🎉\"')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('{\"a\": [1, 2, {\"b\": null}], \"b\": 1e500}'::jsonb),\
+         ('[]'),('\"é日🎉\"'),('null'),('1.50')) t(v)",
+        "SELECT v, v::text FROM (VALUES ('<a>é</a>'::xml)) t(v)",
+        "SELECT m, m::text FROM unsupported_zoo",
+        "SELECT v, v::text FROM (VALUES ('{1,2,NULL,4}'::int4[]),('{}'),('{{1,2},{3,4}}'),\
+         ('[0:2]={5,6,7}'),('{{{1,2},{3,4}},{{5,6},{7,8}}}'),(NULL)) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['a b','','NULL','q\"uote','back\\slash','{x}','é',\
+         'x,y',E'tab\\t','null','plain'])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY[1.5, NULL, -0.001, 1e30]::numeric[])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['00000000-0000-0000-0000-000000000000'::uuid,\
+         'ffffffff-ffff-ffff-ffff-ffffffffffff'])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['\\x00ff'::bytea, '\\x'::bytea, '\\x5c'::bytea])) t(v)",
+        "SELECT v, v::text FROM (VALUES ('{t,f,NULL}'::bool[])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY[-9223372036854775808, 9223372036854775807]::int8[]),\
+         (ARRAY[-32768, 32767]::int2[])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['{\"k\":1}'::jsonb, '[1,2]'])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['::1'::inet,'10.0.0.1'])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['1 day'::interval, '-1 hour'])) t(v)",
+        "SELECT v, v::text FROM (VALUES (ARRAY['01:02:03'::time, '24:00:00'])) t(v)",
+        "SELECT v, v::text FROM (VALUES ('{a,b}'::varchar[]),('{\"x y\",NULL}')) t(v)",
+        "SELECT v, v::text FROM (SELECT array_agg(i) v FROM generate_series(1, 100000) i) t",
+    ];
+    for sql in cases {
+        assert!(same_as_server(&mut c, sql)? > 0, "{sql}");
+    }
+    // Floating-point arrays use Rust's shortest form, so check them against known values.
+    let mut cur = c.query(
+        "SELECT '{1.5,NULL,-2.25,NaN,Infinity}'::float8[], ARRAY[0.1]::float4[]",
+        &[],
+    )?;
+    let r = cur.next()?.unwrap();
+    assert_eq!(r.get::<&str>(0)?, "{1.5,NULL,-2.25,NaN,Infinity}");
+    assert_eq!(r.get::<&str>(1)?, "{0.1}");
+    drop(cur);
+    // oid is an integer column; "char" is one character.
+    let mut cur = c.query("SELECT 4294967295::oid, 'z'::\"char\", 0::oid", &[])?;
+    let r = cur.next()?.unwrap();
+    assert_eq!(r.get::<i64>(0)?, 4_294_967_295);
+    assert_eq!(r.get::<&str>(1)?, "z");
+    assert_eq!(r.get::<i64>(2)?, 0);
+    drop(cur);
+    // The values the seed holds, by name.
     let mut cur = c.query("SELECT n, j, arr, iv, m, ip FROM unsupported_zoo", &[])?;
     let r = cur.next()?.unwrap();
     assert_eq!(r.get::<&str>(0)?, "12345678901234567890.123456789");
     assert_eq!(r.get::<&str>(1)?, "{\"a\": [1, 2, {\"b\": null}]}");
     assert_eq!(r.get::<&str>(2)?, "{1,2,NULL,4}");
-    assert_eq!(r.get::<&str>(3)?, "1 year 2 mons 3 days 04:05:06.789");
+    assert_eq!(r.get::<&str>(3)?, "P1Y2M3DT4H5M6.789S");
     assert_eq!(r.get::<&str>(4)?, "happy");
     assert_eq!(r.get::<&str>(5)?, "192.168.1.0/24");
     Ok(())
@@ -1313,4 +1412,350 @@ fn backend_killed_mid_result_is_an_error_not_a_hang() -> R {
 fn chunk_type_is_exported() {
     // Compile-time check that the facade types needed by users are re-exported.
     fn _takes(_: &Chunk) {}
+}
+
+// ---- cancel, notifications, COPY, batches, pool ------------------------------------------
+
+#[test]
+fn a_running_statement_can_be_cancelled_from_another_thread() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let token = c.cancel_token();
+    let t0 = Instant::now();
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(300));
+        token.cancel()
+    });
+    let r = c.query("SELECT pg_sleep(30)", &[]).and_then(|mut cur| {
+        while cur.next()?.is_some() {}
+        Ok(())
+    });
+    canceller.join().unwrap()?;
+    expect_sqlstate(r, "57014");
+    assert!(t0.elapsed() < Duration::from_secs(20), "{:?}", t0.elapsed());
+    // The connection is fine afterwards.
+    assert!(!c.is_broken());
+    assert_eq!(one_i64(&mut c, "SELECT 7::int8", &[])?, 7);
+    // Cancelling an idle connection does nothing.
+    c.cancel_token().cancel()?;
+    assert_eq!(one_i64(&mut c, "SELECT 8::int8", &[])?, 8);
+    // Cancelling a second, idle connection leaves it usable too.
+    let mut other = connect(&addr)?;
+    other.cancel_token().cancel()?;
+    assert_eq!(one_i64(&mut other, "SELECT 9::int8", &[])?, 9);
+    Ok(())
+}
+
+#[test]
+fn notifications_are_delivered_while_waiting_and_during_queries() -> R {
+    let addr = need_server!();
+    let mut listener = connect(&addr)?;
+    let mut sender = connect(&addr)?;
+    let chan = tag("chan");
+    listener.execute(&format!("LISTEN {chan}"), &[])?;
+    // Nothing yet: a short wait times out.
+    let t0 = Instant::now();
+    assert_eq!(
+        listener.wait_for_notification(Some(Duration::from_millis(200)))?,
+        None
+    );
+    assert!(t0.elapsed() >= Duration::from_millis(150));
+    // Notify from another connection while the listener waits.
+    let chan2 = chan.clone();
+    let h = thread::spawn(move || -> Result<(), Error> {
+        thread::sleep(Duration::from_millis(200));
+        sender.execute(
+            "SELECT pg_notify($1, $2)",
+            &[Value::text(&chan2), Value::text("hello 🎉")],
+        )?;
+        sender.execute(
+            "SELECT pg_notify($1, $2)",
+            &[Value::text(&chan2), Value::text("")],
+        )?;
+        Ok(())
+    });
+    let n = listener
+        .wait_for_notification(Some(Duration::from_secs(10)))?
+        .expect("a notification");
+    assert_eq!(
+        (n.channel.as_str(), n.payload.as_str()),
+        (chan.as_str(), "hello 🎉")
+    );
+    assert!(n.process_id != 0);
+    h.join().unwrap()?;
+    // The second one arrived too; it is queued, whether it came in during the wait or the next.
+    let n2 = listener
+        .wait_for_notification(Some(Duration::from_secs(10)))?
+        .expect("the second notification");
+    assert_eq!(n2.payload, "");
+    // A notification that arrives while a query runs is kept for later.
+    let mut s2 = connect(&addr)?;
+    s2.execute("SELECT pg_notify($1, 'late')", &[Value::text(&chan)])?;
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(one_i64(&mut listener, "SELECT 1::int8", &[])?, 1);
+    let got = listener.take_notifications();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].payload, "late");
+    assert_eq!(listener.dropped_notifications(), 0);
+    Ok(())
+}
+
+#[test]
+fn copy_in_and_out_round_trip() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = tag("copy");
+    c.execute(
+        &format!("CREATE TEMP TABLE {t} (id int PRIMARY KEY, name text, amount numeric(12,2), note text)"),
+        &[],
+    )?;
+    let mut csv = String::new();
+    for i in 0..20_000 {
+        csv.push_str(&format!(
+            "{i},name {i},{}.{:02},\"quote \"\"{i}\"\", comma, \nnewline\"\n",
+            i * 3,
+            i % 100
+        ));
+    }
+    let n = c.copy_in(
+        &format!("COPY {t} FROM STDIN WITH (FORMAT csv)"),
+        &mut csv.as_bytes(),
+    )?;
+    assert_eq!(n, 20_000);
+    assert_eq!(
+        one_i64(&mut c, &format!("SELECT count(*)::int8 FROM {t}"), &[])?,
+        20_000
+    );
+    // Read back with COPY TO and compare to what was sent.
+    let mut out = Vec::new();
+    let n = c.copy_out(
+        &format!("COPY (SELECT * FROM {t} ORDER BY id) TO STDOUT WITH (FORMAT csv)"),
+        &mut out,
+    )?;
+    assert_eq!(n, 20_000);
+    assert_eq!(String::from_utf8(out).unwrap(), csv);
+    // Binary COPY: out, then back in to a second table.
+    let t2 = tag("copy2");
+    c.execute(&format!("CREATE TEMP TABLE {t2} (LIKE {t})"), &[])?;
+    let mut bin = Vec::new();
+    c.copy_out(
+        &format!("COPY {t} TO STDOUT WITH (FORMAT binary)"),
+        &mut bin,
+    )?;
+    assert_eq!(&bin[..11], b"PGCOPY\n\xff\r\n\0");
+    let n = c.copy_in(
+        &format!("COPY {t2} FROM STDIN WITH (FORMAT binary)"),
+        &mut &bin[..],
+    )?;
+    assert_eq!(n, 20_000);
+    assert_eq!(
+        one_i64(
+            &mut c,
+            &format!("SELECT count(*)::int8 FROM {t} a JOIN {t2} b USING (id, name, amount, note)"),
+            &[]
+        )?,
+        20_000
+    );
+    // Bad data: the server's error comes back, nothing is loaded, the connection is usable.
+    let before = one_i64(&mut c, &format!("SELECT count(*)::int8 FROM {t2}"), &[])?;
+    let r = c.copy_in(
+        &format!("COPY {t2} FROM STDIN WITH (FORMAT csv)"),
+        &mut "99999,ok,1.00,x\nnot-a-number,bad,1.00,y\n".as_bytes(),
+    );
+    expect_sqlstate(r, "22P02");
+    assert_eq!(
+        one_i64(&mut c, &format!("SELECT count(*)::int8 FROM {t2}"), &[])?,
+        before
+    );
+    // A duplicate key.
+    let r = c.copy_in(
+        &format!("COPY {t} FROM STDIN WITH (FORMAT csv)"),
+        &mut "1,dup,1.00,x\n".as_bytes(),
+    );
+    expect_sqlstate(r, "23505");
+    // A reader that fails: the COPY is aborted, the error reports the I/O failure.
+    struct Failing(usize);
+    impl std::io::Read for Failing {
+        fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 == 0 {
+                return Err(std::io::Error::other("source went away"));
+            }
+            self.0 -= 1;
+            let line = b"500000,x,1.00,y\n";
+            b[..line.len()].copy_from_slice(line);
+            Ok(line.len())
+        }
+    }
+    let r = c.copy_in(
+        &format!("COPY {t2} FROM STDIN WITH (FORMAT csv)"),
+        &mut Failing(3),
+    );
+    assert!(matches!(r, Err(Error::Caller(_))), "{r:?}");
+    assert!(!c.is_broken());
+    assert_eq!(
+        one_i64(
+            &mut c,
+            &format!("SELECT count(*)::int8 FROM {t2} WHERE id = 500000"),
+            &[]
+        )?,
+        0
+    );
+    // Wrong statement kinds are usage errors and leave the connection usable.
+    assert!(matches!(
+        c.copy_in("SELECT 1", &mut "".as_bytes()),
+        Err(Error::Usage(_))
+    ));
+    assert!(matches!(
+        c.copy_in(&format!("COPY {t} TO STDOUT"), &mut "".as_bytes()),
+        Err(Error::Usage(_))
+    ));
+    let mut sink = Vec::new();
+    assert!(matches!(
+        c.copy_out(&format!("COPY {t} FROM STDIN"), &mut sink),
+        Err(Error::Usage(_))
+    ));
+    expect_sqlstate(
+        c.copy_out("COPY no_such_table_xyz TO STDOUT", &mut sink),
+        "42P01",
+    );
+    // A writer that fails: the stream is drained and the connection stays usable.
+    struct BadSink;
+    impl std::io::Write for BadSink {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let r = c.copy_out(&format!("COPY {t} TO STDOUT"), &mut BadSink);
+    assert!(matches!(r, Err(Error::Caller(_))), "{r:?}");
+    assert!(!c.is_broken());
+    assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1);
+    Ok(())
+}
+
+#[test]
+fn execute_many_sends_a_batch_in_one_round_trip_and_is_atomic() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = tag("batch");
+    c.execute(
+        &format!("CREATE TEMP TABLE {t} (id int PRIMARY KEY, v text)"),
+        &[],
+    )?;
+    let ins = format!("INSERT INTO {t} VALUES ($1, $2)");
+    let upd = format!("UPDATE {t} SET v = v || '!' WHERE id < $1");
+    let texts: Vec<String> = (0..1000).map(|i| format!("row {i}")).collect();
+    let mut items: Vec<(&str, Vec<Value>)> = Vec::new();
+    for (i, s) in texts.iter().enumerate() {
+        items.push((&ins, vec![Value::i32(i as i32), Value::text(s)]));
+    }
+    items.push((&upd, vec![Value::i32(10)]));
+    let refs: Vec<(&str, &[Value])> = items.iter().map(|(s, p)| (*s, p.as_slice())).collect();
+    let counts = c.execute_many(&refs)?;
+    assert_eq!(counts.len(), 1001);
+    assert!(counts[..1000].iter().all(|n| *n == 1));
+    assert_eq!(counts[1000], 10);
+    assert_eq!(
+        one_i64(&mut c, &format!("SELECT count(*)::int8 FROM {t}"), &[])?,
+        1000
+    );
+    assert_eq!(
+        one_i64(
+            &mut c,
+            &format!("SELECT count(*)::int8 FROM {t} WHERE v LIKE '%!'"),
+            &[]
+        )?,
+        10
+    );
+    // One failing statement undoes the whole batch.
+    let bad: Vec<(&str, Vec<Value>)> = vec![
+        (&ins, vec![Value::i32(5000), Value::text("fine")]),
+        (&ins, vec![Value::i32(5), Value::text("duplicate key")]),
+        (&ins, vec![Value::i32(5001), Value::text("never reached")]),
+    ];
+    let refs: Vec<(&str, &[Value])> = bad.iter().map(|(s, p)| (*s, p.as_slice())).collect();
+    expect_sqlstate(c.execute_many(&refs), "23505");
+    assert_eq!(
+        one_i64(&mut c, &format!("SELECT count(*)::int8 FROM {t}"), &[])?,
+        1000
+    );
+    assert!(!c.is_broken());
+    // Empty batch, wrong parameter count, and too many distinct statements.
+    assert_eq!(c.execute_many(&[])?, Vec::<u64>::new());
+    assert!(matches!(
+        c.execute_many(&[(ins.as_str(), &[Value::i32(1)])]),
+        Err(Error::Usage(_))
+    ));
+    let sqls: Vec<String> = (0..300).map(|i| format!("SELECT {i}")).collect();
+    let many: Vec<(&str, &[Value])> = sqls.iter().map(|s| (s.as_str(), &[][..])).collect();
+    assert!(matches!(c.execute_many(&many), Err(Error::Usage(_))));
+    assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1);
+    Ok(())
+}
+
+#[test]
+fn the_pool_shares_rolls_back_and_replaces_connections() -> R {
+    let addr = need_server!();
+    let cfg = Config::from_url(&url(&addr, "karez_scram", Some(SCRAM_PW), "karez", ""))?;
+    let pool = karez_pg::Pool::new(cfg, 2)?;
+    assert_eq!((pool.size(), pool.idle()), (0, 0));
+    // Many threads, two connections.
+    let mut hs = Vec::new();
+    for i in 0..8i64 {
+        let p = pool.clone();
+        hs.push(thread::spawn(move || -> Result<i64, Error> {
+            let mut total = 0;
+            for _ in 0..20 {
+                let mut c = p.get()?;
+                total += one_i64(&mut c, "SELECT $1::int8", &[Value::i64(i)])?;
+                assert!(p.size() <= 2);
+            }
+            Ok(total)
+        }));
+    }
+    let sum: i64 = hs.into_iter().map(|h| h.join().unwrap().unwrap()).sum();
+    assert_eq!(sum, 20 * (0..8).sum::<i64>());
+    assert!(pool.size() <= 2 && pool.idle() == pool.size());
+    // A connection returned inside a transaction is rolled back before reuse.
+    let pid;
+    {
+        let mut c = pool.get()?;
+        pid = c.process_id();
+        c.execute("BEGIN", &[])?;
+        assert_eq!(c.tx_status(), TxStatus::InTransaction);
+    }
+    let c = pool.get()?;
+    assert_eq!(c.tx_status(), TxStatus::Idle);
+    assert!(c.process_id() > 0);
+    let _ = pid;
+    // Exhausted: a bounded wait times out; releasing one lets the next get through.
+    let c2 = pool.get()?;
+    let r = pool.get_timeout(Duration::from_millis(200));
+    assert!(matches!(r, Err(Error::Usage(_))), "{r:?}");
+    drop(c);
+    let c3 = pool.get_timeout(Duration::from_secs(5))?;
+    // A broken connection is discarded, not reused; a discarded one frees its slot.
+    let victim_pid = c3.process_id();
+    let mut killer = connect(&addr)?;
+    assert_eq!(
+        one_i64(
+            &mut killer,
+            "SELECT count(*)::int8 FROM pg_terminate_backend($1::int)",
+            &[Value::i32(victim_pid)]
+        )?,
+        1
+    );
+    drop(c2);
+    let mut c3 = c3;
+    assert!(c3.query("SELECT 1", &[]).is_err());
+    drop(c3);
+    let size_after = pool.size();
+    assert!(size_after <= 1, "{size_after}");
+    let mut fresh = pool.get()?;
+    assert_eq!(one_i64(&mut fresh, "SELECT 5::int8", &[])?, 5);
+    fresh.discard();
+    assert!(pool.size() <= 1);
+    Ok(())
 }

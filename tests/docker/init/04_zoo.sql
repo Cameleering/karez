@@ -71,13 +71,16 @@ CREATE TABLE null_zoo (id int PRIMARY KEY, always_null int4, never_null int4 NOT
 INSERT INTO null_zoo
 SELECT i, NULL, i, CASE WHEN i % 2 = 0 THEN 'v' || i END FROM generate_series(1, 5000) AS i;
 
--- Types karez cannot decode yet; each must produce a clear error that names the type.
+-- n..ip have decoders (rendered to text); mny..ma do not and must produce a clear error that
+-- names the type.
 CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
 CREATE TABLE unsupported_zoo (id int PRIMARY KEY, n numeric, j jsonb, arr int4[], iv interval,
-                              m mood, ip inet);
+                              m mood, ip inet, mny money, pt point, rng int4range,
+                              tsv tsvector, ma mood[]);
 INSERT INTO unsupported_zoo VALUES
   (1, 12345678901234567890.123456789, '{"a": [1, 2, {"b": null}]}', '{1,2,NULL,4}',
-   '1 year 2 mons 3 days 04:05:06.789', 'happy', '192.168.1.0/24');
+   '1 year 2 mons 3 days 04:05:06.789', 'happy', '192.168.1.0/24',
+   '12.34', '(1,2)', '[1,10)', 'a:1 b:2', '{sad,happy}');
 
 -- The healthcheck waits for this table: it exists only after the whole seed has loaded.
 RESET ROLE;

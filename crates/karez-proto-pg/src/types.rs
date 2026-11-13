@@ -6,6 +6,7 @@
 
 use crate::backend::FieldDescription;
 use crate::error::{ProtoError, Result};
+use crate::render;
 use crate::wire::Reader;
 use karez_chunk::{ChunkBuilder, ColumnType, Date, Field, Timestamp};
 use std::ops::Range;
@@ -42,6 +43,38 @@ pub mod oid {
     pub const TIMESTAMPTZ: u32 = 1184;
     /// `uuid`
     pub const UUID: u32 = 2950;
+    /// `"char"`
+    pub const CHAR: u32 = 18;
+    /// `oid`
+    pub const OID: u32 = 26;
+    /// `json`
+    pub const JSON: u32 = 114;
+    /// `xml`
+    pub const XML: u32 = 142;
+    /// `cidr`
+    pub const CIDR: u32 = 650;
+    /// `macaddr8`
+    pub const MACADDR8: u32 = 774;
+    /// `macaddr`
+    pub const MACADDR: u32 = 829;
+    /// `inet`
+    pub const INET: u32 = 869;
+    /// `time`
+    pub const TIME: u32 = 1083;
+    /// `interval`
+    pub const INTERVAL: u32 = 1186;
+    /// `timetz`
+    pub const TIMETZ: u32 = 1266;
+    /// `bit`
+    pub const BIT: u32 = 1560;
+    /// `varbit`
+    pub const VARBIT: u32 = 1562;
+    /// `numeric`
+    pub const NUMERIC: u32 = 1700;
+    /// `jsonb`
+    pub const JSONB: u32 = 3802;
+    /// `void` (a function that returns nothing, such as `pg_sleep`); rendered as an empty string
+    pub const VOID: u32 = 2278;
 }
 
 /// Days from 1970-01-01 to 2000-01-01, PostgreSQL's epoch.
@@ -63,6 +96,12 @@ enum Kind {
     Date,
     Timestamp,
     TimestampTz,
+    /// `oid`, stored as `Int64`.
+    OidI64,
+    /// Binary value rendered to its text form by `render` (numeric, jsonb, interval, ...).
+    Rendered(u32),
+    /// Array of the given element type, rendered as an array literal.
+    Array(u32),
     /// Unsupported type, fetched in text format.
     TextFallback,
 }
@@ -82,7 +121,12 @@ impl Kind {
             oid::DATE => Kind::Date,
             oid::TIMESTAMP => Kind::Timestamp,
             oid::TIMESTAMPTZ => Kind::TimestampTz,
-            _ => Kind::TextFallback,
+            oid::OID => Kind::OidI64,
+            o if render::is_renderable(o) => Kind::Rendered(o),
+            o => match render::array_elem(o) {
+                Some(e) => Kind::Array(e),
+                None => Kind::TextFallback,
+            },
         }
     }
 
@@ -91,10 +135,12 @@ impl Kind {
             Kind::Bool => ColumnType::Bool,
             Kind::I16 => ColumnType::Int16,
             Kind::I32 => ColumnType::Int32,
-            Kind::I64 => ColumnType::Int64,
+            Kind::I64 | Kind::OidI64 => ColumnType::Int64,
             Kind::F32 => ColumnType::Float32,
             Kind::F64 => ColumnType::Float64,
-            Kind::Text | Kind::TextFallback => ColumnType::Utf8,
+            Kind::Text | Kind::TextFallback | Kind::Rendered(_) | Kind::Array(_) => {
+                ColumnType::Utf8
+            }
             Kind::Bytea => ColumnType::Binary,
             Kind::Uuid => ColumnType::Uuid,
             Kind::Date => ColumnType::Date32,
@@ -125,7 +171,29 @@ pub struct ResultPlan {
 impl ResultPlan {
     /// Build a plan from a RowDescription.
     pub fn from_description(desc: &[FieldDescription]) -> Self {
-        let kinds: Vec<Kind> = desc.iter().map(|d| Kind::from_oid(d.type_oid)).collect();
+        Self::from_description_with(desc, &|_| false)
+    }
+
+    /// True if this crate has a codec for the type OID (native or rendered). Other types need
+    /// the caller's help: see [`ResultPlan::from_description_with`].
+    pub fn knows_type(oid: u32) -> bool {
+        Kind::from_oid(oid) != Kind::TextFallback
+    }
+
+    /// Like [`ResultPlan::from_description`], where `is_text_binary(oid)` tells that a type
+    /// unknown here sends its text form as its binary value (enums do). Such columns are read
+    /// in binary format as `Utf8`.
+    pub fn from_description_with(
+        desc: &[FieldDescription],
+        is_text_binary: &dyn Fn(u32) -> bool,
+    ) -> Self {
+        let kinds: Vec<Kind> = desc
+            .iter()
+            .map(|d| match Kind::from_oid(d.type_oid) {
+                Kind::TextFallback if is_text_binary(d.type_oid) => Kind::Text,
+                k => k,
+            })
+            .collect();
         let formats = kinds
             .iter()
             .map(|k| if *k == Kind::TextFallback { 0 } else { 1 })
@@ -216,6 +284,17 @@ impl ResultPlan {
                 Kind::I16 => col.push_i16(i16::from_be_bytes(fixed(v, oid::INT2)?))?,
                 Kind::I32 => col.push_i32(i32::from_be_bytes(fixed(v, oid::INT4)?))?,
                 Kind::I64 => col.push_i64(i64::from_be_bytes(fixed(v, oid::INT8)?))?,
+                Kind::OidI64 => col.push_i64(i64::from(u32::from_be_bytes(fixed(v, oid::OID)?)))?,
+                Kind::Rendered(o) => {
+                    let mut s = String::new();
+                    render::render_scalar(*o, v, &mut s)?;
+                    col.push_utf8(s.as_bytes())?
+                }
+                Kind::Array(e) => {
+                    let mut s = String::new();
+                    render::render_array(*e, v, &mut s)?;
+                    col.push_utf8(s.as_bytes())?
+                }
                 Kind::F32 => col.push_f32(f32::from_be_bytes(fixed(v, oid::FLOAT4)?))?,
                 Kind::F64 => col.push_f64(f64::from_be_bytes(fixed(v, oid::FLOAT8)?))?,
                 Kind::Text | Kind::TextFallback => col.push_utf8(v)?,
@@ -442,9 +521,11 @@ mod tests {
         let p = ResultPlan::from_description(&desc(&[
             oid::INT4,
             oid::TEXT,
-            1700, // numeric: no codec, text fallback
+            790, // money: no codec, text fallback
+            oid::NUMERIC,
         ]));
-        assert_eq!(p.result_formats(), &[1, 1, 0]);
+        assert_eq!(p.result_formats(), &[1, 1, 0, 1]);
+        assert_eq!(p.first_text_fallback(), Some((2, 790)));
         assert_eq!(p.fields()[0].ty, ColumnType::Int32);
         assert_eq!(p.fields()[2].ty, ColumnType::Utf8);
         assert_eq!(p.fields()[1].name, "c1");
@@ -466,7 +547,7 @@ mod tests {
             oid::DATE,
             oid::TIMESTAMP,
             oid::TIMESTAMPTZ,
-            1700,
+            790, // money: text fallback
         ];
         let plan = ResultPlan::from_description(&desc(&oids));
         let mut b = ChunkBuilder::new(plan.fields().to_vec());

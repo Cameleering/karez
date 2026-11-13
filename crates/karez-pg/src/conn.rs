@@ -12,9 +12,22 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 
 const READ_BUF: usize = 64 * 1024;
 const MAX_NOTICES: usize = 64;
+const MAX_NOTIFICATIONS: usize = 4096;
+
+/// A `NOTIFY` received on a channel this session listens to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    /// Process id of the notifying backend.
+    pub process_id: i32,
+    /// Channel name.
+    pub channel: String,
+    /// Payload (empty if none was given).
+    pub payload: String,
+}
 
 fn unexpected(what: &BackendMessage<'_>) -> Error {
     let _ = what;
@@ -26,6 +39,8 @@ fn unexpected(what: &BackendMessage<'_>) -> Error {
 struct Side {
     params: HashMap<String, String>,
     notices: VecDeque<ErrorFields>,
+    notifications: VecDeque<Notification>,
+    dropped_notifications: u64,
 }
 
 impl Side {
@@ -39,6 +54,21 @@ impl Side {
                     self.notices.pop_front();
                 }
                 self.notices.push_back(n);
+            }
+            BackendMessage::NotificationResponse {
+                process_id,
+                channel,
+                payload,
+            } => {
+                if self.notifications.len() == MAX_NOTIFICATIONS {
+                    self.notifications.pop_front();
+                    self.dropped_notifications += 1;
+                }
+                self.notifications.push_back(Notification {
+                    process_id,
+                    channel,
+                    payload,
+                });
             }
             _ => {}
         }
@@ -151,6 +181,12 @@ pub struct Connection {
     closed: bool,
     process_id: i32,
     unsupported: UnsupportedTypes,
+    secret: Vec<u8>,
+    host: String,
+    port: u16,
+    connect_timeout: Option<Duration>,
+    /// Type OIDs looked up in `pg_type`: true for enums (binary value is the label text).
+    enum_types: HashMap<u32, bool>,
 }
 
 impl std::fmt::Debug for Connection {
@@ -165,10 +201,14 @@ impl std::fmt::Debug for Connection {
 }
 
 fn tcp_connect(cfg: &Config) -> Result<TcpStream> {
-    let addrs = (cfg.host.as_str(), cfg.port).to_socket_addrs()?;
+    tcp_connect_to(&cfg.host, cfg.port, cfg.connect_timeout)
+}
+
+fn tcp_connect_to(host: &str, port: u16, timeout: Option<Duration>) -> Result<TcpStream> {
+    let addrs = (host, port).to_socket_addrs()?;
     let mut last = None;
     for a in addrs {
-        let r = match cfg.connect_timeout {
+        let r = match timeout {
             Some(t) => TcpStream::connect_timeout(&a, t),
             None => TcpStream::connect(a),
         };
@@ -179,7 +219,7 @@ fn tcp_connect(cfg: &Config) -> Result<TcpStream> {
     }
     Err(last
         .map(Error::Io)
-        .unwrap_or_else(|| Error::Config(format!("host {:?} resolved to no address", cfg.host))))
+        .unwrap_or_else(|| Error::Config(format!("host {host:?} resolved to no address"))))
 }
 
 /// Parse the affected-row count from a command tag such as `INSERT 0 5` or `UPDATE 3`.
@@ -223,6 +263,53 @@ fn builtin_type_name(oid: u32) -> Option<&'static str> {
         3802 => "jsonb",
         _ => return None,
     })
+}
+
+/// What is needed to cancel the statement a connection is running, from any thread.
+///
+/// Get one with [`Connection::cancel_token`]. Cancelling opens a second connection, sends a
+/// CancelRequest and waits for the server to close it, which it does after delivering the
+/// signal. The cancelled statement fails with SQLSTATE 57014; the connection stays usable. A
+/// cancel sent when the connection is idle does nothing, but one that arrives while the
+/// connection already runs a later statement cancels that one, so cancel only what you mean to.
+#[derive(Clone)]
+pub struct CancelToken {
+    host: String,
+    port: u16,
+    pid: i32,
+    secret: Vec<u8>,
+    timeout: Option<Duration>,
+}
+
+impl std::fmt::Debug for CancelToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CancelToken")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("pid", &self.pid)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CancelToken {
+    /// Ask the server to cancel the connection's current statement.
+    pub fn cancel(&self) -> Result<()> {
+        let mut s = tcp_connect_to(&self.host, self.port, self.timeout)?;
+        s.set_nodelay(true)?;
+        let mut buf = Vec::with_capacity(16 + self.secret.len());
+        frontend::cancel_request(&mut buf, self.pid, &self.secret)?;
+        s.write_all(&buf)?;
+        s.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let mut sink = [0u8; 16];
+        loop {
+            match s.read(&mut sink) {
+                Ok(0) => return Ok(()),
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
 }
 
 /// Quote an identifier for use in SQL the library builds itself (savepoint names).
@@ -272,6 +359,11 @@ impl Connection {
             closed: false,
             process_id: 0,
             unsupported: cfg.unsupported_types,
+            secret: Vec::new(),
+            host: cfg.host.clone(),
+            port: cfg.port,
+            connect_timeout: cfg.connect_timeout,
+            enum_types: HashMap::new(),
         };
         conn.startup(cfg)?;
         Ok(conn)
@@ -286,7 +378,7 @@ impl Connection {
             SaslContinue(Vec<u8>),
             SaslFinal(Vec<u8>),
             Failed(Box<ErrorFields>),
-            Key(i32),
+            Key(i32, Vec<u8>),
             Ready(TxStatus),
             Skip,
         }
@@ -314,7 +406,9 @@ impl Connection {
                 BackendMessage::AuthenticationSaslContinue(d) => Step::SaslContinue(d.to_vec()),
                 BackendMessage::AuthenticationSaslFinal(d) => Step::SaslFinal(d.to_vec()),
                 BackendMessage::ErrorResponse(f) => Step::Failed(Box::new(f)),
-                BackendMessage::BackendKeyData { process_id, .. } => Step::Key(process_id),
+                BackendMessage::BackendKeyData { process_id, secret } => {
+                    Step::Key(process_id, secret)
+                }
                 BackendMessage::ReadyForQuery(s) => Step::Ready(s),
                 BackendMessage::NegotiateProtocolVersion { .. } => Step::Skip,
                 other => return Err(unexpected(&other)),
@@ -403,7 +497,10 @@ impl Connection {
                     verified = true;
                 }
                 Step::Failed(f) => return Err(Error::Server(ServerError::new(*f))),
-                Step::Key(pid) => self.process_id = pid,
+                Step::Key(pid, secret) => {
+                    self.process_id = pid;
+                    self.secret = secret;
+                }
                 Step::Ready(s) => {
                     self.tx_status = s;
                     return Ok(());
@@ -411,6 +508,340 @@ impl Connection {
                 Step::Skip => {}
             }
         }
+    }
+
+    /// A token that cancels this connection's running statement from another thread.
+    pub fn cancel_token(&self) -> CancelToken {
+        CancelToken {
+            host: self.host.clone(),
+            port: self.port,
+            pid: self.process_id,
+            secret: self.secret.clone(),
+            timeout: self.connect_timeout,
+        }
+    }
+
+    /// Notifications received so far (from `LISTEN`ed channels), oldest first; empties the queue.
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        self.side.notifications.drain(..).collect()
+    }
+
+    /// Number of notifications dropped because more than 4,096 were queued unread.
+    pub fn dropped_notifications(&self) -> u64 {
+        self.side.dropped_notifications
+    }
+
+    /// Wait for the next notification. `None` waits indefinitely; `Some(d)` returns `Ok(None)`
+    /// after `d` with nothing received. Use it on an idle connection after `LISTEN`.
+    pub fn wait_for_notification(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Notification>> {
+        self.check_usable()?;
+        if let Some(n) = self.side.notifications.pop_front() {
+            return Ok(Some(n));
+        }
+        if timeout == Some(Duration::ZERO) {
+            return Ok(None);
+        }
+        let old = self.io.stream.read_timeout()?;
+        self.io.stream.set_read_timeout(timeout)?;
+        let r = self.wait_inner();
+        let _ = self.io.stream.set_read_timeout(old);
+        self.track(r)
+    }
+
+    fn wait_inner(&mut self) -> Result<Option<Notification>> {
+        loop {
+            while self.io.reader.frame_ready()? {
+                let (tag, span) = self
+                    .io
+                    .reader
+                    .next_span()?
+                    .ok_or(Error::Usage("internal: frame vanished"))?;
+                let msg = BackendMessage::parse(Frame {
+                    tag,
+                    body: self.io.reader.span(span),
+                })?;
+                match msg {
+                    BackendMessage::ErrorResponse(f) => {
+                        self.broken = true;
+                        return Err(Error::Server(ServerError::new(f)));
+                    }
+                    BackendMessage::NotificationResponse { .. } => {
+                        self.side.absorb(msg);
+                        return Ok(self.side.notifications.pop_front());
+                    }
+                    BackendMessage::ParameterStatus { .. } | BackendMessage::NoticeResponse(_) => {
+                        self.side.absorb(msg)
+                    }
+                    other => return Err(unexpected(&other)),
+                }
+            }
+            match self.io.stream.read(&mut self.io.buf) {
+                Ok(0) => return Err(Error::Closed),
+                Ok(n) => self.io.reader.push(&self.io.buf[..n]),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(None)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Run a `COPY ... FROM STDIN` statement, sending everything `data` yields. Returns the
+    /// number of rows copied. `sql` is sent as written (COPY takes no bound parameters): build it
+    /// only from trusted text. The data itself is never part of the SQL.
+    pub fn copy_in(&mut self, sql: &str, data: &mut dyn Read) -> Result<u64> {
+        self.check_usable()?;
+        let r = self.copy_in_inner(sql, data);
+        self.track(r)
+    }
+
+    fn copy_in_inner(&mut self, sql: &str, data: &mut dyn Read) -> Result<u64> {
+        self.out.clear();
+        frontend::query(&mut self.out, sql)?;
+        self.io.send(&self.out)?;
+        let mut err = None;
+        loop {
+            match self.io.next_msg(&mut self.side)? {
+                BackendMessage::CopyInResponse { .. } => break,
+                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::CopyOutResponse { .. } => {
+                    // Wrong direction: stop the stream the server is about to send.
+                    self.drain_to_ready()?;
+                    return Err(Error::Usage(
+                        "the statement is COPY TO, not COPY FROM STDIN",
+                    ));
+                }
+                BackendMessage::ReadyForQuery(s) => {
+                    self.tx_status = s;
+                    return Err(match err.take() {
+                        Some(f) => Error::Server(ServerError::new(f)),
+                        None => Error::Usage("the statement is not COPY ... FROM STDIN"),
+                    });
+                }
+                BackendMessage::CommandComplete(_)
+                | BackendMessage::EmptyQueryResponse
+                | BackendMessage::RowDescription(_)
+                | BackendMessage::DataRow(_) => {}
+                other => return Err(unexpected(&other)),
+            }
+        }
+        let mut buf = vec![0u8; READ_BUF];
+        let mut io_err = None;
+        loop {
+            match data.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    self.out.clear();
+                    frontend::copy_data(&mut self.out, &buf[..n])?;
+                    self.io.send(&self.out)?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    io_err = Some(e);
+                    break;
+                }
+            }
+        }
+        self.out.clear();
+        match &io_err {
+            Some(e) => frontend::copy_fail(&mut self.out, &format!("client read error: {e}"))?,
+            None => frontend::copy_done(&mut self.out),
+        }
+        self.io.send(&self.out)?;
+        let mut rows = 0;
+        loop {
+            match self.io.next_msg(&mut self.side)? {
+                BackendMessage::CommandComplete(tag) => rows = rows_from_tag(&tag),
+                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::ReadyForQuery(s) => {
+                    self.tx_status = s;
+                    break;
+                }
+                other => return Err(unexpected(&other)),
+            }
+        }
+        if let Some(e) = io_err {
+            return Err(Error::Caller(e));
+        }
+        match err {
+            Some(f) => Err(Error::Server(ServerError::new(f))),
+            None => Ok(rows),
+        }
+    }
+
+    /// Run a `COPY ... TO STDOUT` statement, writing the stream to `out`. Returns the number of
+    /// rows copied. See [`Connection::copy_in`] for the rule about `sql`.
+    pub fn copy_out(&mut self, sql: &str, out: &mut dyn Write) -> Result<u64> {
+        self.check_usable()?;
+        let r = self.copy_out_inner(sql, out);
+        self.track(r)
+    }
+
+    fn copy_out_inner(&mut self, sql: &str, out: &mut dyn Write) -> Result<u64> {
+        self.out.clear();
+        frontend::query(&mut self.out, sql)?;
+        self.io.send(&self.out)?;
+        let mut err = None;
+        loop {
+            match self.io.next_msg(&mut self.side)? {
+                BackendMessage::CopyOutResponse { .. } => break,
+                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::CopyInResponse { .. } => {
+                    self.out.clear();
+                    frontend::copy_fail(&mut self.out, "not a COPY TO statement")?;
+                    self.io.send(&self.out)?;
+                    self.drain_to_ready()?;
+                    return Err(Error::Usage(
+                        "the statement is COPY FROM STDIN, not COPY TO",
+                    ));
+                }
+                BackendMessage::ReadyForQuery(s) => {
+                    self.tx_status = s;
+                    return Err(match err.take() {
+                        Some(f) => Error::Server(ServerError::new(f)),
+                        None => Error::Usage("the statement is not COPY ... TO STDOUT"),
+                    });
+                }
+                BackendMessage::CommandComplete(_)
+                | BackendMessage::EmptyQueryResponse
+                | BackendMessage::RowDescription(_)
+                | BackendMessage::DataRow(_) => {}
+                other => return Err(unexpected(&other)),
+            }
+        }
+        let mut rows = 0;
+        let mut io_err = None;
+        loop {
+            match self.io.next_msg(&mut self.side)? {
+                BackendMessage::CopyData(d) => {
+                    if io_err.is_none() {
+                        if let Err(e) = out.write_all(d) {
+                            io_err = Some(e);
+                        }
+                    }
+                }
+                BackendMessage::CopyDone => {}
+                BackendMessage::CommandComplete(tag) => rows = rows_from_tag(&tag),
+                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::ReadyForQuery(s) => {
+                    self.tx_status = s;
+                    break;
+                }
+                other => return Err(unexpected(&other)),
+            }
+        }
+        if let Some(e) = io_err {
+            return Err(Error::Caller(e));
+        }
+        match err {
+            Some(f) => Err(Error::Server(ServerError::new(f))),
+            None => Ok(rows),
+        }
+    }
+
+    /// Run many statements with one network round trip: every Bind and Execute goes out in a
+    /// single write followed by one Sync, then the results are read. Returns the rows affected by
+    /// each statement, in order.
+    ///
+    /// One Sync means one implicit transaction: if any statement fails, none of them takes
+    /// effect (inside an explicit transaction the transaction is aborted instead) and the
+    /// server's error is returned. All statements must fit the statement cache together.
+    /// Rows a statement returns are discarded; use [`Connection::query`] to read them.
+    pub fn execute_many(&mut self, items: &[(&str, &[Value<'_>])]) -> Result<Vec<u64>> {
+        self.check_usable()?;
+        let r = self.execute_many_inner(items);
+        self.track(r)
+    }
+
+    fn execute_many_inner(&mut self, items: &[(&str, &[Value<'_>])]) -> Result<Vec<u64>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut distinct: Vec<(&str, Vec<u32>)> = Vec::new();
+        for (sql, params) in items {
+            let oids: Vec<u32> = params.iter().map(Value::oid).collect();
+            if !distinct.iter().any(|(s, o)| s == sql && *o == oids) {
+                distinct.push((sql, oids));
+            }
+        }
+        if distinct.len() > self.cache_cap {
+            return Err(Error::Usage(
+                "the batch uses more distinct statements than the statement cache holds",
+            ));
+        }
+        let mut stmts = Vec::with_capacity(items.len());
+        for (sql, params) in items {
+            let oids: Vec<u32> = params.iter().map(Value::oid).collect();
+            let stmt = match self.cached(sql, &oids) {
+                Some(s) => s,
+                None => self.prepare_new(sql, &oids, true)?,
+            };
+            Self::check_params(&stmt, params)?;
+            stmts.push(stmt);
+        }
+        self.out.clear();
+        for ((_, params), stmt) in items.iter().zip(&stmts) {
+            self.scratch.clear();
+            let mut ranges = Vec::with_capacity(params.len());
+            for p in params.iter() {
+                ranges.push(p.encode_into(&mut self.scratch)?);
+            }
+            let slices: Vec<Option<&[u8]>> = ranges
+                .iter()
+                .map(|r| r.clone().map(|r| &self.scratch[r]))
+                .collect();
+            let formats: Vec<i16> = params.iter().map(Value::format).collect();
+            frontend::bind(
+                &mut self.out,
+                "",
+                &stmt.inner.name,
+                &formats,
+                &slices,
+                stmt.inner.plan.result_formats(),
+            )?;
+            frontend::execute(&mut self.out, "", 0)?;
+        }
+        frontend::sync(&mut self.out);
+        self.io.send(&self.out)?;
+        let mut counts = Vec::with_capacity(items.len());
+        let mut err = None;
+        loop {
+            let m = match self.io.next_msg(&mut self.side) {
+                Ok(m) => m,
+                Err(e) => return Err(self.server_error_or(err.take(), e)),
+            };
+            match m {
+                BackendMessage::BindComplete
+                | BackendMessage::DataRow(_)
+                | BackendMessage::PortalSuspended => {}
+                BackendMessage::CommandComplete(tag) => counts.push(rows_from_tag(&tag)),
+                BackendMessage::EmptyQueryResponse => counts.push(0),
+                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::ReadyForQuery(s) => {
+                    self.tx_status = s;
+                    break;
+                }
+                other => return Err(unexpected(&other)),
+            }
+        }
+        if let Some(f) = err {
+            return Err(Error::Server(ServerError::new(f)));
+        }
+        if counts.len() != items.len() {
+            return Err(Error::Proto(ProtoError::InvalidValue(
+                "batch result count differs from statement count",
+            )));
+        }
+        Ok(counts)
     }
 
     /// Backend process id of this session.
@@ -515,6 +946,28 @@ impl Connection {
         }
     }
 
+    /// Look up, once per connection, which result types unknown to the codec are enums.
+    fn resolve_enums(&mut self, desc: &[karez_proto_pg::backend::FieldDescription]) -> Result<()> {
+        for d in desc {
+            let o = d.type_oid;
+            if ResultPlan::knows_type(o) || self.enum_types.contains_key(&o) {
+                continue;
+            }
+            let text = o.to_string();
+            let mut cur = self.query(
+                "SELECT typtype::text FROM pg_type WHERE oid = $1::oid",
+                &[Value::Unknown(&text)],
+            )?;
+            let is_enum = match cur.next()? {
+                Some(r) => r.get::<&str>(0)? == "e",
+                None => false,
+            };
+            cur.close()?;
+            self.enum_types.insert(o, is_enum);
+        }
+        Ok(())
+    }
+
     fn prepare_new(&mut self, sql: &str, oids: &[u32], cache: bool) -> Result<Statement> {
         let name = format!("karez_s{}", self.next_stmt);
         self.next_stmt += 1;
@@ -523,7 +976,9 @@ impl Connection {
         frontend::describe_statement(&mut self.out, &name)?;
         frontend::sync(&mut self.out);
         self.io.send(&self.out)?;
-        let mut plan = None;
+        let mut desc = None;
+        let mut described_params = None;
+        let mut no_data = false;
         let mut err = None;
         loop {
             let m = match self.io.next_msg(&mut self.side) {
@@ -531,9 +986,10 @@ impl Connection {
                 Err(e) => return Err(self.server_error_or(err.take(), e)),
             };
             match m {
-                BackendMessage::ParseComplete | BackendMessage::ParameterDescription(_) => {}
-                BackendMessage::RowDescription(d) => plan = Some(ResultPlan::from_description(&d)),
-                BackendMessage::NoData => plan = Some(ResultPlan::empty()),
+                BackendMessage::ParseComplete => {}
+                BackendMessage::ParameterDescription(p) => described_params = Some(p),
+                BackendMessage::RowDescription(d) => desc = Some(d),
+                BackendMessage::NoData => no_data = true,
                 BackendMessage::ErrorResponse(f) => err = Some(f),
                 BackendMessage::ReadyForQuery(s) => {
                     self.tx_status = s;
@@ -545,11 +1001,21 @@ impl Connection {
         if let Some(f) = err {
             return Err(Error::Server(ServerError::new(f)));
         }
-        let plan = plan.ok_or(Error::Proto(ProtoError::InvalidValue("no row description")))?;
+        let plan = match desc {
+            Some(d) => {
+                self.resolve_enums(&d)?;
+                let enums = &self.enum_types;
+                ResultPlan::from_description_with(&d, &|o| enums.get(&o).copied().unwrap_or(false))
+            }
+            None if no_data => ResultPlan::empty(),
+            None => return Err(Error::Proto(ProtoError::InvalidValue("no row description"))),
+        };
         let stmt = Statement {
             inner: Arc::new(StmtInner {
                 name,
-                param_oids: oids.to_vec(),
+                // The server's own resolution of every parameter type, falling back to what
+                // was declared if it did not describe them.
+                param_oids: described_params.unwrap_or_else(|| oids.to_vec()),
                 plan,
             }),
         };

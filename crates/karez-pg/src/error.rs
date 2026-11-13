@@ -68,6 +68,9 @@ pub enum Error {
     /// A value in the result cannot be represented by this version (for example a date past
     /// the Unix-epoch range). The connection stays usable.
     Value(String),
+    /// Reading the COPY source or writing the COPY sink supplied by the caller failed. The COPY
+    /// was aborted cleanly and the connection stays usable.
+    Caller(std::io::Error),
     /// The server closed the connection.
     Closed,
     /// An earlier fatal error left the connection unusable.
@@ -113,6 +116,7 @@ impl fmt::Display for Error {
                  cast it in SQL (for example ::text) or set unsupported_types=text"
             ),
             Error::Value(m) => write!(f, "value cannot be represented: {m}"),
+            Error::Caller(e) => write!(f, "COPY source or sink failed: {e}"),
             Error::Closed => write!(f, "connection closed by the server"),
             Error::Broken => write!(f, "connection is broken by an earlier error"),
             Error::Usage(m) => write!(f, "{m}"),
@@ -123,7 +127,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Io(e) => Some(e),
+            Error::Io(e) | Error::Caller(e) => Some(e),
             Error::Proto(e) => Some(e),
             Error::Chunk(e) => Some(e),
             _ => None,

@@ -17,7 +17,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 | Name and identity | decided 2026-11-09: **karez**, in the Cameleer family; Apache-2.0; a fresh repository with no rdbc history |
 | Brand | K mark, icon set generator and assets are built; the logo and social preview are Gemini drafts that need small fixes ([brand/gemini-prompts.md](brand/gemini-prompts.md)) |
 | Repo metadata | About line and 20 topics set; README, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, `context7.json`, `CITATION.cff` and community files written |
-| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez` (zero dependencies, no `unsafe`); 65 tests that run without a server and 33 that need one; no TLS, no async, no pool, no benchmarks |
+| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 69 tests that run without a server and 39 that need one; blocking only, with a pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches; no TLS, no async, no benchmarks |
 
 ## Decisions already made
 
@@ -46,6 +46,9 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - [ ] Upload the social preview in the repository settings (GitHub has no API for it).
 - [x] Workspace with `karez-chunk`, `karez-proto-pg`, `karez-pg` and `karez`, and a PostgreSQL
       integration fixture in `tests/docker/` (done on the spike branch; PostgreSQL 16.15 only).
+- [x] Blocking pool, `COPY` in and out, `LISTEN`/`NOTIFY`, cancel, write batches, and decoders for
+      `numeric`, `json`, `jsonb`, `interval`, `time`, `inet`, enums, arrays and more (rendered to
+      text); MSRV 1.85 tested (PostgreSQL 16.15 only).
 - [ ] Run the same suite on PostgreSQL 14 and 17 (needs `postgres:14` and `postgres:17` images; not run).
 - [ ] Add TLS (`sslmode=verify-full` by default per plan section 1.2); until then the client refuses
       anything but `sslmode=disable`.

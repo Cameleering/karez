@@ -59,6 +59,14 @@ pub fn generate_nonce() -> String {
     use std::hash::{BuildHasher, Hasher};
     use std::time::{SystemTime, UNIX_EPOCH};
     let mut raw = [0u8; 18];
+    // The operating system's generator where a device file exists (Unix); otherwise the
+    // OS-seeded `RandomState` below, which std seeds from the OS on every platform.
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        if f.read_exact(&mut raw).is_ok() {
+            return base64::encode(&raw);
+        }
+    }
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)

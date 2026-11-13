@@ -11,8 +11,8 @@ for the current state and next steps. The agent-facing rules are in [AGENTS.md](
 karez is a planned Rust database connectivity library: one API and native drivers for
 PostgreSQL, MySQL/MariaDB, SQL Server and SQLite, with JDBC, ODBC and ADBC parity and exports,
 and Arrow-native results. It belongs to the Cameleer family (a desert and camel naming theme),
-next to Cameleer (integration engine) and simoom (HTTP engine). It is in the design stage:
-research and plan are done, there is no library code yet.
+next to Cameleer (integration engine) and simoom (HTTP engine). It is in the design stage with a first working slice:
+research and plan are done, and a blocking PostgreSQL client (no TLS, verified on PostgreSQL 16.15 only) exists on the branch `claude/m0-spike-1bacb7`.
 
 The goal given by the owner: a complete, ground-up rewrite that is significantly faster than
 native JDBC and every Rust alternative where the evidence supports it, smaller in binary size, and

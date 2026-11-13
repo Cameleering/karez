@@ -226,6 +226,34 @@ pub fn terminate(buf: &mut Vec<u8>) {
     bare(buf, b'X');
 }
 
+/// CopyData: a piece of the COPY stream sent to the server.
+pub fn copy_data(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
+    message(buf, Some(b'd'), |b| {
+        b.extend_from_slice(data);
+        Ok(())
+    })
+}
+
+/// CopyDone: the COPY stream is complete.
+pub fn copy_done(buf: &mut Vec<u8>) {
+    bare(buf, b'c');
+}
+
+/// CopyFail: abort the COPY with a message.
+pub fn copy_fail(buf: &mut Vec<u8>, message_text: &str) -> Result<()> {
+    message(buf, Some(b'f'), |b| cstr(b, message_text.as_bytes()))
+}
+
+/// CancelRequest, sent on a fresh connection in place of a startup message.
+pub fn cancel_request(buf: &mut Vec<u8>, process_id: i32, secret: &[u8]) -> Result<()> {
+    message(buf, None, |b| {
+        b.extend_from_slice(&80_877_102i32.to_be_bytes());
+        b.extend_from_slice(&process_id.to_be_bytes());
+        b.extend_from_slice(secret);
+        Ok(())
+    })
+}
+
 /// Simple Query. Use only for fixed statements the library itself builds (`BEGIN`, `COMMIT`,
 /// `SAVEPOINT "x"`); user data always goes through [`parse`] and [`bind`].
 pub fn query(buf: &mut Vec<u8>, sql: &str) -> Result<()> {

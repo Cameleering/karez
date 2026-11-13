@@ -267,8 +267,26 @@ pub enum BackendMessage<'a> {
         /// Options the server did not recognise.
         unrecognized: Vec<String>,
     },
-    /// A COPY message (`G`, `H`, `W`, `d`, `c`); COPY is not implemented in this version.
-    Copy(u8),
+    /// CopyInResponse (`G`): the server is ready to receive COPY data.
+    CopyInResponse {
+        /// True when the overall format is binary.
+        binary: bool,
+        /// Number of columns.
+        columns: u16,
+    },
+    /// CopyOutResponse (`H`): COPY data follows.
+    CopyOutResponse {
+        /// True when the overall format is binary.
+        binary: bool,
+        /// Number of columns.
+        columns: u16,
+    },
+    /// CopyBothResponse (`W`): streaming replication only; not supported.
+    CopyBothResponse,
+    /// CopyData (`d`): a piece of the COPY stream.
+    CopyData(&'a [u8]),
+    /// CopyDone (`c`): the COPY stream ended.
+    CopyDone,
 }
 
 fn auth_message<'a>(body: &'a [u8]) -> Result<BackendMessage<'a>> {
@@ -418,7 +436,27 @@ impl<'a> BackendMessage<'a> {
                     unrecognized,
                 }
             }
-            t @ (b'G' | b'H' | b'W' | b'd' | b'c') => BackendMessage::Copy(t),
+            t @ (b'G' | b'H') => {
+                let mut r = Reader::new(body, "CopyResponse");
+                let fmt = r.u8()?;
+                let columns = r.u16()?;
+                r.take(usize::from(columns) * 2)?;
+                r.finish()?;
+                if t == b'G' {
+                    BackendMessage::CopyInResponse {
+                        binary: fmt != 0,
+                        columns,
+                    }
+                } else {
+                    BackendMessage::CopyOutResponse {
+                        binary: fmt != 0,
+                        columns,
+                    }
+                }
+            }
+            b'W' => BackendMessage::CopyBothResponse,
+            b'd' => BackendMessage::CopyData(body),
+            b'c' => BackendMessage::CopyDone,
             other => return Err(ProtoError::UnknownMessage(other)),
         })
     }
@@ -555,7 +593,16 @@ mod tests {
             }
         );
         assert!(parse(b'K', &[0, 0, 0, 9, 1]).is_err());
-        assert_eq!(parse(b'd', b"zz").unwrap(), BackendMessage::Copy(b'd'));
+        assert_eq!(parse(b'd', b"zz").unwrap(), BackendMessage::CopyData(b"zz"));
+        assert_eq!(parse(b'c', b"").unwrap(), BackendMessage::CopyDone);
+        assert_eq!(
+            parse(b'G', &[1, 0, 2, 0, 1, 0, 1]).unwrap(),
+            BackendMessage::CopyInResponse {
+                binary: true,
+                columns: 2
+            }
+        );
+        assert!(parse(b'H', &[0, 0, 2, 0, 1]).is_err());
         assert_eq!(parse(b'?', b""), Err(ProtoError::UnknownMessage(b'?')));
         assert_eq!(
             parse(b't', &[0, 2, 0, 0, 0, 23, 0, 0, 0, 25]).unwrap(),

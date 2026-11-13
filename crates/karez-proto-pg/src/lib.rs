@@ -22,6 +22,7 @@ pub mod base64;
 pub mod error;
 pub mod frame;
 pub mod frontend;
+mod render;
 pub mod scram;
 pub mod sha256;
 pub mod types;

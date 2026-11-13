@@ -10,17 +10,24 @@ performance claims** in this note. Speed is measured later with the method in
 ## What was built
 
 Four crates, zero dependencies (not even dev-dependencies), `#![forbid(unsafe_code)]` in each,
-edition 2021, MSRV 1.85 declared (built here with rustc 1.99.1; the MSRV was not tested).
+edition 2021, MSRV 1.85 declared and tested (rustc 1.85.1 builds everything and passes the full suite against the server; the main runs used rustc 1.99.1).
 
 | crate | contents |
 |---|---|
 | `karez-chunk` | Arrow-layout columns (validity bitmap, fixed-width little-endian data or `i32` offsets plus bytes, bit-packed bool); `ChunkBuilder` reused between chunks (`reset` keeps capacity, `abort_row` rolls back a partial row); checked typed readers (`get::<T>` and `get::<Option<T>>`); `RowRef` row view; in-repo SplitMix64 PRNG for tests |
-| `karez-proto-pg` | sans-io: `FrameReader` (incremental framing, default message limit 64 MiB), frontend encoders (startup, password, SASL, Parse, Bind, Describe, Close, Execute, Sync, Flush, Terminate, Query), backend parsers (authentication, ParameterStatus, BackendKeyData, ReadyForQuery, Error/NoticeResponse with SQLSTATE fields, row description, DataRow, CommandComplete, NotificationResponse, NegotiateProtocolVersion), `ResultPlan` decoding binary rows into a chunk, `Value` parameter encoding, SHA-256, HMAC-SHA-256, PBKDF2, base64 and a SCRAM-SHA-256 client (no channel binding), all in-repo |
-| `karez-pg` | `Config` and URL parsing, blocking `Connection` (`TCP_NODELAY`, one write per request), authentication allow-list (default SCRAM only), prepare with an LRU statement cache keyed by SQL and parameter types, `query` / `execute` with server-side binding only, streaming `Cursor` (`next` row view, `next_chunk`), `Transaction` guard with isolation levels and savepoints, `ServerError` with SQLSTATE |
+| `karez-proto-pg` | sans-io: `FrameReader` (incremental framing, default message limit 64 MiB), frontend encoders (startup, password, SASL, Parse, Bind, Describe, Close, Execute, Sync, Flush, Terminate, Query, CopyData, CopyDone, CopyFail, CancelRequest), backend parsers (authentication, ParameterStatus, BackendKeyData, ReadyForQuery, Error/NoticeResponse with SQLSTATE fields, row description, DataRow, CommandComplete, NotificationResponse, NegotiateProtocolVersion, the COPY messages), `ResultPlan` decoding binary rows into a chunk (with a renderer that turns `numeric`, `jsonb`, `interval`, `inet`, arrays and others into their exact text form), `Value` parameter encoding, SHA-256, HMAC-SHA-256, PBKDF2, base64 and a SCRAM-SHA-256 client (no channel binding), all in-repo |
+| `karez-pg` | `Config` and URL parsing, blocking `Connection` (`TCP_NODELAY`, one write per request), authentication allow-list (default SCRAM only), prepare with an LRU statement cache keyed by SQL and parameter types, `query` / `execute` with server-side binding only, streaming `Cursor` (`next` row view, `next_chunk`), `Transaction` guard with isolation levels and savepoints, `ServerError` with SQLSTATE, `CancelToken` (cancel the running statement from another thread), `LISTEN`/`NOTIFY` (`wait_for_notification`, `take_notifications`), `copy_in` / `copy_out`, `execute_many` (a batch in one round trip), and a blocking `Pool` |
 | `karez` | re-exports; one doc example; `examples/orders.rs` |
 
-Decoded types: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`,
-`name`, `bytea`, `uuid`, `date`, `timestamp`, `timestamptz`, and NULL.
+Native column types: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`,
+`name`, `bytea`, `uuid`, `date`, `timestamp`, `timestamptz`, `oid` (as `Int64`), and NULL.
+
+Read in binary and **rendered to a `Utf8` column in the server's text form**: `numeric` (every digit, `NaN`, `Infinity`),
+`json`, `jsonb`, `xml`, `"char"`, `interval` (ISO 8601 form, for example `P1Y2M3DT4H5M6.789S`), `time`,
+`timetz`, `inet`, `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`, `void`, enums (found with one `pg_type` lookup per
+type and connection), and arrays of those and of the native types, in any dimension, as `{a,b,NULL}` literals.
+This is not an Arrow decimal, interval or list type: a reader that wants those parses the string. Floating-point array
+elements use Rust's shortest round-trip form, which can differ from the server's text (`1e+20`).
 
 ## Tests
 
@@ -29,10 +36,10 @@ Counts from the final run (below). "Needs a server" means the test skips loudly 
 | crate | tests | needs a server |
 |---|---|---|
 | `karez-chunk` | 16 unit (randomised round trips with the in-repo PRNG, rollback of partial rows, corrupt-buffer detection) | no |
-| `karez-proto-pg` | 33 unit, 4 integration in `tests/split_decoding.rs` | no |
-| `karez-pg` | 4 unit (URL parsing), 7 in `tests/mock_server.rs` (scripted in-process server), 33 in `tests/pg_integration.rs` | the 33 yes |
+| `karez-proto-pg` | 37 unit, 4 integration in `tests/split_decoding.rs` | no |
+| `karez-pg` | 4 unit (URL parsing), 7 in `tests/mock_server.rs` (scripted in-process server), 39 in `tests/pg_integration.rs` | the 39 yes |
 | `karez` | 1 doc test (compiled, not run: `no_run`) | no |
-| total | 98 | 33 |
+| total | 108 | 39 |
 
 What the test families check:
 
@@ -41,6 +48,12 @@ What the test families check:
 - **Limits:** a message over the size limit is rejected as soon as its header arrives; lengths and counts are checked; a NUL in an outgoing string is refused.
 - **Real server, PostgreSQL 16.15:** every supported type including NULL and extremes (integer limits; `float4`/`float8` NaN, infinities, negative zero, smallest subnormals, largest finite; empty, 1 MiB, multi-byte, emoji, quote/backslash/newline text; dates from 4713 BC to 5874897; timestamps including the minimum, `infinity`, `-infinity` and a daylight-saving change; `bytea` from 0 bytes to 5 MiB; uuids; booleans; all-NULL and never-NULL columns), parameter round trips, a 400,000-row read through `next_chunk` (391 chunks) and through the row view with identical sums, a six-table report of more than 40,000 rows, the view and the sequence, a ten-parameter search with NULL parameters, order-placement transactions (commit, failure with rollback, drop rolls back, savepoints), 5,000 and 3,000 reuses of a cached statement, `ALTER TABLE` between executions, 8 threads each with their own connection and transactions.
 - **Errors with SQLSTATE, from a real server:** 23505, 23503, 23502, 23514, 42601, 42P01, 22012, 28P01 (wrong password; the password is not in the error text), 3D000, 40001 (two serializable transactions), 40P01 (a real deadlock; exactly one side fails), 57014 (statement timeout), 57P01 (backend terminated with `pg_terminate_backend` in the middle of a 400,000-row result: the cursor ended with `FATAL: terminating connection due to administrator command (SQLSTATE 57P01)`, no hang). Also 42501 for the read-only cleartext user and 25P02 inside a failed transaction.
+- **Rendered types against the server's own text:** for `numeric` (17 hand-picked values including `NaN`, `Infinity`, 1e100, 30-digit and `0.000`, plus 2,000 generated values of varying scale and sign), `interval` (iso_8601 style), `time`, `timetz`, `inet` (including the IPv6 compression rules and IPv4-mapped forms; `abbrev()` is `inet`'s own output form, because `inet::text` always appends the netmask), `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`, `json`, `jsonb`, `xml`, enums and arrays (`int2` `int4` `int8` `text` with quoting cases, `numeric`, `uuid`, `bytea`, `bool`, `jsonb`, `inet`, `interval`, `time`, `varchar`, multi-dimensional, a lower bound other than 1, NULL elements, a 100,000-element array), the rendered text equals the server's `::text` in every row. `oid` and `"char"` are checked by value.
+- **Cancel:** `SELECT pg_sleep(30)` cancelled from another thread after 300 ms fails with SQLSTATE 57014 well inside 20 seconds, and the connection works afterwards.
+- **LISTEN / NOTIFY:** a notification sent from another connection is returned by `wait_for_notification` (including an empty payload and a multi-byte one); a wait with nothing sent times out; one that arrives during a query is kept for `take_notifications`.
+- **COPY:** 20,000 rows through `COPY ... FROM STDIN (FORMAT csv)` and back out equal the input byte for byte (quoted fields with commas, quotes and newlines); binary COPY out and in; bad data (SQLSTATE 22P02), a duplicate key (23505), a reader that fails mid-stream, a writer that fails mid-stream, and statements of the wrong kind each leave the connection usable.
+- **Batches:** 1,001 statements in one `execute_many` give the right row counts; a duplicate key in the middle undoes the whole batch (SQLSTATE 23505, row count unchanged); wrong parameter counts and too many distinct statements are usage errors.
+- **Pool:** 8 threads share 2 connections; a connection returned inside a transaction is rolled back; a full pool times out on a bounded wait; a connection whose backend was terminated is discarded and replaced.
 - **Authentication:** SCRAM-SHA-256, cleartext and trust, each for its own user in `pg_hba.conf`; cleartext and trust are refused unless the URL allows them (`auth=password`, `auth=trust`).
 - **Stale plans:** after `ALTER TABLE ... ADD COLUMN` and `ALTER COLUMN ... TYPE`, the cached statement is re-prepared once (outside a transaction) and returns the new columns and types. An explicit `Statement` handle is not silently replaced: it fails with the server's SQLSTATE 0A000 "cached plan must not change result type", and a fresh `prepare` works.
 
@@ -85,20 +98,22 @@ The passwords in it are public test values.
 
 ## Known limits
 
-- **No TLS.** Connecting requires `sslmode=disable`; every other `sslmode` is rejected, so a connection is never silently downgraded. This departs from the plan's "verified TLS by default" until TLS exists.
-- **One server version.** PostgreSQL 14 and 17 were not run (the images were not on the machine and pulling them was not confirmed by the owner). The plan's 13 to 18 range is a target.
-- **Timestamp range.** Values are stored as microseconds since 1970. PostgreSQL's last roughly 30 years of timestamp range (after about year 294246) cannot be represented and give `Error::Value`; the connection stays usable. The largest PostgreSQL date does fit. `infinity` and `-infinity` are stored as `i32`/`i64` `MAX`/`MIN`, and a finite value that would collide with them is an error.
-- **Unsupported types.** `numeric`, `json`, `jsonb`, arrays, `interval`, enums, `inet` and every other type without a decoder fail the query with `Error::UnsupportedType` naming the type, or are read as server text with `unsupported_types=text`. This is the only text path, and it is opt-in.
-- **SCRAM.** No SASLprep: a non-ASCII password may fail against a server that normalised it. No channel binding (`SCRAM-SHA-256-PLUS` is not offered). The client nonce comes from std's OS-seeded `RandomState`, not a dedicated CSPRNG. Password wiping on drop is best effort, because safe Rust cannot guarantee it.
-- **Statement cache retry** only happens outside a transaction. Inside one, the failed Bind aborts the transaction and the error is returned.
-- **Cursor.** Dropping a cursor early reads and discards the rest of the result (it does not send a cancel). A decode failure in the middle of a result is reported after the stream is drained; an unexpected protocol error marks the connection broken.
-- **Not built:** async, pipelining, pool, COPY, LISTEN/NOTIFY, cancel, portals with partial fetch, metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests), no Miri, no `cargo-deny`, no size report, no differential test against libpq.
+- **No TLS.** Connecting requires `sslmode=disable`; every other `sslmode` is rejected, so a connection is never silently downgraded. This departs from the plan's "verified TLS by default" until TLS exists. Building TLS inside a dependency-free core means writing the protocol, X.509 and the ciphers from scratch; the plan treats TLS as an optional backend (`cameleer-tls` or a vetted crate), which needs an issue and a decision first. Channel binding (`SCRAM-SHA-256-PLUS`) depends on TLS and is not offered.
+- **One server version.** Verified on PostgreSQL 16.15 only; 14 and 17 were not run, because their images are not on the machine and pulling them needs the owner's confirmation. The plan's 13 to 18 range is a target.
+- **Timestamp range.** Values are stored as microseconds since 1970 in an `i64`, the Arrow layout. PostgreSQL timestamps after about year 294246 cannot be represented and give `Error::Value`; the connection stays usable. This follows from the column format, not from a missing feature. The largest PostgreSQL date does fit. `infinity` and `-infinity` are stored as `i32`/`i64` `MAX`/`MIN`, and a finite value that would collide with them is an error.
+- **Types without a decoder.** `money`, geometric types, ranges and multiranges, `tsvector`, `hstore`, composite types, arrays of enums, arrays of dates and timestamps, domains over unsupported types and every other type not listed above fail the query with `Error::UnsupportedType` naming the type, or are read as server text with `unsupported_types=text`. `numeric`, `interval` and arrays arrive as strings, not as Arrow decimal, interval or list columns.
+- **SCRAM.** No SASLprep: it needs Unicode NFKC tables, which a dependency-free core does not carry. An ASCII password is unaffected; a non-ASCII password may fail against a server that normalised it. The client nonce comes from `/dev/urandom` where it exists (Unix) and otherwise from std's OS-seeded `RandomState`. Password wiping on drop is best effort, because safe Rust cannot guarantee it.
+- **Statement cache retry** only happens outside a transaction. Inside one, the failed Bind aborts the transaction (PostgreSQL's rule) and the error is returned; retrying would need a savepoint around every cached execution.
+- **Cursor.** Dropping a cursor early reads and discards the rest of the result. To stop a long result sooner, call `CancelToken::cancel` from another thread, then drop the cursor. A cancel that arrives after the statement finished can hit the next statement on that connection; cancel only what you mean to. A decode failure in the middle of a result is reported after the stream is drained; an unexpected protocol error marks the connection broken.
+- **COPY** takes the statement as written (COPY has no bound parameters), so build its SQL only from trusted text; the data is never part of the SQL.
+- **Pool.** Connections are not tested before they are handed out; a dead idle connection fails on first use and is then replaced.
+- **Not built:** async (it needs a runtime or an executor; the plan puts it in `karez-rt`), a pipeline that reads results of different shapes in one round trip (`execute_many` covers write batches), portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
 - **Not measured:** speed, memory and binary size. The plan's Milestone 0 gate (plan section 1.3) is therefore still open.
 
 ## Final run (2026-11-13)
 
 Quoted from the run that produced the counts above; the commands are the ones listed under
-"How to reproduce".
+"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1).
 
 ```text
 cargo fmt --all --check            -> clean
@@ -106,13 +121,12 @@ cargo build --workspace --all-targets -> 0 warnings
 cargo clippy --workspace --all-targets -- -D warnings -> no issues
 KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 cargo test --workspace
   karez_chunk                16 passed
-  karez_proto_pg             33 passed
+  karez_proto_pg             37 passed
   split_decoding              4 passed
   karez_pg                    4 passed
   mock_server                 7 passed
-  pg_integration             33 passed
+  pg_integration             39 passed
   karez doc test              1 passed
   (0 failed, 0 ignored)
-example orders: connected, server_version = 16.15 (Debian 16.15-1.pgdg13+2);
-  audit_log: 400000 rows in 391 chunks; rolled back; orders still 150000
+example orders: audit_log: 400000 rows in 391 chunks; rolled back; orders still 150000
 ```

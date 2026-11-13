@@ -15,12 +15,14 @@
 mod config;
 mod conn;
 mod error;
+mod pool;
 mod tx;
 
 pub use config::{AuthPolicy, Config, UnsupportedTypes};
-pub use conn::{Connection, Cursor, Statement};
+pub use conn::{CancelToken, Connection, Cursor, Notification, Statement};
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{Chunk, Column, ColumnType, Date, Field, RowRef, Timestamp};
 pub use karez_proto_pg::types::oid;
 pub use karez_proto_pg::{ErrorFields, TxStatus, Value};
+pub use pool::{Pool, PooledConnection};
 pub use tx::{Isolation, Savepoint, Transaction};
