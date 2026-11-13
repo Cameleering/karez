@@ -33,11 +33,17 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 ## Open decisions (plan section 11)
 
 1. Go or no-go on Milestone 0. The functional spike exists; the measurement part of the gate (plan section 1.3) has not been started, so there is nothing to decide on yet.
-2. Whether the ODBC driver is in 1.0 or deferred.
+2. ~~Whether the ODBC driver is in 1.0 or deferred.~~ **Decided 2026-11-13 by the owner: ODBC is in 1.0.** It needs a separate FFI crate with `unsafe` (the core stays `forbid(unsafe_code)`), which the pre-1.0 audit must cover, and it adds months to the schedule; plan.md still needs updating.
 3. Whether to fund an audit of `cameleer-tls`.
 4. The budget for the external audit before 1.0.
 5. Reserving the `karez` and `karez-*` names on crates.io, PyPI and npm, now or at M0. All were
    free on 2026-11-09.
+
+## Decisions of 2026-11-13 (owner)
+
+- **TLS:** an opt-in cargo feature backed by the `rustls` crate; the core stays dependency-free. AGENTS.md requires an issue that discusses the dependency first, so open that issue before any code. Until then the client refuses anything but `sslmode=disable`.
+- **Async (`karez-rt`):** a small design with no async runtime (std-only I/O threads and channels over the sans-io crates), informed by what the simoom project learnt. A question to the simoom session is out; the answer is not yet in this repository.
+- **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
 
 ## Next steps
 
