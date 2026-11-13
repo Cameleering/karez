@@ -1759,3 +1759,43 @@ fn the_pool_shares_rolls_back_and_replaces_connections() -> R {
     assert!(pool.size() <= 1);
     Ok(())
 }
+
+#[test]
+fn execute_many_does_not_deadlock_when_requests_and_results_are_both_large() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    // Each request carries 300 KB and each result is 1 MB. 60 of them is 18 MB out and 60 MB
+    // back, far more than the socket buffers on both sides, so a client that writes the whole
+    // batch before reading anything blocks forever once the server stops reading.
+    let big = "x".repeat(300_000);
+    let sql = "SELECT repeat('y', 1000000) WHERE length($1) >= 0";
+    let params = [Value::text(&big)];
+    let items: Vec<(&str, &[Value])> = (0..60).map(|_| (sql, &params[..])).collect();
+    let t0 = Instant::now();
+    let counts = c.execute_many(&items)?;
+    assert_eq!(counts, vec![1u64; 60]);
+    assert!(t0.elapsed() < Duration::from_secs(60), "{:?}", t0.elapsed());
+    assert!(!c.is_broken());
+    assert_eq!(one_i64(&mut c, "SELECT 3::int8", &[])?, 3);
+    Ok(())
+}
+
+#[test]
+fn a_failing_statement_in_a_large_batch_leaves_the_connection_usable() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let big = "x".repeat(300_000);
+    let ok = "SELECT repeat('y', 100000) WHERE length($1) >= 0";
+    let bad = "SELECT 1 / (length($1) - length($1))";
+    let params = [Value::text(&big)];
+    let mut items: Vec<(&str, &[Value])> = (0..10).map(|_| (ok, &params[..])).collect();
+    items.push((bad, &params[..]));
+    items.extend((0..10).map(|_| (ok, &params[..])));
+    expect_sqlstate(c.execute_many(&items), "22012");
+    assert!(!c.is_broken());
+    assert_eq!(one_i64(&mut c, "SELECT 4::int8", &[])?, 4);
+    // The same batch without the failing statement works.
+    let items: Vec<(&str, &[Value])> = (0..20).map(|_| (ok, &params[..])).collect();
+    assert_eq!(c.execute_many(&items)?, vec![1u64; 20]);
+    Ok(())
+}

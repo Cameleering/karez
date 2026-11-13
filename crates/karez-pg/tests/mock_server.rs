@@ -234,3 +234,94 @@ fn a_closed_socket_is_an_error_not_a_hang() {
     assert!(conn.is_broken());
     assert!(matches!(conn.query("SELECT 1", &[]), Err(Error::Broken)));
 }
+
+/// A server that behaves like PostgreSQL under back-pressure: after the first Execute it writes a
+/// large result and does not read another byte until it has finished writing it. A client that
+/// writes its whole batch before it reads blocks forever once the socket buffers fill.
+fn serve_stalling(mut s: TcpStream, flood_rows: usize) {
+    let mut len = [0u8; 4];
+    s.read_exact(&mut len).unwrap();
+    let mut startup = vec![0; i32::from_be_bytes(len) as usize - 4];
+    s.read_exact(&mut startup).unwrap();
+    s.write_all(&msg(b'R', &[0, 0, 0, 0])).unwrap();
+    s.write_all(&msg(b'K', &[0, 0, 0, 42, 1, 2, 3, 4])).unwrap();
+    s.write_all(&msg(b'Z', b"I")).unwrap();
+    let mut first_execute = true;
+    loop {
+        let mut head = [0u8; 5];
+        if s.read_exact(&mut head).is_err() {
+            return;
+        }
+        let n = i32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize - 4;
+        let mut body = vec![0; n];
+        if s.read_exact(&mut body).is_err() {
+            return;
+        }
+        let mut out = Vec::new();
+        match head[0] {
+            b'X' => return,
+            b'P' => out.extend(msg(b'1', b"")),
+            b'D' => {
+                out.extend(msg(b't', &[0, 1, 0, 0, 0, 25]));
+                let mut t = 1u16.to_be_bytes().to_vec();
+                t.extend_from_slice(b"s\0");
+                t.extend_from_slice(&0u32.to_be_bytes());
+                t.extend_from_slice(&0i16.to_be_bytes());
+                t.extend_from_slice(&25u32.to_be_bytes());
+                t.extend_from_slice(&(-1i16).to_be_bytes());
+                t.extend_from_slice(&(-1i32).to_be_bytes());
+                t.extend_from_slice(&1i16.to_be_bytes());
+                out.extend(msg(b'T', &t));
+            }
+            b'B' => out.extend(msg(b'2', b"")),
+            b'E' => {
+                if first_execute {
+                    first_execute = false;
+                    // 1 MiB per row; written while the client is still sending its batch.
+                    let mut row = 1u16.to_be_bytes().to_vec();
+                    row.extend_from_slice(&(1_000_000i32).to_be_bytes());
+                    row.extend(std::iter::repeat_n(b'y', 1_000_000));
+                    let row = msg(b'D', &row);
+                    for _ in 0..flood_rows {
+                        if s.write_all(&row).is_err() {
+                            return;
+                        }
+                    }
+                }
+                out.extend(msg(b'C', b"SELECT 1\0"));
+            }
+            b'S' => out.extend(msg(b'Z', b"I")),
+            other => panic!("mock got unexpected message {}", other as char),
+        }
+        if s.write_all(&out).is_err() {
+            return;
+        }
+    }
+}
+
+#[test]
+fn execute_many_does_not_deadlock_when_the_server_stops_reading() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    thread::spawn(move || {
+        if let Ok((s, _)) = l.accept() {
+            serve_stalling(s, 40);
+        }
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let r = (|| -> Result<Vec<u64>, Error> {
+            let mut c = Connection::connect(&cfg(port, true))?;
+            let big = "x".repeat(2_000_000);
+            let params = [Value::text(&big)];
+            let items: Vec<(&str, &[Value])> =
+                (0..40).map(|_| ("SELECT $1", &params[..])).collect();
+            c.execute_many(&items)
+        })();
+        let _ = tx.send(r);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(r) => assert_eq!(r.unwrap(), vec![1u64; 40]),
+        Err(_) => panic!("execute_many is stuck: it wrote its whole batch before reading"),
+    }
+}

@@ -70,10 +70,11 @@ blocks writing results into a full socket buffer, we block writing the rest of t
 pump thread reading, a blocked writer cannot stall the reader. The caller who writes uses the
 socket's write half (`try_clone`); the pump owns the read half.
 
-> **Known issue in the code today.** `Connection::execute_many` writes its whole batch before it
-> reads anything. A batch large enough to fill both socket buffers (many statements, or statements
-> that return big results) can deadlock. The tests use 1,001 small statements and do not reach
-> it. Fix in Phase 0: write in slices of at most 64 KiB and read between slices, or use the pump.
+> **Step 0a, done in the code (2026-11-13).** `Connection::execute_many` used to write its whole
+> batch before it read anything, which can deadlock when both socket buffers fill. A batch above
+> 64 KiB is now written by a scoped helper thread while the caller reads. The hang itself could not
+> be reproduced on the Windows development machine (see the results note), so the fix is by
+> reasoning; verify it on Linux. The pump thread of step 1 makes the helper thread unnecessary.
 
 ## 5. Commands, pipelining and ordering
 
@@ -103,10 +104,11 @@ PostgreSQL answers commands in the order sent; an error skips to the next `Sync`
   reached the socket (still queued, or the connection was already down), false when it was written
   and the outcome is unknown. A dead connection fails all in-flight commands with
   `Error::Closed { retry_safe }` each.
-- **No automatic replay by default.** simoom replays unanswered idempotent requests on a new
-  connection `[reported]`. For a database, a written `INSERT` may have committed. Opt-in only,
-  `retry(Idempotent)` on a command, and only when the connection is outside a transaction and
-  the command is read-only or marked idempotent by the caller. The pool does the reconnect.
+- **Replay (owner decision 2026-11-13):** the pool moves a command to a new connection only if it
+  was **never written** to the dead one (`retry_safe()` is true). A command that was written is
+  never resent automatically, because a written `INSERT` may have committed; the caller gets the
+  error with `retry_safe() == false` and decides. simoom also resends unanswered idempotent
+  requests `[reported]`; karez does not, for that reason.
 - **Dropping a future or handle** cannot desynchronise the stream, because the engine owns the
   socket state. A command still queued is removed and never runs. One in flight has its results
   discarded; it is cancelled with the `CancelToken` only if `cancel_on_drop` is set (default off),
@@ -183,7 +185,8 @@ fastest; pipelined within 5% of the best pipelined client); they are targets, no
 
 | step | what | done when |
 |---|---|---|
-| 0 | extract `Engine`; fix the `execute_many` write/read deadlock | 108 tests green; new engine split tests and the deadlock regression test pass |
+| 0a | fix the `execute_many` write/read deadlock | **done**; verified on Linux: **not yet** |
+| 0b | extract `Engine` | 111 tests green; new engine split tests pass |
 | 1 | shared connection, leader and pump, slots, limits, close | the section 11 blocking tests pass on 14, 16, 17 |
 | 2 | implicit pipelining, `Pipeline`, `Stream` lease, `retry_safe` | the pipelining and failure tests pass |
 | 3 | `Future` API | the same tests run through `block_on` and through tokio (dev-only, behind a feature) |
@@ -196,8 +199,7 @@ fastest; pipelined within 5% of the best pipelined client); they are targets, no
   `TcpStream::shutdown`; the cost is one thread per busy connection. Acceptable at pool sizes of
   tens; revisit only if measurements say otherwise.
 - **Head-of-line blocking** behind a slow `Stream` is inherent to in-order protocols; the lease
-  makes it explicit. Open question: allow a second connection per stream automatically?
-- **Replay semantics** are the sharpest edge. Open question: ship no replay in 1.0 and only
-  `retry_safe()`?
+  makes it explicit (decided 2026-11-13: lease and document, no automatic second connection).
+- **Replay** is limited to commands never written (decided); anything else is the caller's call.
 - **Windows:** thread and socket behaviour differ (timeouts report `TimedOut`, not `WouldBlock`;
   already handled in `wait_for_notification`). Test on both.

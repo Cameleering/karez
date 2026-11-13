@@ -17,7 +17,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 | Name and identity | decided 2026-11-09: **karez**, in the Cameleer family; Apache-2.0; a fresh repository with no rdbc history |
 | Brand | K mark, icon set generator and assets are built; the logo and social preview are Gemini drafts that need small fixes ([brand/gemini-prompts.md](brand/gemini-prompts.md)) |
 | Repo metadata | About line and 20 topics set; README, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, `context7.json`, `CITATION.cff` and community files written |
-| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 69 tests that run without a server and 39 that need one; blocking only, with a pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches; no TLS, no async, no benchmarks |
+| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 70 tests that run without a server and 41 that need one; blocking only, with a pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches; no TLS, no async, no benchmarks |
 
 ## Decisions already made
 
@@ -34,15 +34,18 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 
 1. Go or no-go on Milestone 0. The functional spike exists; the measurement part of the gate (plan section 1.3) has not been started, so there is nothing to decide on yet.
 2. ~~Whether the ODBC driver is in 1.0 or deferred.~~ **Decided 2026-11-13 by the owner: ODBC is in 1.0.** It needs a separate FFI crate with `unsafe` (the core stays `forbid(unsafe_code)`), which the pre-1.0 audit must cover, and it adds months to the schedule; plan.md still needs updating.
-3. Whether to fund an audit of `cameleer-tls`.
-4. The budget for the external audit before 1.0.
-5. Reserving the `karez` and `karez-*` names on crates.io, PyPI and npm, now or at M0. All were
-   free on 2026-11-09.
+3. ~~Whether to fund an audit of `cameleer-tls`.~~ Decided: not now (see below).
+4. The budget for the external audit before 1.0: scope decided, the amount is the owner's.
+5. ~~Reserving the names.~~ Decided: now. The owner does it.
 
 ## Decisions of 2026-11-13 (owner)
 
 - **TLS:** an opt-in cargo feature backed by the `rustls` crate; the core stays dependency-free. AGENTS.md requires an issue that discusses the dependency first, so open that issue before any code. Until then the client refuses anything but `sslmode=disable`.
 - **Async (`karez-rt`):** a small design with no async runtime (std-only I/O threads and channels over the sans-io crates), informed by what the simoom project learnt. The simoom session answered: thread per connection with sans-io crates suits a database client, and a pump thread only helps from two requests in flight (see [research/simoom-io-learnings.md](research/simoom-io-learnings.md), second-hand and unchecked). The design is in [design/karez-rt.md](design/karez-rt.md); nothing of it is built.
+- **Replay:** only commands never written to a dead connection move to a new one; a written command is never resent automatically.
+- **Slow streams:** a stream leases its connection; other commands wait in a bounded queue. No automatic second connection.
+- **Audit:** plan and fund an external audit before 1.0 of the core, the protocol crates and the ODBC FFI crate; not of `cameleer-tls` for now. (The owner funds it; nothing was spent.)
+- **Names:** reserve `karez` and `karez-*` on crates.io, PyPI and npm now, as minimal placeholders. The owner does this; I do not create accounts or publish.
 - **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
 
 ## Next steps

@@ -17,6 +17,8 @@ use std::time::Duration;
 const READ_BUF: usize = 64 * 1024;
 const MAX_NOTICES: usize = 64;
 const MAX_NOTIFICATIONS: usize = 4096;
+/// A batch larger than this is written by a helper thread while results are read.
+const OVERLAP_WRITE_BYTES: usize = 64 * 1024;
 
 /// A `NOTIFY` received on a channel this session listens to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -811,8 +813,53 @@ impl Connection {
             frontend::execute(&mut self.out, "", 0)?;
         }
         frontend::sync(&mut self.out);
-        self.io.send(&self.out)?;
-        let mut counts = Vec::with_capacity(items.len());
+        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES {
+            self.io.send(&self.out)?;
+            self.read_batch(items.len())?
+        } else {
+            self.write_while_reading(items.len())?
+        };
+        if counts.len() != items.len() {
+            return Err(Error::Proto(ProtoError::InvalidValue(
+                "batch result count differs from statement count",
+            )));
+        }
+        Ok(counts)
+    }
+
+    /// Send the encoded batch from a helper thread while this thread reads the results. A server
+    /// stops reading its input when it cannot write its output, so a client that writes
+    /// everything before reading anything can block forever (both sides stuck in `write`).
+    fn write_while_reading(&mut self, n: usize) -> Result<Vec<u64>> {
+        let out = std::mem::take(&mut self.out);
+        let mut writer = self.io.stream.try_clone()?;
+        let (read, written) = std::thread::scope(|sc| {
+            let w = sc.spawn(move || writer.write_all(&out).map(|()| out));
+            let read = self.read_batch(n);
+            if matches!(&read, Err(e) if e.is_fatal()) || self.broken {
+                // Unblock the writer: the connection is unusable after this error anyway. A
+                // server error is not fatal: the server reads on to the Sync, so the writer ends.
+                let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
+            }
+            let written = w
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("batch writer thread panicked")));
+            (read, written)
+        });
+        match (read, written) {
+            (Ok(counts), Ok(out)) => {
+                self.out = out;
+                self.out.clear();
+                Ok(counts)
+            }
+            (Err(e), _) => Err(e),
+            (Ok(_), Err(e)) => Err(Error::Io(e)),
+        }
+    }
+
+    /// Read the replies to a batch of Bind/Execute pairs followed by one Sync.
+    fn read_batch(&mut self, n: usize) -> Result<Vec<u64>> {
+        let mut counts = Vec::with_capacity(n);
         let mut err = None;
         loop {
             let m = match self.io.next_msg(&mut self.side) {
@@ -835,11 +882,6 @@ impl Connection {
         }
         if let Some(f) = err {
             return Err(Error::Server(ServerError::new(f)));
-        }
-        if counts.len() != items.len() {
-            return Err(Error::Proto(ProtoError::InvalidValue(
-                "batch result count differs from statement count",
-            )));
         }
         Ok(counts)
     }

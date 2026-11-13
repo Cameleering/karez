@@ -37,9 +37,9 @@ Counts from the final run (below). "Needs a server" means the test skips loudly 
 |---|---|---|
 | `karez-chunk` | 16 unit (randomised round trips with the in-repo PRNG, rollback of partial rows, corrupt-buffer detection) | no |
 | `karez-proto-pg` | 37 unit, 4 integration in `tests/split_decoding.rs` | no |
-| `karez-pg` | 4 unit (URL parsing), 7 in `tests/mock_server.rs` (scripted in-process server), 39 in `tests/pg_integration.rs` | the 39 yes |
+| `karez-pg` | 4 unit (URL parsing), 8 in `tests/mock_server.rs` (scripted in-process server), 41 in `tests/pg_integration.rs` | the 41 yes |
 | `karez` | 1 doc test (compiled, not run: `no_run`) | no |
-| total | 108 | 39 |
+| total | 111 | 41 |
 
 What the test families check:
 
@@ -107,7 +107,7 @@ The passwords in it are public test values.
 - **SCRAM.** No SASLprep: it needs Unicode NFKC tables, which a dependency-free core does not carry. An ASCII password is unaffected; a non-ASCII password may fail against a server that normalised it. The client nonce comes from `/dev/urandom` where it exists (Unix) and otherwise from std's OS-seeded `RandomState`. Password wiping on drop is best effort, because safe Rust cannot guarantee it.
 - **Statement cache retry** only happens outside a transaction. Inside one, the failed Bind aborts the transaction (PostgreSQL's rule) and the error is returned; retrying would need a savepoint around every cached execution.
 - **Cursor.** Dropping a cursor early reads and discards the rest of the result. To stop a long result sooner, call `CancelToken::cancel` from another thread, then drop the cursor. A cancel that arrives after the statement finished can hit the next statement on that connection; cancel only what you mean to. A decode failure in the middle of a result is reported after the stream is drained; an unexpected protocol error marks the connection broken.
-- **`execute_many` can deadlock on very large batches.** It writes the whole batch before it reads. If the batch fills both socket buffers (many statements, or statements that return big results), the client blocks writing while the server blocks writing results. By reasoning only: no test reaches it (the batch test is 1,001 small statements). The fix is planned as step 0 of [karez-rt.md](karez-rt.md).
+- **`execute_many` and large batches.** A batch above 64 KiB is now written by a helper thread while the caller reads the results, because a server that cannot write its output stops reading its input, and a client that writes everything first could then block forever. **I could not reproduce the hang on this machine**: the Windows client accepts hundreds of megabytes of unread writes (400 MB out, 200 MB back, finished in under a second), so neither the real-server test (18 MB out, 60 MB back) nor the in-process stalling-server test fails on the old code. The fix is by reasoning; the two tests only show that large overlapped batches complete correctly. Run the stalling-server test on Linux, where it is expected to hang on the old code, before relying on it.
 - **COPY** takes the statement as written (COPY has no bound parameters), so build its SQL only from trusted text; the data is never part of the SQL.
 - **Pool.** Connections are not tested before they are handed out; a dead idle connection fails on first use and is then replaced.
 - **Not built:** async (it needs a runtime or an executor; the plan puts it in `karez-rt`), a pipeline that reads results of different shapes in one round trip (`execute_many` covers write batches), portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
@@ -127,8 +127,8 @@ KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 cargo test --workspace
   karez_proto_pg             37 passed
   split_decoding              4 passed
   karez_pg                    4 passed
-  mock_server                 7 passed
-  pg_integration             39 passed
+  mock_server                 8 passed
+  pg_integration             41 passed
   karez doc test              1 passed
   (0 failed, 0 ignored)
 example orders: audit_log: 400000 rows in 391 chunks; rolled back; orders still 150000
