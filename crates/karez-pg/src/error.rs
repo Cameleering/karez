@@ -59,6 +59,9 @@ pub enum Error {
     Server(ServerError),
     /// Bad configuration or connection URL.
     Config(String),
+    /// TLS could not be negotiated or verified (the server refused it, the certificate was not
+    /// trusted, the name did not match, or the `tls` feature is not compiled in).
+    Tls(String),
     /// Authentication could not be completed (policy, method, or server proof).
     Auth(String),
     /// A result column has a type this version cannot decode.
@@ -97,7 +100,12 @@ impl Error {
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
-            Error::Io(_) | Error::Proto(_) | Error::Chunk(_) | Error::Closed | Error::Broken
+            Error::Io(_)
+                | Error::Proto(_)
+                | Error::Chunk(_)
+                | Error::Closed
+                | Error::Broken
+                | Error::Tls(_)
         )
     }
 }
@@ -110,6 +118,7 @@ impl fmt::Display for Error {
             Error::Chunk(e) => write!(f, "chunk error: {e}"),
             Error::Server(e) => write!(f, "{e}"),
             Error::Config(m) => write!(f, "configuration error: {m}"),
+            Error::Tls(m) => write!(f, "TLS error: {m}"),
             Error::Auth(m) => write!(f, "authentication failed: {m}"),
             Error::UnsupportedType {
                 column,

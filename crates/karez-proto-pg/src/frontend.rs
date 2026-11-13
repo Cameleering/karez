@@ -226,6 +226,12 @@ pub fn terminate(buf: &mut Vec<u8>) {
     bare(buf, b'X');
 }
 
+/// SSLRequest: ask the server to switch to TLS. The server answers with one byte, `S` or `N`.
+pub fn ssl_request(buf: &mut Vec<u8>) {
+    buf.extend_from_slice(&8i32.to_be_bytes());
+    buf.extend_from_slice(&80_877_103i32.to_be_bytes());
+}
+
 /// CopyData: a piece of the COPY stream sent to the server.
 pub fn copy_data(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     message(buf, Some(b'd'), |b| {

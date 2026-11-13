@@ -11,6 +11,13 @@ publish.workspace = true
 [dependencies]
 karez-chunk = { path = "../karez-chunk" }
 karez-proto-pg = { path = "../karez-proto-pg" }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "1.0.12", optional = true }
 
 [lints]
 workspace = true
+
+[features]
+# TLS through rustls (ring provider) and the Mozilla root store. Off by default: the core has
+# no dependencies. With it off, only sslmode=disable connects.
+tls = ["dep:rustls", "dep:webpki-roots"]

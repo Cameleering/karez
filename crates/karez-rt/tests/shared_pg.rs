@@ -416,3 +416,16 @@ fn a_dropped_pending_does_not_desynchronise_the_stream() -> R {
     assert_eq!(one_i64(&c, "SELECT 77::int8", &[])?, 77);
     Ok(())
 }
+
+#[cfg(feature = "tls")]
+#[test]
+fn a_tls_connection_cannot_be_shared_yet_and_says_so() -> R {
+    let addr = need_server!();
+    let mut cfg = cfg(&addr);
+    cfg.ssl_mode = karez_pg::SslMode::Require;
+    match SharedConnection::connect(&cfg, Options::default()) {
+        Err(Error::Pg(PgError::Usage(m))) => assert!(m.contains("TLS"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    Ok(())
+}

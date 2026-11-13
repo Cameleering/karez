@@ -8,7 +8,8 @@
 //!   [`Cursor::next`] or as whole chunks with [`Cursor::next_chunk`].
 //! * Passwords are redacted from `Debug` output and never logged.
 //!
-//! TLS is not implemented in this version, so a connection requires `sslmode=disable`.
+//! TLS needs the `tls` feature (rustls). The default `sslmode` is `verify-full`; without the
+//! feature a connection needs an explicit `sslmode=disable`.
 
 #![forbid(unsafe_code)]
 
@@ -16,9 +17,12 @@ mod config;
 mod conn;
 mod error;
 mod pool;
+#[cfg(feature = "tls")]
+mod tls;
+mod transport;
 mod tx;
 
-pub use config::{AuthPolicy, Config, UnsupportedTypes};
+pub use config::{AuthPolicy, Config, SslMode, UnsupportedTypes};
 pub use conn::{CancelToken, Connection, Cursor, Notification, RawParts, Statement};
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{Chunk, Column, ColumnType, Date, Field, RowRef, Timestamp};

@@ -156,9 +156,11 @@ planned default for async). A pooled connection returned inside a transaction is
 
 ## 10. TLS
 
-The planned `rustls` feature fits the Engine: `rustls::ClientConnection` is itself sans-io (bytes
-in, bytes out), so the Engine's `feed` and `out` wrap it and nothing else changes. Decided
-2026-11-13: an optional feature, after an issue discusses the dependency.
+Built for the blocking `Connection` (decision record: [tls-decision.md](tls-decision.md)), **not** for the shared
+connection yet: `SharedConnection::connect` over TLS fails with a clear error, because the writer and the pump
+use two handles on one socket and rustls keeps one cipher state. The planned fix is to put the rustls
+`ClientConnection` inside the engine (it is sans-io: bytes in, bytes out), so the single mutex serialises the
+cipher state and the pump reads ciphertext only. That is the next TLS step.
 
 ## 11. Tests
 

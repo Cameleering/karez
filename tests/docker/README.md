@@ -33,3 +33,13 @@ a verification.
 | `unsupported_zoo` | `numeric`, `jsonb`, `int4[]`, `interval`, an enum and `inet`, for the unsupported-type tests |
 
 The seed finishes by creating a `seed_done` table; the compose health check waits for it.
+
+## TLS
+
+Every server has TLS on with a throwaway CA generated at start and written to `tests/docker/certs/ca-<port>.crt`
+(git-ignored). The TLS tests run with the `tls` feature:
+
+```sh
+KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 \
+  cargo test -p karez-pg -p karez-rt --features karez-pg/tls,karez-rt/tls
+```

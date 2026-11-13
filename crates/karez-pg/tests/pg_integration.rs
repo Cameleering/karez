@@ -1831,3 +1831,130 @@ fn the_pool_serves_waiters_in_arrival_order() -> R {
     assert!(pool.get_timeout(Duration::from_secs(5)).is_ok());
     Ok(())
 }
+
+// ---- TLS (feature `tls`; the fixture server has TLS on with a throwaway CA) ---------------
+
+#[cfg(feature = "tls")]
+mod tls {
+    use super::*;
+    use karez_pg::SslMode;
+
+    /// The fixture CA of the server on `addr` (each container writes `ca-<port>.crt`).
+    fn ca(addr: &str) -> String {
+        std::env::var("KAREZ_TEST_CA").unwrap_or_else(|_| {
+            let port = addr.rsplit(':').next().unwrap();
+            format!(
+                "{}/../../tests/docker/certs/ca-{port}.crt",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        })
+    }
+
+    fn tls_config(addr: &str, mode: SslMode, root: Option<String>) -> Config {
+        let mut cfg =
+            Config::from_url(&url(addr, "karez_scram", Some(SCRAM_PW), "karez", "")).unwrap();
+        cfg.ssl_mode = mode;
+        cfg.ssl_root_cert = root;
+        cfg
+    }
+
+    fn assert_encrypted(c: &mut Connection) -> R {
+        let mut cur = c.query(
+            "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+            &[],
+        )?;
+        let r = cur.next()?.expect("a pg_stat_ssl row");
+        assert!(r.get::<bool>(0)?, "the session is not encrypted");
+        assert!(r.get::<&str>(1)?.starts_with("TLSv1"));
+        Ok(())
+    }
+
+    #[test]
+    fn verify_full_with_the_fixture_ca_is_encrypted_and_fully_usable() -> R {
+        let addr = need_server!();
+        let mut c = Connection::connect(&tls_config(&addr, SslMode::VerifyFull, Some(ca(&addr))))?;
+        assert_encrypted(&mut c)?;
+        // A large parameter and result, a stream, a transaction, COPY and notifications.
+        let big = "é日".repeat(300_000);
+        let mut cur = c.query("SELECT $1::text", &[Value::text(&big)])?;
+        assert_eq!(cur.next()?.unwrap().get::<&str>(0)?, big);
+        drop(cur);
+        let mut cur = c.query("SELECT id FROM audit_log WHERE id <= 100000", &[])?;
+        let mut n = 0;
+        while let Some(ch) = cur.next_chunk()? {
+            n += ch.rows();
+        }
+        assert_eq!(n, 100_000);
+        drop(cur);
+        let mut tx = c.begin(Isolation::ReadCommitted)?;
+        tx.execute("CREATE TEMP TABLE tls_t (a int)", &[])?;
+        tx.execute("INSERT INTO tls_t VALUES (1)", &[])?;
+        tx.rollback()?;
+        let mut out = Vec::new();
+        let rows = c.copy_out(
+            "COPY (SELECT g FROM generate_series(1, 1000) g) TO STDOUT",
+            &mut out,
+        )?;
+        assert_eq!(rows, 1000);
+        let chan = tag("tls_chan");
+        c.execute(&format!("LISTEN {chan}"), &[])?;
+        c.execute("SELECT pg_notify($1, 'over tls')", &[Value::text(&chan)])?;
+        let n = c
+            .wait_for_notification(Some(Duration::from_secs(5)))?
+            .expect("a notification");
+        assert_eq!(n.payload, "over tls");
+        // Small batches work; a batch over 64 KiB is refused clearly instead of risking a stall.
+        let ok = c.execute_many(&[("SELECT 1", &[]), ("SELECT 2", &[])])?;
+        assert_eq!(ok, vec![1, 1]);
+        let blob = "x".repeat(100_000);
+        let p = [Value::text(&blob)];
+        assert!(matches!(
+            c.execute_many(&[("SELECT length($1)", &p[..])]),
+            Err(Error::Usage(_))
+        ));
+        assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn verify_ca_and_require_connect_and_default_roots_reject_the_fixture_ca() -> R {
+        let addr = need_server!();
+        let mut c = Connection::connect(&tls_config(&addr, SslMode::VerifyCa, Some(ca(&addr))))?;
+        assert_encrypted(&mut c)?;
+        // `require` encrypts without checking the certificate.
+        let mut c = Connection::connect(&tls_config(&addr, SslMode::Require, None))?;
+        assert_encrypted(&mut c)?;
+        // The default roots do not know the fixture CA: verified modes must refuse.
+        for mode in [SslMode::VerifyFull, SslMode::VerifyCa] {
+            match Connection::connect(&tls_config(&addr, mode, None)) {
+                Err(Error::Tls(m)) => assert!(m.to_lowercase().contains("certificate"), "{m}"),
+                other => panic!("{mode:?}: expected a TLS error, got {other:?}"),
+            }
+        }
+        // A root file that does not exist or holds no certificate is a clear error.
+        let missing = tls_config(&addr, SslMode::VerifyFull, Some("no-such-file.pem".into()));
+        assert!(matches!(Connection::connect(&missing), Err(Error::Tls(_))));
+        let junk = tls_config(
+            &addr,
+            SslMode::VerifyFull,
+            Some(env!("CARGO_MANIFEST_DIR").to_string() + "/Cargo.toml"),
+        );
+        assert!(matches!(Connection::connect(&junk), Err(Error::Tls(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn verify_full_accepts_the_names_the_certificate_covers() -> R {
+        let addr = need_server!();
+        // The fixture certificate covers localhost, 127.0.0.1 and ::1. A name it does not cover
+        // cannot be tried here (the fixture listens on 127.0.0.1 only), so a mismatch is NOT
+        // tested; the verify-ca behaviour of ignoring a name mismatch is therefore unverified.
+        let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
+        let mut cfg = tls_config(&addr, SslMode::VerifyFull, Some(ca(&addr)));
+        cfg.host = "localhost".into();
+        cfg.port = port;
+        let mut c = Connection::connect(&cfg)?;
+        assert_encrypted(&mut c)?;
+        Ok(())
+    }
+}

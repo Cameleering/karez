@@ -1,7 +1,7 @@
 //! Connection tests against a scripted in-process server (no PostgreSQL needed). They check the
 //! client's protocol handling; they are not a substitute for the real-server tests.
 
-use karez_pg::{Config, Connection, Error, Value};
+use karez_pg::{Config, Connection, Error, SslMode, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
@@ -108,7 +108,7 @@ fn start(rows: i32, auth_ok_first: bool) -> u16 {
 
 fn cfg(port: u16, trust: bool) -> Config {
     let mut c = Config::new("127.0.0.1", port, "u");
-    c.plaintext = true;
+    c.ssl_mode = SslMode::Disable;
     c.auth.trust = trust;
     c
 }
@@ -124,9 +124,11 @@ fn trust_is_refused_unless_allowed() {
 
 #[test]
 fn plaintext_must_be_explicit() {
-    let mut c = Config::new("127.0.0.1", 1, "u");
-    c.plaintext = false;
-    assert!(matches!(Connection::connect(&c), Err(Error::Config(_))));
+    // The default is verified TLS; plaintext needs an explicit sslmode=disable.
+    let c = Config::new("127.0.0.1", 1, "u");
+    assert_eq!(c.ssl_mode, SslMode::VerifyFull);
+    #[cfg(not(feature = "tls"))]
+    assert!(matches!(Connection::connect(&c), Err(Error::Tls(_))));
 }
 
 #[test]

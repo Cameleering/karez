@@ -1,5 +1,6 @@
 use crate::config::{Config, UnsupportedTypes};
 use crate::error::{Error, Result, ServerError};
+use crate::transport::Transport;
 use crate::tx::Isolation;
 use crate::tx::Transaction;
 use karez_chunk::{Chunk, ChunkBuilder, Field, RowRef};
@@ -78,7 +79,7 @@ impl Side {
 }
 
 struct Io {
-    stream: TcpStream,
+    stream: Transport,
     reader: FrameReader,
     buf: Vec<u8>,
 }
@@ -354,14 +355,15 @@ impl Connection {
 
     /// Connect and authenticate.
     pub fn connect(cfg: &Config) -> Result<Connection> {
-        if !cfg.plaintext {
-            return Err(Error::Config(
-                "TLS is not implemented in this version; set sslmode=disable to connect without it"
-                    .into(),
-            ));
+        Transport::check_supported(cfg)?;
+        let tcp = tcp_connect(cfg)?;
+        tcp.set_nodelay(true)?;
+        tcp.set_read_timeout(cfg.read_timeout)?;
+        // The TLS handshake must not hang forever on a server that never answers.
+        if cfg.read_timeout.is_none() {
+            tcp.set_read_timeout(cfg.connect_timeout)?;
         }
-        let stream = tcp_connect(cfg)?;
-        stream.set_nodelay(true)?;
+        let stream = Transport::establish(tcp, cfg)?;
         stream.set_read_timeout(cfg.read_timeout)?;
         let mut conn = Connection {
             io: Io {
@@ -543,7 +545,7 @@ impl Connection {
         if self.io.reader.buffered() != 0 {
             return Err(Error::Usage("the connection has unread bytes buffered"));
         }
-        let stream = self.io.stream.try_clone()?;
+        let stream = self.io.stream.try_clone_plain()?;
         let parts = RawParts {
             stream,
             process_id: self.process_id,
@@ -859,7 +861,13 @@ impl Connection {
             frontend::execute(&mut self.out, "", 0)?;
         }
         frontend::sync(&mut self.out);
-        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES {
+        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES || self.io.stream.is_tls() {
+            if self.out.len() > OVERLAP_WRITE_BYTES {
+                self.out.clear();
+                return Err(Error::Usage(
+                    "a batch larger than 64 KiB cannot be sent over TLS yet; split it",
+                ));
+            }
             self.io.send(&self.out)?;
             self.read_batch(items.len())?
         } else {
@@ -878,7 +886,7 @@ impl Connection {
     /// everything before reading anything can block forever (both sides stuck in `write`).
     fn write_while_reading(&mut self, n: usize) -> Result<Vec<u64>> {
         let out = std::mem::take(&mut self.out);
-        let mut writer = self.io.stream.try_clone()?;
+        let mut writer = self.io.stream.try_clone_plain()?;
         let (read, written) = std::thread::scope(|sc| {
             let w = sc.spawn(move || writer.write_all(&out).map(|()| out));
             let read = self.read_batch(n);

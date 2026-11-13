@@ -15,3 +15,7 @@ karez-pg = { path = "../karez-pg" }
 
 [lints]
 workspace = true
+
+[features]
+# Passes through to karez-pg. A TLS connection cannot be shared yet (see docs/design/karez-rt.md).
+tls = ["karez-pg/tls"]

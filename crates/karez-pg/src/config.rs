@@ -36,6 +36,20 @@ pub enum UnsupportedTypes {
     Text,
 }
 
+/// How a connection uses TLS (PostgreSQL's `sslmode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SslMode {
+    /// No TLS. The traffic, including the password exchange, is readable on the network.
+    Disable,
+    /// Encrypt, but trust any certificate. This stops passive listening only; anyone who can
+    /// intercept the connection can impersonate the server.
+    Require,
+    /// Encrypt and verify that the certificate chains to a trusted CA, but not the host name.
+    VerifyCa,
+    /// Encrypt and verify the chain and that the certificate is valid for the host (default).
+    VerifyFull,
+}
+
 /// Connection settings.
 #[derive(Clone)]
 pub struct Config {
@@ -58,9 +72,12 @@ pub struct Config {
     pub auth: AuthPolicy,
     /// Handling of columns without a decoder.
     pub unsupported_types: UnsupportedTypes,
-    /// Set by `sslmode=disable`. TLS is not implemented yet, so connecting requires this to
-    /// be true: a plaintext connection is never made by default.
-    pub plaintext: bool,
+    /// TLS policy. The default, [`SslMode::VerifyFull`], encrypts and verifies the certificate
+    /// chain and the host name. A plaintext connection needs an explicit `sslmode=disable`.
+    pub ssl_mode: SslMode,
+    /// Where the trusted CA certificates (PEM) come from: a file path, or `system` for the
+    /// built-in Mozilla roots. `None` means the built-in roots.
+    pub ssl_root_cert: Option<String>,
     /// Prepared statements kept per connection.
     pub statement_cache_size: usize,
     /// Largest accepted server message in bytes.
@@ -80,7 +97,8 @@ impl fmt::Debug for Config {
             .field("read_timeout", &self.read_timeout)
             .field("auth", &self.auth)
             .field("unsupported_types", &self.unsupported_types)
-            .field("plaintext", &self.plaintext)
+            .field("ssl_mode", &self.ssl_mode)
+            .field("ssl_root_cert", &self.ssl_root_cert)
             .field("statement_cache_size", &self.statement_cache_size)
             .field("max_message", &self.max_message)
             .finish()
@@ -102,7 +120,8 @@ impl Config {
             read_timeout: None,
             auth: AuthPolicy::default(),
             unsupported_types: UnsupportedTypes::Error,
-            plaintext: false,
+            ssl_mode: SslMode::VerifyFull,
+            ssl_root_cert: None,
             statement_cache_size: 256,
             max_message: karez_proto_pg::DEFAULT_MAX_MESSAGE,
         }
@@ -121,7 +140,8 @@ impl Config {
     /// Parse a connection URL: `karez:pg://`, `postgresql://` or `postgres://`, then
     /// `user[:password]@host[:port]/database?key=value&...`.
     ///
-    /// Recognised keys: `sslmode` (only `disable`), `application_name`, `connect_timeout` and
+    /// Recognised keys: `sslmode` (`disable`, `require`, `verify-ca`, `verify-full`; default
+    /// `verify-full`), `sslrootcert` (a PEM file or `system`), `application_name`, `connect_timeout` and
     /// `read_timeout` (seconds), `auth` (comma list of `scram`, `password`, `trust`),
     /// `unsupported_types` (`error` or `text`). Any other key is an error: nothing in a URL can
     /// load code or open a file.
@@ -178,16 +198,26 @@ impl Config {
                 let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
                 let (k, v) = (percent_decode(k)?, percent_decode(v)?);
                 match k.as_str() {
-                    "sslmode" => match v.as_str() {
-                        "disable" => cfg.plaintext = true,
-                        "" => return Err(Error::Config("sslmode needs a value".into())),
-                        other => {
-                            return Err(Error::Config(format!(
-                            "sslmode={other} needs TLS, which is not implemented in this version; \
-                                 use sslmode=disable to connect without TLS"
-                        )))
+                    "sslmode" => {
+                        cfg.ssl_mode = match v.as_str() {
+                            "disable" => SslMode::Disable,
+                            "require" => SslMode::Require,
+                            "verify-ca" => SslMode::VerifyCa,
+                            "verify-full" => SslMode::VerifyFull,
+                            "" => return Err(Error::Config("sslmode needs a value".into())),
+                            other => {
+                                return Err(Error::Config(format!(
+                                    "unknown sslmode {other:?}; use disable, require, verify-ca or verify-full"
+                                )))
+                            }
                         }
-                    },
+                    }
+                    "sslrootcert" => {
+                        if v.is_empty() {
+                            return Err(Error::Config("sslrootcert needs a value".into()));
+                        }
+                        cfg.ssl_root_cert = Some(v);
+                    }
                     "application_name" => cfg.application_name = Some(v),
                     "connect_timeout" => cfg.connect_timeout = Some(secs(&k, &v)?),
                     "read_timeout" => cfg.read_timeout = Some(secs(&k, &v)?),
@@ -311,7 +341,7 @@ mod tests {
         assert_eq!(c.user, "app");
         assert_eq!(c.password_bytes(), Some(&b"s:cret@x"[..]));
         assert_eq!(c.database, "sales db");
-        assert!(c.plaintext);
+        assert_eq!(c.ssl_mode, SslMode::Disable);
         assert_eq!(c.application_name.as_deref(), Some("etl"));
         assert_eq!(c.connect_timeout, Some(Duration::from_secs(3)));
         assert_eq!(
@@ -330,7 +360,11 @@ mod tests {
         let c = Config::from_url("postgresql://bob@/").unwrap();
         assert_eq!((c.host.as_str(), c.port), ("localhost", 5432));
         assert_eq!(c.database, "bob");
-        assert!(!c.plaintext, "plaintext must be explicit");
+        assert_eq!(
+            c.ssl_mode,
+            SslMode::VerifyFull,
+            "plaintext must be explicit"
+        );
         assert_eq!(c.auth, AuthPolicy::default());
         let c = Config::from_url("postgres://u@[::1]:5433/d").unwrap();
         assert_eq!((c.host.as_str(), c.port), ("::1", 5433));
@@ -340,13 +374,13 @@ mod tests {
     fn rejects_bad_input() {
         for bad in [
             "mysql://u@h/d",
-            "postgresql://h/d",                   // no user
-            "postgresql://u@h:0/d",               // port 0
-            "postgresql://u@h:99999/d",           // port range
-            "postgresql://u@h1,h2/d",             // multi host
-            "postgresql://u@h/d?sslmode=require", // TLS not implemented: must not silently downgrade
-            "postgresql://u@h/d?sslmode=verify-full",
-            "postgresql://u@h/d?sslrootcert=/etc/passwd", // nothing opens files
+            "postgresql://h/d",         // no user
+            "postgresql://u@h:0/d",     // port 0
+            "postgresql://u@h:99999/d", // port range
+            "postgresql://u@h1,h2/d",   // multi host
+            "postgresql://u@h/d?sslmode=sometimes",
+            "postgresql://u@h/d?sslmode=",
+            "postgresql://u@h/d?sslrootcert=",
             "postgresql://u@h/d?auth=md5",
             "postgresql://u@h/d?connect_timeout=0",
             "postgresql://u%zz@h/d",

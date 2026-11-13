@@ -1,8 +1,8 @@
 //! karez: database connectivity with Arrow-layout results.
 //!
-//! This is the first working slice (Milestone 0 spike): a **blocking PostgreSQL** client with no
-//! TLS. It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12**;
-//! versions 13, 15 and 18 were not run. Everything else in the plan (other databases, async, pool, exports) is not built.
+//! This is the first working slice (Milestone 0 spike): a **PostgreSQL** client with optional
+//! TLS (feature `tls` of `karez-pg`). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12**;
+//! versions 13, 15 and 18 were not run. Everything else in the plan (other databases, exports) is not built.
 //!
 //! ```no_run
 //! use karez::{Connection, Value};
