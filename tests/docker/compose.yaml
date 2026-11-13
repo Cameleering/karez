@@ -1,0 +1,46 @@
+# Throwaway PostgreSQL for karez's integration tests. Everything here is test-only.
+#
+#   docker compose -f tests/docker/compose.yaml up -d --wait
+#   KAREZ_TEST_PG=127.0.0.1:54316 cargo test -p karez-pg --test pg_integration -- --nocapture
+#   docker compose -f tests/docker/compose.yaml down -v      # removes the container and the volume
+#
+# Containers and volumes are named karez-test-*, the port is bound to 127.0.0.1 only.
+name: karez-test
+services:
+  pg16:
+    image: postgres:16
+    container_name: karez-test-pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - deadlock_timeout=500ms
+      - -c
+      - max_connections=100
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_PG16_PORT:-54316}:5432"
+    mem_limit: 1g
+    shm_size: 256m
+    volumes:
+      - ./pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - karez-test-pg16-data:/var/lib/postgresql/data
+    healthcheck:
+      # Healthy only once the init scripts have finished (the seed has been loaded).
+      test: ["CMD-SHELL", "psql -U postgres -d karez -tAc 'select 1 from seed_done' | grep -q 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 100
+volumes:
+  karez-test-pg16-data:
+    name: karez-test-pg16-data

@@ -607,6 +607,28 @@ impl Connection {
         }
     }
 
+    /// Drop a cached statement the server no longer accepts, so the next `prepare` starts afresh.
+    fn forget_by_name(&mut self, name: &str) {
+        for v in self.cache.values_mut() {
+            let before = v.len();
+            v.retain(|e| e.stmt.inner.name != name);
+            self.cache_len -= before - v.len();
+        }
+        self.cache.retain(|_, v| !v.is_empty());
+    }
+
+    fn after_prepared_failure(&mut self, stmt: &Statement, r: Result<()>) -> Result<()> {
+        if let Err(Error::Server(e)) = &r {
+            if is_stale(e) {
+                self.forget_by_name(&stmt.inner.name);
+                if e.sqlstate() == "0A000" && self.tx_status == TxStatus::Idle {
+                    let _ = self.close_statement(&stmt.inner.name);
+                }
+            }
+        }
+        r
+    }
+
     fn check_params(stmt: &Statement, params: &[Value<'_>]) -> Result<()> {
         if params.len() != stmt.inner.param_oids.len() {
             return Err(Error::Usage("wrong number of parameters for the statement"));
@@ -743,6 +765,7 @@ impl Connection {
         let r = self
             .check_supported(stmt)
             .and_then(|()| self.bind_and_wait(stmt, params));
+        let r = self.after_prepared_failure(stmt, r);
         self.track(r)?;
         Ok(self.cursor(stmt.clone()))
     }
@@ -751,9 +774,9 @@ impl Connection {
     pub fn execute_prepared(&mut self, stmt: &Statement, params: &[Value<'_>]) -> Result<u64> {
         self.check_usable()?;
         Connection::check_params(stmt, params)?;
-        let r = self
-            .bind_and_wait(stmt, params)
-            .and_then(|()| self.finish_execute());
+        let r = self.bind_and_wait(stmt, params);
+        let r = self.after_prepared_failure(stmt, r);
+        let r = r.and_then(|()| self.finish_execute());
         self.track(r)
     }
 
@@ -916,6 +939,7 @@ impl Cursor<'_> {
         }
         let conn = &mut *self.conn;
         let mut err: Option<ErrorFields> = None;
+        let mut bad_value: Option<String> = None;
         loop {
             let m = match conn.io.next_msg(&mut conn.side) {
                 Ok(m) => m,
@@ -926,14 +950,25 @@ impl Cursor<'_> {
             };
             match m {
                 BackendMessage::DataRow(d) => {
-                    if err.is_none() {
-                        if let Err(e) = self.stmt.inner.plan.decode_row(d.body, &mut conn.builder) {
-                            self.done = true;
-                            conn.broken = true; // unread messages remain; the stream is lost
-                            return Err(e.into());
-                        }
-                        if conn.builder.is_full() {
-                            return Ok(true);
+                    if err.is_none() && bad_value.is_none() {
+                        match self.stmt.inner.plan.decode_row(d.body, &mut conn.builder) {
+                            Ok(()) => {
+                                if conn.builder.is_full() {
+                                    return Ok(true);
+                                }
+                            }
+                            // A value this version cannot represent (for example a date beyond the
+                            // Unix-epoch range). The stream itself is intact: keep reading to
+                            // ReadyForQuery, then report it. The connection stays usable.
+                            Err(ProtoError::BadValue { oid, what }) => {
+                                bad_value = Some(format!("value of type oid {oid}: {what}"));
+                            }
+                            Err(ProtoError::Chunk(c)) => bad_value = Some(c.to_string()),
+                            Err(e) => {
+                                self.done = true;
+                                conn.broken = true; // unread messages remain; the stream is lost
+                                return Err(e.into());
+                            }
                         }
                     }
                 }
@@ -955,6 +990,10 @@ impl Cursor<'_> {
         if let Some(f) = err {
             conn.builder.reset();
             return Err(Error::Server(ServerError::new(f)));
+        }
+        if let Some(m) = bad_value {
+            conn.builder.reset();
+            return Err(Error::Value(m));
         }
         Ok(conn.builder.rows() > 0)
     }

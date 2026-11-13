@@ -65,6 +65,9 @@ pub enum Error {
         /// Type name, as the server knows it.
         type_name: String,
     },
+    /// A value in the result cannot be represented by this version (for example a date past
+    /// the Unix-epoch range). The connection stays usable.
+    Value(String),
     /// The server closed the connection.
     Closed,
     /// An earlier fatal error left the connection unusable.
@@ -109,6 +112,7 @@ impl fmt::Display for Error {
                 "column \"{column}\" has type {type_name} (oid {oid}), which this version of karez cannot decode; \
                  cast it in SQL (for example ::text) or set unsupported_types=text"
             ),
+            Error::Value(m) => write!(f, "value cannot be represented: {m}"),
             Error::Closed => write!(f, "connection closed by the server"),
             Error::Broken => write!(f, "connection is broken by an earlier error"),
             Error::Usage(m) => write!(f, "{m}"),

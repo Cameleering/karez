@@ -1,0 +1,5 @@
+* text=auto
+tests/docker/** text eol=lf
+*.sql text eol=lf
+*.conf text eol=lf
+*.sh text eol=lf
