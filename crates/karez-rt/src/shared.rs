@@ -12,7 +12,7 @@ use karez_chunk::Chunk;
 use karez_pg::{
     CancelToken, Config, Connection, Error as PgError, Notification, RawParts, UnsupportedTypes,
 };
-use karez_proto_pg::{frontend, ResultPlan, TxStatus, Value};
+use karez_proto_pg::{ResultPlan, TxStatus, Value};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
@@ -86,6 +86,9 @@ impl Slot {
 
 struct State {
     engine: Engine,
+    /// The TLS session over the socket, if any. Its cipher state is only touched under the lock.
+    #[cfg(feature = "tls")]
+    tls: Option<karez_pg::TlsConnection>,
     slots: HashMap<CommandId, Arc<Slot>>,
     pump: bool,
     writing: bool,
@@ -129,6 +132,61 @@ impl std::fmt::Debug for SharedConnection {
 fn wake_all(ws: Vec<Waker>) {
     for w in ws {
         w.wake();
+    }
+}
+
+impl State {
+    /// The bytes to put on the wire now: the engine's output, encrypted if the connection uses TLS
+    /// (plus whatever the TLS layer itself wants to send). Taking marks the commands as sent.
+    fn take_wire(&mut self) -> Vec<u8> {
+        let plain = self.engine.take_output();
+        #[cfg(feature = "tls")]
+        if let Some(t) = self.tls.as_mut() {
+            if !plain.is_empty() {
+                let _ = t.writer().write_all(&plain);
+            }
+            let mut wire = Vec::new();
+            while t.wants_write() {
+                if t.write_tls(&mut wire).is_err() {
+                    break;
+                }
+            }
+            return wire;
+        }
+        plain
+    }
+
+    /// Feed bytes read from the socket: decrypt first if the connection uses TLS.
+    fn feed_wire(&mut self, bytes: &[u8]) -> Result<()> {
+        #[cfg(feature = "tls")]
+        if let Some(t) = self.tls.as_mut() {
+            let tls_err = |e: String| Error::Pg(PgError::Tls(e));
+            let mut rd = bytes;
+            while !rd.is_empty() {
+                let n = t.read_tls(&mut rd).map_err(|e| tls_err(e.to_string()))?;
+                if n == 0 {
+                    break;
+                }
+                t.process_new_packets()
+                    .map_err(|e| tls_err(e.to_string()))?;
+                let mut tmp = [0u8; 16 * 1024];
+                loop {
+                    match t.reader().read(&mut tmp) {
+                        Ok(0) => {
+                            return Err(Error::Closed {
+                                retry_safe: false,
+                                reason: "the server closed the TLS session".into(),
+                            })
+                        }
+                        Ok(n) => self.engine.feed(&tmp[..n])?,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => return Err(tls_err(e.to_string())),
+                    }
+                }
+            }
+            return Ok(());
+        }
+        self.engine.feed(bytes)
     }
 }
 
@@ -205,7 +263,7 @@ impl Inner {
         }
         st.writing = true;
         loop {
-            let bytes = st.engine.take_output();
+            let bytes = st.take_wire();
             if bytes.is_empty() {
                 st.writing = false;
                 return;
@@ -276,10 +334,13 @@ impl Inner {
                 Ok(n) => {
                     let (wakers, err) = {
                         let mut st = self.state();
-                        let r = st.engine.feed(&buf[..n]);
+                        let r = st.feed_wire(&buf[..n]);
                         let w = Self::dispatch(&mut st);
                         (w, r.err())
                     };
+                    // TLS may have something to send (a key update, an alert).
+                    let st = self.state();
+                    self.flush(st);
                     self.cv.notify_all();
                     wake_all(wakers);
                     if let Some(e) = err {
@@ -348,6 +409,8 @@ impl SharedConnection {
     pub fn from_connection(conn: Connection, opts: Options) -> Result<SharedConnection> {
         let RawParts {
             stream,
+            #[cfg(feature = "tls")]
+            mut tls,
             tx_status,
             server_params,
             max_message,
@@ -360,6 +423,11 @@ impl SharedConnection {
         // but healthy query, so it is cleared here. Use command deadlines instead.
         stream.set_read_timeout(None).map_err(PgError::Io)?;
         let writer = stream.try_clone().map_err(PgError::Io)?;
+        #[cfg(feature = "tls")]
+        if let Some(t) = tls.as_mut() {
+            // The engine bounds what it queues; do not let the TLS layer refuse a write.
+            t.set_buffer_limit(None);
+        }
         let engine = Engine::new(
             max_message,
             statement_cache_size,
@@ -371,6 +439,8 @@ impl SharedConnection {
             inner: Arc::new(Inner {
                 st: Mutex::new(State {
                     engine,
+                    #[cfg(feature = "tls")]
+                    tls,
                     slots: HashMap::new(),
                     pump: false,
                     writing: false,
@@ -589,18 +659,27 @@ impl SharedConnection {
                     .0;
             }
         }
-        let mut bye = Vec::new();
-        frontend::terminate(&mut bye);
-        let _ = lock(&inner.writer).write_all(&bye);
+        {
+            let mut st = inner.state();
+            if st.dead.is_none() {
+                st.engine.terminate();
+                inner.flush(st);
+            }
+        }
         inner.die("the connection was closed");
     }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        let st = self.st.get_mut().unwrap_or_else(|e| e.into_inner());
+        let bye = if st.dead.is_none() {
+            st.engine.terminate();
+            st.take_wire()
+        } else {
+            Vec::new()
+        };
         let w = self.writer.get_mut().unwrap_or_else(|e| e.into_inner());
-        let mut bye = Vec::new();
-        frontend::terminate(&mut bye);
         let _ = w.write_all(&bye);
         let _ = w.shutdown(Shutdown::Both);
     }

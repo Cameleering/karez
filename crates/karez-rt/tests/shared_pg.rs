@@ -418,14 +418,120 @@ fn a_dropped_pending_does_not_desynchronise_the_stream() -> R {
 }
 
 #[cfg(feature = "tls")]
-#[test]
-fn a_tls_connection_cannot_be_shared_yet_and_says_so() -> R {
-    let addr = need_server!();
-    let mut cfg = cfg(&addr);
-    cfg.ssl_mode = karez_pg::SslMode::Require;
-    match SharedConnection::connect(&cfg, Options::default()) {
-        Err(Error::Pg(PgError::Usage(m))) => assert!(m.contains("TLS"), "{m}"),
-        other => panic!("{other:?}"),
+mod tls {
+    use super::*;
+    use karez_pg::SslMode;
+
+    fn tls_cfg(addr: &str) -> Config {
+        let port = addr.rsplit(':').next().unwrap();
+        let mut c = cfg(addr);
+        c.ssl_mode = SslMode::VerifyFull;
+        c.host = "localhost".into(); // the fixture certificate covers this name
+        c.ssl_root_cert = Some(std::env::var("KAREZ_TEST_CA").unwrap_or_else(|_| {
+            format!(
+                "{}/../../tests/docker/certs/ca-{port}.crt",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        }));
+        c
     }
-    Ok(())
+
+    fn encrypted(c: &SharedConnection) -> Result<bool, Error> {
+        let d = c.collect(
+            "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+            &[],
+        )?;
+        Ok(d.chunks[0].row(0).unwrap().get::<bool>(0).unwrap())
+    }
+
+    #[test]
+    fn a_shared_connection_over_tls_pipelines_streams_and_closes() -> R {
+        let addr = need_server!();
+        let c = SharedConnection::connect(&tls_cfg(&addr), Options::default())?;
+        assert!(encrypted(&c)?);
+        // 8 threads on the one encrypted session.
+        let mut hs = Vec::new();
+        for t in 0..8i64 {
+            let c = c.clone();
+            hs.push(thread::spawn(move || -> Result<i64, Error> {
+                let mut sum = 0;
+                for i in 0..100i64 {
+                    sum += one_i64(&c, "SELECT $1::int8 * 2", &[Value::i64(t * 1000 + i)])?;
+                }
+                Ok(sum)
+            }));
+        }
+        for (t, h) in hs.into_iter().enumerate() {
+            let t = t as i64;
+            assert_eq!(
+                h.join().unwrap()?,
+                (0..100).map(|i| (t * 1000 + i) * 2).sum::<i64>()
+            );
+        }
+        // 500 queued commands answered in order.
+        let pendings: Vec<_> = (0..500i64)
+            .map(|i| c.submit_collect("SELECT $1::int8", &[Value::i64(i)]))
+            .collect::<Result<_, _>>()?;
+        let got: Vec<i64> = pendings
+            .into_iter()
+            .map(|p| {
+                p.wait()
+                    .map(|d| d.chunks[0].row(0).unwrap().get::<i64>(0).unwrap())
+            })
+            .collect::<Result<_, _>>()?;
+        assert_eq!(got, (0..500).collect::<Vec<_>>());
+        // A large parameter (300 KB x 2 bytes each way), and a stream of 400,000 rows.
+        let big = "é日".repeat(150_000);
+        let d = c.collect("SELECT $1::text", &[Value::text(&big)])?;
+        assert_eq!(d.chunks[0].row(0).unwrap().get::<&str>(0).unwrap(), big);
+        let mut s = c.stream("SELECT id FROM audit_log", &[])?;
+        let mut rows = 0;
+        while let Some(ch) = s.next_chunk()? {
+            rows += ch.rows();
+        }
+        assert_eq!(rows, 400_000);
+        // An atomic pipeline.
+        let t = tag("tlspipe");
+        c.exec(&format!("CREATE TEMP TABLE {t} (id int PRIMARY KEY)"), &[])?;
+        let ins = format!("INSERT INTO {t} VALUES ($1)");
+        let res = c
+            .pipeline()
+            .exec(&ins, vec![OwnedValue::I32(1)])
+            .exec(&ins, vec![OwnedValue::I32(1)])
+            .run()?;
+        assert_eq!(res[1].as_ref().unwrap_err().sqlstate(), Some("23505"));
+        c.close();
+        let e = c.exec("SELECT 1", &[]).unwrap_err();
+        assert!(
+            matches!(
+                e,
+                Error::Closed {
+                    retry_safe: true,
+                    ..
+                }
+            ),
+            "{e}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_killed_backend_over_tls_fails_commands_as_not_retry_safe() -> R {
+        let addr = need_server!();
+        let c = SharedConnection::connect(&tls_cfg(&addr), Options::default())?;
+        let pid = one_i64(&c, "SELECT pg_backend_pid()::int8", &[])?;
+        let running = c.submit_collect("SELECT pg_sleep(30)", &[])?;
+        thread::sleep(Duration::from_millis(200));
+        let mut killer = Connection::connect(&super::cfg(&addr))?;
+        {
+            let mut cur = killer.query(
+                "SELECT pg_terminate_backend($1::int)",
+                &[Value::i32(pid as i32)],
+            )?;
+            while cur.next()?.is_some() {}
+        }
+        let e = running.wait().unwrap_err();
+        assert!(!e.retry_safe(), "{e}");
+        Ok(())
+    }
 }

@@ -29,4 +29,6 @@ pub use karez_chunk::{Chunk, Column, ColumnType, Date, Field, RowRef, Timestamp}
 pub use karez_proto_pg::types::oid;
 pub use karez_proto_pg::{ErrorFields, TxStatus, Value};
 pub use pool::{Pool, PooledConnection};
+#[cfg(feature = "tls")]
+pub use rustls::ClientConnection as TlsConnection;
 pub use tx::{Isolation, Savepoint, Transaction};

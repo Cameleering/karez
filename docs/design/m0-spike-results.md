@@ -39,10 +39,10 @@ Counts from the final run (below). "Needs a server" means the test skips loudly 
 | `karez-chunk` | 16 unit (randomised round trips with the in-repo PRNG, rollback of partial rows, corrupt-buffer detection) | no |
 | `karez-proto-pg` | 37 unit, 4 integration in `tests/split_decoding.rs` | no |
 | `karez-pg` | 4 unit (URL parsing, ssl options), 8 in `tests/mock_server.rs` (scripted in-process server), 42 in `tests/pg_integration.rs` | the 42 yes |
-| `karez-rt` | 6 engine tests (scripted server bytes), 11 in `tests/shared_pg.rs` | the 11 yes |
+| `karez-rt` | 6 engine tests (scripted server bytes), 11 in `tests/shared_pg.rs` (13 with `tls`) | the 11 yes |
 | `karez` | 1 doc test (compiled, not run: `no_run`) | no |
 | total | 129 | 53 |
-| with `--features tls` | 133 | 57 |
+| with `--features tls` | 134 | 58 |
 
 What the test families check:
 
@@ -144,7 +144,7 @@ from this table. The plan's benchmark method (open-loop p99, Linux machines, bas
 
 ## Known limits
 
-- **TLS is an optional feature** (`tls`, rustls with the ring provider; see [tls-decision.md](tls-decision.md)). With it off there are no dependencies and a connection needs an explicit `sslmode=disable`. With it on the default is `verify-full`. Verified on 14.25, 16.15 and 17.12 with a throwaway CA: `verify-full`, `verify-ca` and `require` connect and `pg_stat_ssl` shows the session encrypted (TLS 1.3); a CA the client does not trust is refused; a missing or empty root file is a clear error; a 600 KB parameter, a 100,000-row stream, a transaction, `COPY`, `LISTEN`/`NOTIFY` and small batches work over TLS. **Not supported over TLS yet:** sharing the connection in `karez-rt` (it needs a second handle on the socket) and `execute_many` batches over 64 KiB (a clear error). The fixture certificate covers `localhost` and `karez.test` but not the address 127.0.0.1, so a name mismatch is tested too: `verify-full` by `localhost` connects, by 127.0.0.1 it is refused with "not valid for", and `verify-ca` and `require` accept it. **Not tested:** client certificates, `SCRAM-SHA-256-PLUS` (not offered), CRL and OCSP. Cancel requests use a fresh plaintext connection.
+- **TLS is an optional feature** (`tls`, rustls with the ring provider; see [tls-decision.md](tls-decision.md)). With it off there are no dependencies and a connection needs an explicit `sslmode=disable`. With it on the default is `verify-full`. Verified on 14.25, 16.15 and 17.12 with a throwaway CA: `verify-full`, `verify-ca` and `require` connect and `pg_stat_ssl` shows the session encrypted (TLS 1.3); a CA the client does not trust is refused; a missing or empty root file is a clear error; a 600 KB parameter, a 100,000-row stream, a transaction, `COPY`, `LISTEN`/`NOTIFY` and small batches work over TLS. **Not supported over TLS:** `execute_many` batches over 64 KiB on the blocking `Connection` (a clear error). The shared `karez-rt` connection works over TLS (8 threads, 500 queued commands, a 600 KB parameter, a 400,000-row stream, an atomic pipeline, graceful close and a killed backend, on 14.25, 16.15 and 17.12). The fixture certificate covers `localhost` and `karez.test` but not the address 127.0.0.1, so a name mismatch is tested too: `verify-full` by `localhost` connects, by 127.0.0.1 it is refused with "not valid for", and `verify-ca` and `require` accept it. **Not tested:** client certificates, `SCRAM-SHA-256-PLUS` (not offered), CRL and OCSP. Cancel requests use a fresh plaintext connection.
 - **Three server versions.** Verified on PostgreSQL 14.25, 16.15 and 17.12 (the owner confirmed pulling the 14 and 17 images). 13, 15 and 18 were not run, so the plan's 13 to 18 range is still partly a target.
 - **Timestamp range.** Values are stored as microseconds since 1970 in an `i64`, the Arrow layout. PostgreSQL timestamps after about year 294246 cannot be represented and give `Error::Value`; the connection stays usable. This follows from the column format, not from a missing feature. The largest PostgreSQL date does fit. `infinity` and `-infinity` are stored as `i32`/`i64` `MAX`/`MIN`, and a finite value that would collide with them is an error.
 - **Types without a decoder.** `money`, geometric types, ranges and multiranges, `tsvector`, `hstore`, composite types, arrays of enums, arrays of dates and timestamps, domains over unsupported types and every other type not listed above fail the query with `Error::UnsupportedType` naming the type, or are read as server text with `unsupported_types=text`. `numeric`, `interval` and arrays arrive as strings, not as Arrow decimal, interval or list columns.
@@ -160,7 +160,7 @@ from this table. The plan's benchmark method (open-loop p99, Linux machines, bas
 ## Final run (2026-11-13)
 
 Quoted from the run that produced the counts above; the commands are the ones listed under
-"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), also with `--features karez-pg/tls,karez-rt/tls` (133 tests, TLS on 14.25, 16.15 and 17.12), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
+"How to reproduce". The same suite also passed with `cargo +1.85 test --workspace` (rustc 1.85.1), also with `--features karez-pg/tls,karez-rt/tls` (134 tests, TLS on 14.25, 16.15 and 17.12), and the 39 real-server tests pass on PostgreSQL 14.25 (port 54314) and 17.12 (port 54317), started with `docker compose -f tests/docker/compose.yaml --profile pg14 up -d --wait pg14` (and `pg17`).
 
 ```text
 cargo fmt --all --check            -> clean

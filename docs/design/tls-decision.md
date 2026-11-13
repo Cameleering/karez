@@ -32,8 +32,9 @@ feature off, karez has no dependencies. With it on, karez-pg depends on:
 
 ## Limits (all stated in the results note)
 
-- Not supported over TLS yet: sharing the connection in `karez-rt` (it needs a second handle on the socket),
-  and `execute_many` batches over 64 KiB (a clear error).
+- Not supported over TLS: `execute_many` batches over 64 KiB on the blocking `Connection` (a clear error;
+  it needs a second handle on the socket). The shared `karez-rt` connection does work over TLS: the rustls
+  state sits under the same lock as the engine, and the reader thread reads ciphertext only.
 - Cancel requests go over a fresh plaintext connection, as PostgreSQL accepts before 17.
 - No client certificates, no `SCRAM-SHA-256-PLUS` channel binding, no CRL or OCSP.
 - The dependency tree is rustls, rustls-webpki, ring, webpki-roots and their small helpers; it is audited

@@ -319,8 +319,11 @@ impl CancelToken {
 /// An established connection taken apart: see [`Connection::into_raw_parts`].
 #[derive(Debug)]
 pub struct RawParts {
-    /// The connected, authenticated socket.
+    /// The connected, authenticated socket (ciphertext, if `tls` is set).
     pub stream: TcpStream,
+    /// The TLS session over `stream`, if the connection uses TLS.
+    #[cfg(feature = "tls")]
+    pub tls: Option<rustls::ClientConnection>,
     /// Backend process id.
     pub process_id: i32,
     /// Transaction state at the last ReadyForQuery.
@@ -545,9 +548,17 @@ impl Connection {
         if self.io.reader.buffered() != 0 {
             return Err(Error::Usage("the connection has unread bytes buffered"));
         }
+        #[cfg(feature = "tls")]
+        let (stream, tls) = match self.io.stream.take_tls() {
+            Some((sock, conn)) => (sock, Some(conn)),
+            None => (self.io.stream.try_clone_plain()?, None),
+        };
+        #[cfg(not(feature = "tls"))]
         let stream = self.io.stream.try_clone_plain()?;
         let parts = RawParts {
             stream,
+            #[cfg(feature = "tls")]
+            tls,
             process_id: self.process_id,
             tx_status: self.tx_status,
             server_params: self.side.params.clone(),

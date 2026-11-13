@@ -156,11 +156,16 @@ planned default for async). A pooled connection returned inside a transaction is
 
 ## 10. TLS
 
-Built for the blocking `Connection` (decision record: [tls-decision.md](tls-decision.md)), **not** for the shared
-connection yet: `SharedConnection::connect` over TLS fails with a clear error, because the writer and the pump
-use two handles on one socket and rustls keeps one cipher state. The planned fix is to put the rustls
-`ClientConnection` inside the engine (it is sans-io: bytes in, bytes out), so the single mutex serialises the
-cipher state and the pump reads ciphertext only. That is the next TLS step.
+Built (decision record: [tls-decision.md](tls-decision.md)). The blocking `Connection` finishes the rustls
+handshake, then `into_raw_parts` hands the socket and the rustls `ClientConnection` to the shared connection.
+The TLS state lives in the same mutex as the engine, so the cipher state is only touched under the lock:
+
+- writing: the writer role takes the engine's plaintext, encrypts it under the lock, and writes the
+  ciphertext outside the lock, as for plain TCP;
+- reading: the reader thread reads ciphertext into its own buffer, then under the lock feeds it to rustls
+  and the decrypted bytes to the engine; anything rustls wants to send (a key update, an alert) is flushed
+  right after;
+- close: Terminate goes through the same path, so it is encrypted.
 
 ## 11. Tests
 

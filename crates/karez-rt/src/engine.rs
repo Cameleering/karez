@@ -378,6 +378,11 @@ impl Engine {
         Ok(ids)
     }
 
+    /// Queue the Terminate message (not a command: nothing answers it).
+    pub fn terminate(&mut self) {
+        frontend::terminate(&mut self.core.out);
+    }
+
     /// Fail everything in flight because the connection is gone. Commands whose bytes were never
     /// handed out are reported as safe to retry.
     pub fn fail_all(&mut self, reason: &str) {

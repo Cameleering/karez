@@ -9,6 +9,9 @@ use std::time::Duration;
 
 pub(crate) enum Transport {
     Plain(TcpStream),
+    /// The socket was handed to another layer (`into_raw_parts`); nothing may use it again.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    Taken,
     #[cfg(feature = "tls")]
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
 }
@@ -73,16 +76,33 @@ impl Transport {
         ))
     }
 
+    /// Take the TLS state and the socket out, leaving the transport unusable. `None` (and the
+    /// transport untouched) if this is a plain connection.
+    #[cfg(feature = "tls")]
+    pub(crate) fn take_tls(&mut self) -> Option<(TcpStream, rustls::ClientConnection)> {
+        match std::mem::replace(self, Transport::Taken) {
+            Transport::Tls(b) => {
+                let s = *b;
+                Some((s.sock, s.conn))
+            }
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+
     fn tcp(&self) -> &TcpStream {
         match self {
             Transport::Plain(s) => s,
+            Transport::Taken => unreachable!("the socket was taken"),
             #[cfg(feature = "tls")]
             Transport::Tls(s) => &s.sock,
         }
     }
 
     pub(crate) fn is_tls(&self) -> bool {
-        !matches!(self, Transport::Plain(_))
+        !matches!(self, Transport::Plain(_) | Transport::Taken)
     }
 
     pub(crate) fn set_read_timeout(&self, d: Option<Duration>) -> std::io::Result<()> {
@@ -98,6 +118,7 @@ impl Transport {
     pub(crate) fn try_clone_plain(&self) -> Result<TcpStream> {
         match self {
             Transport::Plain(s) => Ok(s.try_clone()?),
+            Transport::Taken => Err(Error::Usage("the socket was taken")),
             #[cfg(feature = "tls")]
             Transport::Tls(_) => Err(Error::Usage(
                 "this needs a second handle on the socket, which a TLS connection cannot give",
@@ -108,6 +129,7 @@ impl Transport {
     pub(crate) fn shutdown(&mut self, how: Shutdown) -> std::io::Result<()> {
         match self {
             Transport::Plain(s) => s.shutdown(how),
+            Transport::Taken => Ok(()),
             #[cfg(feature = "tls")]
             Transport::Tls(s) => {
                 s.conn.send_close_notify();
@@ -122,6 +144,7 @@ impl Read for Transport {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Transport::Plain(s) => s.read(buf),
+            Transport::Taken => Err(std::io::Error::other("the socket was taken")),
             #[cfg(feature = "tls")]
             Transport::Tls(s) => s.read(buf),
         }
@@ -132,6 +155,7 @@ impl Write for Transport {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Transport::Plain(s) => s.write(buf),
+            Transport::Taken => Err(std::io::Error::other("the socket was taken")),
             #[cfg(feature = "tls")]
             Transport::Tls(s) => s.write(buf),
         }
@@ -140,6 +164,7 @@ impl Write for Transport {
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Transport::Plain(s) => s.flush(),
+            Transport::Taken => Ok(()),
             #[cfg(feature = "tls")]
             Transport::Tls(s) => s.flush(),
         }
