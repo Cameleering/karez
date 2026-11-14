@@ -68,7 +68,7 @@ case "${1:-status}" in
     pids=()
     while read -r name pub priv status _; do
       ( rscp "$tarball" "root@$pub:/root/karez-tree.tar.gz" >/dev/null &&
-        rssh "$name" "mkdir -p /root/karez && tar xzf /root/karez-tree.tar.gz -C /root/karez" &&
+        rssh "$name" "mkdir -p /root/karez && tar xzf /root/karez-tree.tar.gz -C /root/karez && find /root/karez/bench -type f \( -name '*.sh' -o -name '*.env' -o -name '*.py' -o -name '*.json' \) -exec sed -i 's/\r\$//' {} +" &&
         case "$name" in
           *-db) rssh "$name" "bash /root/karez/bench/cloud/setup-db.sh $priv" ;;
           *-cl) rssh "$name" "bash /root/karez/bench/cloud/setup-client.sh" ;;
