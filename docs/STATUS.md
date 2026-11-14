@@ -1,12 +1,12 @@
 # karez status
 
-_Updated 2026-11-13. Read this first, then [plan.md](design/plan.md)._
+_Updated 2026-11-14. Read this first, then [plan.md](design/plan.md)._
 
 ## State
 
 karez is in the **design stage with a first working slice** on the branch `claude/m0-spike-1bacb7`
 (local, not pushed, not merged): a PostgreSQL client with optional TLS. It has no release and
-**no measurement**. It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
+**one reduced measurement** (one lane per competitor, 2026-11-14; it supports no speed claim). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
 versions 13, 15 and 18 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
 tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-results.md).
 
@@ -17,7 +17,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 | Name and identity | decided 2026-11-09: **karez**, in the Cameleer family; Apache-2.0; a fresh repository with no rdbc history |
 | Brand | K mark, icon set generator and assets are built; the logo and social preview are Gemini drafts that need small fixes ([brand/gemini-prompts.md](brand/gemini-prompts.md)) |
 | Repo metadata | About line and 20 topics set; README, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, `context7.json`, `CITATION.cff` and community files written |
-| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 76 tests that run without a server and 57 that need one (138 and 62 with `tls`, the latter counting tests on tokio); blocking client with pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches, plus a shared pipelined connection with futures (`karez-rt`); optional TLS (`tls` feature); no benchmarks |
+| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 76 tests that run without a server and 57 that need one (138 and 62 with `tls`, the latter counting tests on tokio); blocking client with pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches, plus a shared pipelined connection with futures (`karez-rt`); optional TLS (`tls` feature); benchmark harness in `bench/` (built and tested in WSL; one reduced campaign ran on DigitalOcean on 2026-11-14, one lane per competitor, see [bench/README.md](../bench/README.md) "Campaign log"; no speed claim follows from it) |
 
 ## Decisions already made
 
@@ -61,9 +61,8 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - [x] Run the same suite on PostgreSQL 14.25 and 17.12 (all 39 real-server tests pass on both). 13, 15 and 18 are not run.
 - [x] TLS (`sslmode=verify-full` default, `tls` feature, rustls). The shared connection works over TLS.
 - [x] `karez-rt`: shared pipelined connection with futures (built; see [design/karez-rt.md](design/karez-rt.md) section 13 for the gaps).
-- [ ] The `bench/` load generator.
-- [ ] Build the benchmark harness first, and baseline the competitors listed in plan section 6.3
-      on two machines before making any speed claim.
+- [x] The `bench/` load generator: open loop, SLO-throughput search, adapters for 16 PostgreSQL clients (Rust, Python, Go, C, Java), bulk scenarios S4 to S6, DigitalOcean scripts. Tested in WSL on PostgreSQL 17 and 18, plain and TLS. See [bench/README.md](../bench/README.md).
+- [ ] Run the full campaign on DigitalOcean (three rounds, clients rotated across lanes, n per client above 1). The first attempt lost its databases to the kernel OOM killer; only the reduced `lean` round ran. Fix known: huge pages on the database hosts. Budget about 6 hours per full round, so plan one round per session or a smaller client set.
 - [ ] Acquire the two primary texts the research could not read (JDBC 4.3 chapter 6, ISO
       9075-3:2023) before freezing the parity checklist.
 - [ ] Resolve the unverified items in research.md section 13 before quoting them outside the repo.

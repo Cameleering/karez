@@ -4,7 +4,7 @@ The harness that measures karez against the PostgreSQL clients listed in
 [plan.md section 6.3](../docs/design/plan.md). It follows the plan's method (section 6) and the
 campaign design of the simoom project ([bench/cloud](cloud) is adapted from simoom's scripts).
 
-**Status (2026-11-14): built and tested on one machine in WSL; no campaign has run** (the section "Campaign log" at the end says if that changed). The numbers
+**Status (2026-11-14): built and tested in WSL; one reduced campaign has run on DigitalOcean** (the section "Campaign log" at the end says what it covers and what it does not). The numbers
 anyone may quote come from the campaign on DigitalOcean, not from WSL. The WSL runs only prove that
 every adapter works. They share one CPU between the client and the database and say nothing about
 speed.
@@ -188,4 +188,46 @@ bash bench/cloud/ctl.sh down            # final pull, delete droplets and key
 
 ## Campaign log
 
-None yet.
+### 2026-11-14, campaign 1 (aborted) and the lean round
+
+Results: `bench/results/2026-11-14-lean/` (raw cells and `REPORT.md`). Setup: three lanes, each a database droplet and a
+client droplet, DigitalOcean `c-4` (4 vCPU, 8 GB, Intel Xeon Platinum 8280) in `blr1`, PostgreSQL 18.7 with TLS
+available, private network between the two droplets. `[measured here, 2026-11-14]`.
+
+What happened, in order:
+
+1. The smoke round passed on all three lanes.
+2. The first real round (profile `full`) was cut short. The kernel's out-of-memory handler killed PostgreSQL on every
+   database host (04:22Z, 05:05Z and 05:10Z) because up to about 1000 backends each mapped the 2 GB shared buffer with
+   4 kB pages. The clients kept running against dead servers. Everything from those moments is invalid. The partial raw
+   data is kept in `bench/results/2026-11-14-campaign1-aborted-oom/` and is not used.
+3. Fix: huge pages on the database hosts (`vm.nr_hugepages=1300`, `huge_pages = on`). Nothing else in the database
+   configuration changed. No further kill happened.
+4. The time left did not fit a full round, let alone three. The profile `lean` (run.py) was run once: 11
+   configurations, 3 repeats, 10 s runs, no 256-connection mix, S6 with 3M rows. **One lane per client, one round.**
+   There was no rotation of clients across lanes and no repeat rounds, so every competitor row except the two karez rows
+   has n=1. The karez rows have n=3 (one per lane). The droplets lived 657 minutes and were deleted by the campaign script.
+
+What the lean round does not cover or cannot support:
+
+- Lane 3 was still in its bulk phase when the time limit hit: S8 is missing for sqlx, sqlx-tuned, pgjdbc-tuned and
+  r2dbc-postgresql; pgjdbc (defaults) failed S8 as expected (it buffers the whole result). Why the sqlx S8 pass took more
+  than an hour is not understood.
+- R3 (aggregate over 13M rows) met no p99 bound for any client, and R4 (mix with 5% aggregates) is dominated by that
+  query. Neither tells the clients apart.
+- Many rows are at the same rate (for example 46,930 or 32,000 per second): the search moves in steps and the database
+  host is likely the limit there. Differences under about 5% are inside one step.
+- One run per client per lane is noisy at one connection: tokio-postgres and deadpool-postgres share a driver and gave
+  5,000 and 8,000 per second in S2 at one connection on different lanes. Read the per-lane ratio column and treat n=1 as
+  indicative only.
+- The pgbench cross-check (`crosscheck.py`) was not run on the droplets.
+- No client other than the karez rows ran twice, so no confidence interval exists.
+
+Reading the tables in `REPORT.md` as they are: karez-blocking is level with the best clients in S1/S2/R1/R2 at 64 and 512
+connections (differences within one step), ahead of pgjdbc, sqlx, vertx-pg-client, r2dbc-postgresql, asyncpg and
+psycopg3 there, and not ahead of tokio-postgres, libpq, pgx or deadpool-postgres. In the bulk scans S4 it is level with
+pgx and sqlx; in S5 sqlx (205k rows/s), asyncpg and libpq are ahead of karez (123k); in S6 and S8 karez is first by a
+small margin. These are single-lane figures and not a ranking; no speed claim for karez follows from them.
+
+
+The raw cells are stored gzipped (`cells.jsonl.gz`); gunzip them next to the file to rerun `python bench/report.py bench/results/2026-11-14-lean`.

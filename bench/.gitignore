@@ -4,3 +4,4 @@ target-cloud/
 karez-bench-go
 libpq_adapter
 __pycache__/
+bench/results/**/cells.jsonl
