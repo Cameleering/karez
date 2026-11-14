@@ -4,7 +4,7 @@ The harness that measures karez against the PostgreSQL clients listed in
 [plan.md section 6.3](../docs/design/plan.md). It follows the plan's method (section 6) and the
 campaign design of the simoom project ([bench/cloud](cloud) is adapted from simoom's scripts).
 
-**Status (2026-11-14): built and tested on one machine in WSL; no campaign has run.** The numbers
+**Status (2026-11-14): built and tested on one machine in WSL; no campaign has run** (the section "Campaign log" at the end says if that changed). The numbers
 anyone may quote come from the campaign on DigitalOcean, not from WSL. The WSL runs only prove that
 every adapter works. They share one CPU between the client and the database and say nothing about
 speed.
@@ -18,6 +18,10 @@ speed.
 | S3 | 12-row select with a string column (Fortunes-like) | open loop |
 | S7 | S2 over TLS (`sslmode=verify-full`) | open loop, `--url-tls` |
 | S8 | S2 at 512 workers with a pool of 32 | open loop, `--pool 32` |
+| R1 | **real data**: point select by primary key on `taxi_trips`, 17 columns, NULLs, two timestamps | open loop |
+| R2 | real data: 100 consecutive rows by primary-key range | open loop |
+| R3 | real data: aggregate (`count`, `max`, `max`) over one pickup zone, server-bound | open loop |
+| R4 | real data: mixed workload, 80% R1, 15% R2, 5% R3, per request at random | open loop |
 | S4 | scan of 1,000,000 rows x 10 columns (karez: row view and chunk path) | closed loop, `run.py bulk` |
 | S5 | batch insert of 100,000 rows, prepared, one transaction | closed loop; each client's own best path |
 | S6 | COPY of 10,000,000 rows (text, binary where the client's fast path is binary) | closed loop |
@@ -28,6 +32,23 @@ p99 latency stays under the scenario's bound (S1, S2, S7: 2 ms; S3: 3 ms; fixed 
 the same for every client). It then runs `repeats` full-length runs at that rate and reports the
 median p50, p99, p99.9, CPU-seconds per million requests and peak RSS. A configuration whose median
 p99 is over the bound is stepped down 5% until it passes. Nothing is best-of-N.
+
+## The real dataset
+
+`taxi_trips` is loaded by [data/load_taxi.py](data/load_taxi.py) from the public NYC Taxi and Limousine
+Commission yellow-taxi trip records (monthly parquet files from
+https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page): January to April 2024, about 13 million
+rows, 17 columns (int2, int4, int8, float8, text, two `timestamp`), with the source's NULLs and its odd
+values (negative fares, 2002 timestamps) kept. `trip_id` numbers the rows 1..N in file order, with a
+primary key and an index on `pu`. The data is downloaded on the database droplets; it is not stored in
+this repository. S1 to S8 use the synthetic tables of [sql/schema.sql](sql/schema.sql); R1 to R4 use the
+real table, so every client decodes the same real values, NULLs and timestamps.
+
+**Correctness check before any number is taken:** `python3 run.py verify` runs every client for one
+worker on the same request sequence (every adapter uses the same generator and seed) and compares the
+checksum of all values read. On PostgreSQL 18 in WSL, with 2,964,624 rows of January 2024 loaded, all 15
+clients produce identical checksums on S2, S3, R1, R2, R3 and R4 (2026-11-14). The campaign runs
+`verify` first on every lane and keeps its output (`verify.txt`).
 
 ## Method (what makes the numbers comparable)
 
@@ -163,3 +184,7 @@ bash bench/cloud/ctl.sh down            # final pull, delete droplets and key
    next to a link to the full table, with its tag, lane count and the losses stated in the same
    place. No headline on the About line or in images. "Fastest" and similar words are never
    written; the table says it or it does not.
+
+## Campaign log
+
+None yet.

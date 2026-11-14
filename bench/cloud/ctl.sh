@@ -82,6 +82,7 @@ case "${1:-status}" in
     for l in 1 2 3; do
       rscp "root@$(ip_of karez-bench-l$l-db):/root/ca.crt" "$STATE/ca-l$l.crt" >/dev/null &&
       rscp "$STATE/ca-l$l.crt" "root@$(ip_of karez-bench-l$l-cl):/root/ca.crt" >/dev/null
+      rssh "karez-bench-l$l-db" "cat /root/taxi_rows" | rssh "karez-bench-l$l-cl" "cat > /root/taxi_rows"
       rssh "karez-bench-l$l-db" "cat /root/bench-pw" | rssh "karez-bench-l$l-cl" "cat > /root/bench-pw && chmod 600 /root/bench-pw"
       # the client samples its database host's CPU over ssh: the bench key (throwaway, deleted with the droplets)
       rscp "$KEY" "root@$(ip_of karez-bench-l$l-cl):/root/.ssh/id_ed25519" >/dev/null

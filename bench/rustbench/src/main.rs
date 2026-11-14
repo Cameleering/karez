@@ -23,6 +23,14 @@ pub enum Scenario {
     S4,
     S5,
     S6,
+    /// NYC taxi data: point select by primary key (17 columns, NULLs, timestamps).
+    R1,
+    /// 100 consecutive rows by primary key range.
+    R2,
+    /// Aggregate over one pickup zone.
+    R3,
+    /// Mixed workload: 80% R1, 15% R2, 5% R3.
+    R4,
 }
 
 impl Scenario {
@@ -34,6 +42,10 @@ impl Scenario {
             "s4" => Scenario::S4,
             "s5" => Scenario::S5,
             "s6" => Scenario::S6,
+            "r1" => Scenario::R1,
+            "r2" => Scenario::R2,
+            "r3" => Scenario::R3,
+            "r4" => Scenario::R4,
             other => die(&format!("unknown scenario {other} (s1 to s6)")),
         }
     }
@@ -44,16 +56,70 @@ impl Scenario {
                 "SELECT id, k1, k2, flag, score, name, note, ref, tag, big FROM bench_item WHERE id = $1"
             }
             Scenario::S3 => "SELECT id, message FROM bench_fortune",
+            Scenario::R1 => TAXI_COLS_SQL_R1,
+            Scenario::R2 => TAXI_COLS_SQL_R2,
+            Scenario::R3 => "SELECT pu, count(*), max(fare), max(total) FROM taxi_trips WHERE pu = $1 GROUP BY pu",
+            Scenario::R4 => TAXI_COLS_SQL_R1,
             _ => bulk::S4_SQL,
         }
     }
     pub fn rows(self) -> usize {
         match self {
             Scenario::S3 => 12,
+            Scenario::R2 => 100,
             _ => 1,
         }
     }
+    /// Does the number of rows returned fit? (R3 returns no row for a zone without trips.)
+    pub fn rows_ok(self, n: usize) -> bool {
+        match self {
+            Scenario::R3 => n <= 1,
+            other => n == other.rows(),
+        }
+    }
+    pub fn has_param(self) -> bool {
+        matches!(self, Scenario::S2 | Scenario::R1 | Scenario::R2 | Scenario::R3 | Scenario::R4)
+    }
+    /// R3 binds an int4 (the zone), everything else an int8.
+    pub fn param_i32(self) -> bool {
+        self == Scenario::R3
+    }
+    /// The statements a scenario uses (R4 mixes three).
+    pub fn kinds(self) -> Vec<Scenario> {
+        match self {
+            Scenario::R4 => vec![Scenario::R1, Scenario::R2, Scenario::R3],
+            o => vec![o],
+        }
+    }
+    /// One request: the concrete query and its parameter.
+    pub fn request(self, rng: &mut clients::Rng, cfg: &Cfg) -> (Scenario, i64) {
+        let q = if self == Scenario::R4 {
+            match rng.next(100) {
+                1..=80 => Scenario::R1,
+                81..=95 => Scenario::R2,
+                _ => Scenario::R3,
+            }
+        } else {
+            self
+        };
+        let id = match q {
+            Scenario::S2 => rng.next(cfg.rows),
+            Scenario::R1 => rng.next(cfg.taxi_rows),
+            Scenario::R2 => rng.next((cfg.taxi_rows - 99).max(1)),
+            Scenario::R3 => rng.next(260),
+            _ => 0,
+        };
+        (q, id)
+    }
 }
+
+const TAXI_COLS: &str = "trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion";
+const TAXI_COLS_SQL_R1: &str = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips WHERE trip_id = $1";
+const TAXI_COLS_SQL_R2: &str = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips WHERE trip_id BETWEEN $1 AND $1 + 99 ORDER BY trip_id";
+#[allow(dead_code)]
+pub const TAXI_SCAN_SQL: &str = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips";
+#[allow(dead_code)]
+const _: &str = TAXI_COLS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -81,6 +147,8 @@ pub struct Cfg {
     pub per_conn_queue: bool,
     pub root_cert: Option<String>,
     pub rows: i64,
+    /// Rows of `taxi_trips` (R scenarios), from the loader.
+    pub taxi_rows: i64,
     /// Bulk scenarios: timed passes, and the row count of S5 and S6.
     pub repeats: usize,
     pub bulk_rows: i64,
@@ -128,6 +196,7 @@ fn parse_args() -> Cfg {
         per_conn_queue: get("dispatch").as_deref() == Some("perconn"),
         root_cert: get("root-cert"),
         rows: num("rows", 100_000.0) as i64,
+        taxi_rows: num("taxi-rows", 1_000_000.0) as i64,
         repeats: num("repeats", 5.0) as usize,
         bulk_rows: num("bulk-rows", 100_000.0) as i64,
     }

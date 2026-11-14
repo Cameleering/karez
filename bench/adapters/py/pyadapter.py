@@ -6,14 +6,60 @@ that sleeps to the fixed schedule, so the loop's timer resolution does not blur 
 Adapter rules: connections open and statements prepared before the clock starts; every column of
 every row is read in its native Python type and folded into the checksum; row count (and for S2 the
 id) is checked; latency is measured from the intended start."""
-import asyncio, json, os, sys, threading, time
+import asyncio, json, os, struct, sys, threading, time
 
 SQL = {
     "s1": "SELECT 1",
     "s2": "SELECT id, k1, k2, flag, score, name, note, ref, tag, big FROM bench_item WHERE id = {p}",
     "s3": "SELECT id, message FROM bench_fortune",
 }
-ROWS = {"s1": 1, "s2": 1, "s3": 12}
+TAXI = "trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion"
+SQL["r1"] = f"SELECT {TAXI} FROM taxi_trips WHERE trip_id = {{p}}"
+SQL["r2"] = f"SELECT {TAXI} FROM taxi_trips WHERE trip_id BETWEEN {{p}} AND {{q}} + 99 ORDER BY trip_id"
+SQL["r3"] = "SELECT pu, count(*), max(fare), max(total) FROM taxi_trips WHERE pu = {p} GROUP BY pu"
+ROWS = {"s1": 1, "s2": 1, "s3": 12, "r1": 1, "r2": 100, "r3": 1}
+HAS_PARAM = {"s2", "r1", "r2", "r3"}
+
+
+def kinds(sc):
+    return ["r1", "r2", "r3"] if sc == "r4" else [sc]
+
+
+def request(sc, rng, cfg):
+    """One request: the concrete query and its parameter."""
+    if sc == "r4":
+        v = rng.next(100)
+        sc = "r1" if v <= 80 else ("r2" if v <= 95 else "r3")
+    if sc == "s2":
+        return sc, rng.next(cfg["rows"])
+    if sc == "r1":
+        return sc, rng.next(cfg["taxi_rows"])
+    if sc == "r2":
+        return sc, rng.next(max(1, cfg["taxi_rows"] - 99))
+    if sc == "r3":
+        return sc, rng.next(260)
+    return sc, 0
+
+
+def sql_asyncpg(sc):
+    return SQL[sc].replace("{p}", "$1").replace("{q}", "$1")
+
+
+def sql_psycopg(sc):
+    return SQL[sc].replace("{p}", "%s").replace("{q}", "%s")
+
+
+def args_asyncpg(sc, want):
+    return (want,) if sc in HAS_PARAM else ()
+
+
+def args_psycopg(sc, want):
+    from psycopg.types.numeric import Int4, Int8
+    if sc == "r2":
+        return (Int8(want), Int8(want))
+    if sc == "r3":
+        return (Int4(want),)
+    return (Int8(want),) if sc in HAS_PARAM else None
 
 
 def hidx(v):
@@ -37,7 +83,7 @@ def parse():
         conns=int(float(m.get("conns", 1))), pool=int(float(m.get("pool", 0))), rate=float(m.get("rate", 1000)),
         duration=float(m.get("duration", 10)), warmup=float(m.get("warmup", 2)), rows=int(float(m.get("rows", 100000))),
         dispatch=m.get("dispatch", "shared"), repeats=int(float(m.get("repeats", 5))),
-        bulk_rows=int(float(m.get("bulk-rows", 100000))),
+        bulk_rows=int(float(m.get("bulk-rows", 100000))), taxi_rows=int(float(m.get("taxi-rows", 1000000))),
     )
     return c
 
@@ -144,20 +190,49 @@ def proc_stats():
 def fold_s2(r, want):
     if r[0] != want:
         raise RuntimeError(f"S2 returned id {r[0]}, wanted {want}")
-    return (r[0] + r[1] + r[2] + int(r[3]) + (hash(r[4]) & 0xFFFFFFFF) + len(r[5]) + len(r[6]) + r[7] + len(r[8]) + r[9])
+    return (r[0] + r[1] + r[2] + int(r[3]) + bits(r[4]) + len(r[5].encode()) + len(r[6].encode()) + r[7] + len(r[8].encode()) + r[9])
+
+
+def us(dt):
+    import calendar
+    return calendar.timegm(dt.timetuple()) * 1_000_000 + dt.microsecond
+
+
+def bits(x):
+    return struct.unpack("<Q", struct.pack("<d", x))[0]
+
+
+def fold_taxi(r):
+    return (r[0] + r[1] + us(r[2]) + us(r[3]) + (r[4] or 0) + bits(r[5]) + (r[6] or 0) + (len(r[7]) if r[7] is not None else 0)
+            + r[8] + r[9] + r[10] + bits(r[11]) + bits(r[12]) + bits(r[13]) + bits(r[14]) + bits(r[15])
+            + (bits(r[16]) if r[16] is not None else 0))
 
 
 def fold(sc, rows, want):
-    if len(rows) != ROWS[sc]:
+    if sc == "r3":
+        if len(rows) > 1:
+            raise RuntimeError(f"{len(rows)} rows, wanted at most 1")
+    elif len(rows) != ROWS[sc]:
         raise RuntimeError(f"{len(rows)} rows, wanted {ROWS[sc]}")
     s = 0
-    for r in rows:
+    for i, r in enumerate(rows):
+        if sc in ("r1", "r2"):
+            w = want if sc == "r1" else want + i
+            if r[0] != w:
+                raise RuntimeError(f"{sc} returned id {r[0]}, wanted {w}")
+            s += fold_taxi(r)
+            continue
+        if sc == "r3":
+            if r[0] != want:
+                raise RuntimeError(f"R3 returned zone {r[0]}, wanted {want}")
+            s += r[0] + r[1] + bits(r[2]) + bits(r[3])
+            continue
         if sc == "s1":
             s += int(r[0])
         elif sc == "s2":
             s += fold_s2(r, want)
         else:
-            s += r[0] + len(r[1])
+            s += r[0] + len(r[1].encode())
     return s & (2**64 - 1)
 
 
@@ -187,10 +262,10 @@ async def run_workers(sh, workers, one):
             if start > sh.end_ns + 5_000_000_000:
                 sh.drop(intended)
                 continue
-            want = rng.next(cfg["rows"]) if sc == "s2" else 0
+            qsc, want = request(sc, rng, cfg)
             try:
-                rows = await one(conn, want)
-                summ = fold(sc, rows, want)
+                rows = await one(conn, qsc, want)
+                summ = fold(qsc, rows, want)
                 sh.record(intended, start, sh.now(), None, summ)
             except Exception as e:  # noqa
                 sh.record(intended, start, sh.now(), e)
@@ -206,29 +281,33 @@ async def run_asyncpg(sh):
     import asyncpg
     cfg = sh.cfg
     sc = cfg["scenario"]
-    sql = SQL[sc].format(p="$1")
     url = cfg["url"]
+
+    async def warm(c):
+        for k in kinds(sc):
+            await c.fetch(sql_asyncpg(k), *args_asyncpg(k, 1))
+
     if cfg["pool"] > 0:
         pool = await asyncpg.create_pool(url, min_size=cfg["pool"], max_size=cfg["pool"])
         # open and prepare every pool connection before the clock starts
         held = [await pool.acquire() for _ in range(cfg["pool"])]
         for c in held:
-            await c.fetch(sql, 1) if sc == "s2" else await c.fetch(sql)
+            await warm(c)
         for c in held:
             await pool.release(c)
 
-        async def one(_c, want):
+        async def one(_c, qsc, want):
             async with pool.acquire() as c:
-                return await (c.fetch(sql, want) if sc == "s2" else c.fetch(sql))
+                return await c.fetch(sql_asyncpg(qsc), *args_asyncpg(qsc, want))
         await run_workers(sh, [None] * cfg["conns"], one)
         await pool.close()
     else:
         conns = [await asyncpg.connect(url) for _ in range(cfg["conns"])]
         for c in conns:
-            await c.fetch(sql, 1) if sc == "s2" else await c.fetch(sql)
+            await warm(c)
 
-        async def one(c, want):
-            return await (c.fetch(sql, want) if sc == "s2" else c.fetch(sql))
+        async def one(c, qsc, want):
+            return await c.fetch(sql_asyncpg(qsc), *args_asyncpg(qsc, want))
         await run_workers(sh, conns, one)
         for c in conns:
             await c.close()
@@ -238,15 +317,17 @@ async def run_asyncpg(sh):
 
 async def run_psycopg(sh):
     import psycopg
-    from psycopg.types.numeric import Int8
     cfg = sh.cfg
     sc = cfg["scenario"]
-    sql = SQL[sc].format(p="%s")
 
-    async def exec_on(c, want):
+    async def exec_on(c, qsc, want):
         cur = c.cursor(binary=True)
-        await cur.execute(sql, (Int8(want),) if sc == "s2" else None, prepare=True)
+        await cur.execute(sql_psycopg(qsc), args_psycopg(qsc, want), prepare=True)
         return await cur.fetchall()
+
+    async def warm(c):
+        for k in kinds(sc):
+            await exec_on(c, k, 1)
 
     if cfg["pool"] > 0:
         from psycopg_pool import AsyncConnectionPool
@@ -255,19 +336,19 @@ async def run_psycopg(sh):
         await pool.open(wait=True)
         held = [await pool.getconn() for _ in range(cfg["pool"])]
         for c in held:
-            await exec_on(c, 1)
+            await warm(c)
         for c in held:
             await pool.putconn(c)
 
-        async def one(_c, want):
+        async def one(_c, qsc, want):
             async with pool.connection() as c:
-                return await exec_on(c, want)
+                return await exec_on(c, qsc, want)
         await run_workers(sh, [None] * cfg["conns"], one)
         await pool.close()
     else:
         conns = [await psycopg.AsyncConnection.connect(cfg["url"], autocommit=True) for _ in range(cfg["conns"])]
         for c in conns:
-            await exec_on(c, 1)
+            await warm(c)
         await run_workers(sh, conns, exec_on)
         for c in conns:
             await c.close()

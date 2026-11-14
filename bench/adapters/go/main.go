@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"math/bits"
 	"os"
 	"runtime"
@@ -28,7 +29,54 @@ var sqlOf = map[string]string{
 	"s2": "SELECT id, k1, k2, flag, score, name, note, ref, tag, big FROM bench_item WHERE id = $1",
 	"s3": "SELECT id, message FROM bench_fortune",
 }
-var rowsOf = map[string]int{"s1": 1, "s2": 1, "s3": 12}
+var rowsOf = map[string]int{"s1": 1, "s2": 1, "s3": 12, "r1": 1, "r2": 100, "r3": 1}
+
+const taxiCols = "trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion"
+
+func init() {
+	sqlOf["r1"] = "SELECT " + taxiCols + " FROM taxi_trips WHERE trip_id = $1"
+	sqlOf["r2"] = "SELECT " + taxiCols + " FROM taxi_trips WHERE trip_id BETWEEN $1 AND $1 + 99 ORDER BY trip_id"
+	sqlOf["r3"] = "SELECT pu, count(*), max(fare), max(total) FROM taxi_trips WHERE pu = $1 GROUP BY pu"
+}
+
+func kinds(sc string) []string {
+	if sc == "r4" {
+		return []string{"r1", "r2", "r3"}
+	}
+	return []string{sc}
+}
+
+func hasParam(sc string) bool { return sc == "s2" || sc == "r1" || sc == "r2" || sc == "r3" }
+
+// request picks the concrete query and its parameter.
+func request(s *shared, r *rng) (string, int64) {
+	sc := s.scenario
+	if sc == "r4" {
+		switch v := r.next(100); {
+		case v <= 80:
+			sc = "r1"
+		case v <= 95:
+			sc = "r2"
+		default:
+			sc = "r3"
+		}
+	}
+	switch sc {
+	case "s2":
+		return sc, r.next(s.rows)
+	case "r1":
+		return sc, r.next(s.taxiRows)
+	case "r2":
+		n := s.taxiRows - 99
+		if n < 1 {
+			n = 1
+		}
+		return sc, r.next(n)
+	case "r3":
+		return sc, r.next(260)
+	}
+	return sc, 0
+}
 
 const buckets = 64 * 60
 
@@ -49,6 +97,7 @@ type shared struct {
 	sent, checksum      atomic.Uint64
 	firstErr            atomic.Value
 	scenario            string
+	taxiRows            int64
 	rows                int64
 	rate                float64
 	conns, pool         int
@@ -98,12 +147,60 @@ func (r *rng) next(n int64) int64 {
 }
 
 // foldRows reads every column in its native type.
-func fold(s *shared, rows pgx.Rows, want int64) (uint64, error) {
+func i16(p *int16) uint64 {
+	if p == nil {
+		return 0
+	}
+	return uint64(int64(*p))
+}
+
+func fold(s *shared, sc string, rows pgx.Rows, want int64) (uint64, error) {
 	n := 0
 	var sum uint64
 	for rows.Next() {
 		n++
-		switch s.scenario {
+		switch sc {
+		case "r1", "r2":
+			var id int64
+			var vendor, payment int16
+			var pickup, dropoff time.Time
+			var passengers, ratecode *int16
+			var distance, fare, extra, tip, tolls, total float64
+			var flag *string
+			var pu, do int32
+			var congestion *float64
+			if err := rows.Scan(&id, &vendor, &pickup, &dropoff, &passengers, &distance, &ratecode, &flag, &pu, &do, &payment,
+				&fare, &extra, &tip, &tolls, &total, &congestion); err != nil {
+				return 0, err
+			}
+			w := want
+			if sc == "r2" {
+				w = want + int64(n-1)
+			}
+			if id != w {
+				return 0, fmt.Errorf("%s returned id %d, wanted %d", sc, id, w)
+			}
+			sum += uint64(id) + uint64(int64(vendor)) + uint64(pickup.UnixMicro()) + uint64(dropoff.UnixMicro()) + i16(passengers) +
+				math.Float64bits(distance) + i16(ratecode)
+			if flag != nil {
+				sum += uint64(len(*flag))
+			}
+			sum += uint64(int64(pu)) + uint64(int64(do)) + uint64(int64(payment)) + math.Float64bits(fare) + math.Float64bits(extra) +
+				math.Float64bits(tip) + math.Float64bits(tolls) + math.Float64bits(total)
+			if congestion != nil {
+				sum += math.Float64bits(*congestion)
+			}
+		case "r3":
+			var pu int32
+			var cnt int64
+			var avg, max float64
+			if err := rows.Scan(&pu, &cnt, &avg, &max); err != nil {
+				return 0, err
+			}
+			if int64(pu) != want {
+				return 0, fmt.Errorf("R3 returned zone %d, wanted %d", pu, want)
+			}
+			sum += uint64(int64(pu)) + uint64(cnt) + math.Float64bits(avg) + math.Float64bits(max)
 		case "s1":
 			var v int32
 			if err := rows.Scan(&v); err != nil {
@@ -123,7 +220,7 @@ func fold(s *shared, rows pgx.Rows, want int64) (uint64, error) {
 			if id != want {
 				return 0, fmt.Errorf("S2 returned id %d, wanted %d", id, want)
 			}
-			sum += uint64(id) + uint64(k1) + uint64(k2) + b2u(flag) + uint64(int64(score)) + uint64(len(name)) +
+			sum += uint64(id) + uint64(k1) + uint64(k2) + b2u(flag) + math.Float64bits(score) + uint64(len(name)) +
 				uint64(len(note)) + uint64(ref) + uint64(len(tag)) + uint64(big)
 		default:
 			var id int32
@@ -137,8 +234,8 @@ func fold(s *shared, rows pgx.Rows, want int64) (uint64, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	if n != rowsOf[s.scenario] {
-		return 0, fmt.Errorf("%d rows, wanted %d", n, rowsOf[s.scenario])
+	if n != rowsOf[sc] && !(sc == "r3" && n == 0) {
+		return 0, fmt.Errorf("%d rows, wanted %d", n, rowsOf[sc])
 	}
 	return sum, nil
 }
@@ -190,6 +287,7 @@ func main() {
 	warmup := flag.Float64("warmup", 2, "")
 	dispatch := flag.String("dispatch", "shared", "")
 	rows := flag.Int64("rows", 100000, "")
+	taxiRows := flag.Int64("taxi-rows", 1000000, "")
 	repeats := flag.Int("repeats", 5, "")
 	bulkRows := flag.Int64("bulk-rows", 100000, "")
 	_ = flag.Int("rt-threads", 4, "")
@@ -206,31 +304,43 @@ func main() {
 	}
 	sh := &shared{
 		warmNs: uint64(*warmup * 1e9), endNs: uint64((*warmup + *duration) * 1e9), scenario: *scenario,
-		rows: *rows, rate: *rate, conns: *conns, pool: *pool, perConn: *dispatch == "perconn", url: *url,
+		rows: *rows, taxiRows: *taxiRows, rate: *rate, conns: *conns, pool: *pool, perConn: *dispatch == "perconn", url: *url,
 	}
 	ctx := context.Background()
-	sql := sqlOf[*scenario]
 	query := func(q interface {
 		Query(context.Context, string, ...any) (pgx.Rows, error)
-	}, id int64) (pgx.Rows, error) {
-		if *scenario == "s2" {
-			return q.Query(ctx, sql, id)
+	}, sc string, id int64) (pgx.Rows, error) {
+		switch {
+		case !hasParam(sc):
+			return q.Query(ctx, sqlOf[sc])
+		case sc == "r3":
+			return q.Query(ctx, sqlOf[sc], int32(id))
 		}
-		return q.Query(ctx, sql)
+		return q.Query(ctx, sqlOf[sc], id)
 	}
 	exec := func(q interface {
 		Query(context.Context, string, ...any) (pgx.Rows, error)
-	}, id int64) (uint64, error) {
-		r, err := query(q, id)
+	}, sc string, id int64) (uint64, error) {
+		r, err := query(q, sc, id)
 		if err != nil {
 			return 0, err
 		}
 		defer r.Close()
-		return fold(sh, r, id)
+		return fold(sh, sc, r, id)
+	}
+	warmAll := func(q interface {
+		Query(context.Context, string, ...any) (pgx.Rows, error)
+	}) error {
+		for _, k := range kinds(*scenario) {
+			if _, err := exec(q, k, 1); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	// workers
-	var runOne []func(id int64) (uint64, error)
+	var runOne []func(sc string, id int64) (uint64, error)
 	var closers []func()
 	if *pool > 0 {
 		p, err := pgxpool.New(ctx, *url+poolParam(*url, *pool))
@@ -244,7 +354,7 @@ func main() {
 			if err != nil {
 				die("pool: %v", err)
 			}
-			if _, err := exec(c, 1); err != nil {
+			if err := warmAll(c); err != nil {
 				die("warm: %v", err)
 			}
 			held = append(held, c)
@@ -253,7 +363,7 @@ func main() {
 			c.Release()
 		}
 		for i := 0; i < *conns; i++ {
-			runOne = append(runOne, func(id int64) (uint64, error) { return exec(p, id) })
+			runOne = append(runOne, func(sc string, id int64) (uint64, error) { return exec(p, sc, id) })
 		}
 		closers = append(closers, p.Close)
 	} else {
@@ -262,11 +372,11 @@ func main() {
 			if err != nil {
 				die("connect: %v", err)
 			}
-			if _, err := exec(c, 1); err != nil {
+			if err := warmAll(c); err != nil {
 				die("warm: %v", err)
 			}
 			cc := c
-			runOne = append(runOne, func(id int64) (uint64, error) { return exec(cc, id) })
+			runOne = append(runOne, func(sc string, id int64) (uint64, error) { return exec(cc, sc, id) })
 			closers = append(closers, func() { cc.Close(ctx) })
 		}
 	}
@@ -284,7 +394,7 @@ func main() {
 	var wg sync.WaitGroup
 	for w, run := range runOne {
 		wg.Add(1)
-		go func(w int, run func(int64) (uint64, error)) {
+		go func(w int, run func(string, int64) (uint64, error)) {
 			defer wg.Done()
 			r := rng(uint64(w+1) * 0x9E3779B97F4A7C15 | 1)
 			for {
@@ -306,11 +416,8 @@ func main() {
 					sh.drop(intended)
 					continue
 				}
-				var id int64
-				if sh.scenario == "s2" {
-					id = r.next(sh.rows)
-				}
-				sum, err := run(id)
+				qsc, id := request(sh, &r)
+				sum, err := run(qsc, id)
 				sh.record(intended, start, sh.now(), err, sum)
 			}
 		}(w, run)

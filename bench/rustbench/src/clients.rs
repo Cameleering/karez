@@ -102,8 +102,46 @@ fn karez_cfg(sh: &Shared) -> karez_pg::Config {
     karez_pg::Config::from_url(&sh.cfg.url).unwrap_or_else(|e| die(&format!("bad url: {e}")))
 }
 
-fn karez_fold(row: &karez_pg::RowRef<'_>, sc: Scenario, want_id: i64) -> Result<u64, String> {
+fn karez_taxi(row: &karez_pg::RowRef<'_>) -> Result<u64, String> {
+    let mut s = row.get::<i64>(0).map_err(|x| x.to_string())? as u64;
+    s = s.wrapping_add(row.get::<i16>(1).map_err(|x| x.to_string())? as u64);
+    s = s.wrapping_add(row.get::<karez_pg::Timestamp>(2).map_err(|x| x.to_string())?.0 as u64);
+    s = s.wrapping_add(row.get::<karez_pg::Timestamp>(3).map_err(|x| x.to_string())?.0 as u64);
+    s = s.wrapping_add(row.get::<Option<i16>>(4).map_err(|x| x.to_string())?.unwrap_or(0) as u64);
+    s = s.wrapping_add(row.get::<f64>(5).map_err(|x| x.to_string())?.to_bits());
+    s = s.wrapping_add(row.get::<Option<i16>>(6).map_err(|x| x.to_string())?.unwrap_or(0) as u64);
+    s = s.wrapping_add(row.get::<Option<&str>>(7).map_err(|x| x.to_string())?.map_or(0, |v| v.len()) as u64);
+    s = s.wrapping_add(row.get::<i32>(8).map_err(|x| x.to_string())? as u64);
+    s = s.wrapping_add(row.get::<i32>(9).map_err(|x| x.to_string())? as u64);
+    s = s.wrapping_add(row.get::<i16>(10).map_err(|x| x.to_string())? as u64);
+    for i in 11..=15 {
+        s = s.wrapping_add(row.get::<f64>(i).map_err(|x| x.to_string())?.to_bits());
+    }
+    s = s.wrapping_add(row.get::<Option<f64>>(16).map_err(|x| x.to_string())?.map_or(0, |v| v.to_bits()));
+    Ok(s)
+}
+
+fn karez_fold(row: &karez_pg::RowRef<'_>, sc: Scenario, want_id: i64, idx: usize) -> Result<u64, String> {
     match sc {
+        Scenario::R1 | Scenario::R2 => {
+            let s = karez_taxi(row)?;
+            let id = row.get::<i64>(0).map_err(|x| x.to_string())?;
+            let want = if sc == Scenario::R1 { want_id } else { want_id + idx as i64 };
+            if id != want {
+                return Err(format!("{sc:?} returned id {id}, wanted {want}"));
+            }
+            Ok(s)
+        }
+        Scenario::R3 => {
+            let pu = row.get::<i32>(0).map_err(|x| x.to_string())?;
+            if pu as i64 != want_id {
+                return Err(format!("R3 returned zone {pu}, wanted {want_id}"));
+            }
+            Ok((pu as u64)
+                .wrapping_add(row.get::<i64>(1).map_err(|x| x.to_string())? as u64)
+                .wrapping_add(row.get::<f64>(2).map_err(|x| x.to_string())?.to_bits())
+                .wrapping_add(row.get::<f64>(3).map_err(|x| x.to_string())?.to_bits()))
+        }
         Scenario::S1 => Ok(row.get::<i32>(0).map_err(|x| x.to_string())? as u64),
         Scenario::S2 => {
             let id = row.get::<i64>(0).map_err(|x| x.to_string())?;
@@ -129,22 +167,31 @@ fn karez_fold(row: &karez_pg::RowRef<'_>, sc: Scenario, want_id: i64) -> Result<
     }
 }
 
+fn karez_params(sc: Scenario, id: i64) -> Vec<karez_pg::Value<'static>> {
+    if !sc.has_param() {
+        Vec::new()
+    } else if sc.param_i32() {
+        vec![karez_pg::Value::i32(id as i32)]
+    } else {
+        vec![karez_pg::Value::i64(id)]
+    }
+}
+
 fn karez_query(
     conn: &mut karez_pg::Connection,
     sh: &Shared,
     rng: &mut Rng,
 ) -> Result<u64, String> {
-    let sc = sh.cfg.scenario;
-    let id = if sc == Scenario::S2 { rng.next(sh.cfg.rows) } else { 0 };
-    let params = [karez_pg::Value::i64(id)];
-    let params: &[karez_pg::Value<'_>] = if sc == Scenario::S2 { &params } else { &[] };
+    let (sc, id) = sh.cfg.scenario.request(rng, &sh.cfg);
+    let params = karez_params(sc, id);
+    let params: &[karez_pg::Value<'_>] = &params;
     let mut cur = conn.query(sc.sql(), params).map_err(|e| e.to_string())?;
     let (mut n, mut sum) = (0, 0u64);
     while let Some(row) = cur.next().map_err(|e| e.to_string())? {
-        sum = sum.wrapping_add(karez_fold(&row, sc, id)?);
+        sum = sum.wrapping_add(karez_fold(&row, sc, id, n)?);
         n += 1;
     }
-    if n != sc.rows() {
+    if !sc.rows_ok(n) {
         return Err(format!("{n} rows, wanted {}", sc.rows()));
     }
     Ok(sum)
@@ -179,7 +226,12 @@ fn karez_blocking(sh: Arc<Shared>) -> String {
             let mut rng = Rng::new(w as u64 + 1);
             // prepare the statement before the clock starts
             if let Some(c) = own.as_mut() {
-                let _ = karez_query(c, &sh, &mut rng);
+                for k in sh.cfg.scenario.kinds() {
+                    let p = karez_params(k, 1);
+                    if let Ok(mut cur) = c.query(k.sql(), &p) {
+                        while let Ok(Some(_)) = cur.next() {}
+                    }
+                }
             }
             b1.wait();
             b2.wait();
@@ -223,9 +275,10 @@ fn karez_shared(sh: Arc<Shared>) -> String {
     let sc = sh.cfg.scenario;
     // prepare before the clock starts
     for c in &conns {
-        let p = [karez_pg::Value::i64(1)];
-        let p: &[karez_pg::Value<'_>] = if sc == Scenario::S2 { &p } else { &[] };
-        c.collect(sc.sql(), p).unwrap_or_else(|e| die(&format!("prepare: {e}")));
+        for k in sc.kinds() {
+            let p = karez_params(k, 1);
+            c.collect(k.sql(), &p).unwrap_or_else(|e| die(&format!("prepare: {e}")));
+        }
     }
     let pipelined = sh.cfg.mode == Mode::Pipelined;
     let workers = conns.len();
@@ -236,15 +289,15 @@ fn karez_shared(sh: Arc<Shared>) -> String {
     for (w, (src, conn)) in srcs.into_iter().zip(conns.iter().cloned()).enumerate() {
         let (sh, b1, b2) = (sh.clone(), b1.clone(), b2.clone());
         // Pipelined: this thread submits, a collector thread waits for the answers in order.
-        let (ctx, crx) = mpsc::channel::<(karez_rt::Pending, u64, u64, i64)>();
+        let (ctx, crx) = mpsc::channel::<(karez_rt::Pending, u64, u64, i64, Scenario)>();
         let collector = {
             let sh = sh.clone();
             std::thread::spawn(move || {
-                while let Ok((pending, intended, start, id)) = crx.recv() {
+                while let Ok((pending, intended, start, id, qsc)) = crx.recv() {
                     let r = pending
                         .wait()
                         .map_err(|e| e.to_string())
-                        .and_then(|d| shared_fold(&d, sc, id));
+                        .and_then(|d| shared_fold(&d, qsc, id));
                     sh.record(intended, start, sh.now_ns(), r);
                 }
             })
@@ -259,18 +312,17 @@ fn karez_shared(sh: Arc<Shared>) -> String {
                     sh.drop_one(intended);
                     continue;
                 }
-                let id = if sc == Scenario::S2 { rng.next(sh.cfg.rows) } else { 0 };
-                let p = [karez_pg::Value::i64(id)];
-                let p: &[karez_pg::Value<'_>] = if sc == Scenario::S2 { &p } else { &[] };
-                match conn.submit_collect(sc.sql(), p) {
+                let (qsc, id) = sc.request(&mut rng, &sh.cfg);
+                let p = karez_params(qsc, id);
+                match conn.submit_collect(qsc.sql(), &p) {
                     Ok(pending) => {
                         if pipelined {
-                            let _ = ctx.send((pending, intended, start, id));
+                            let _ = ctx.send((pending, intended, start, id, qsc));
                         } else {
                             let r = pending
                                 .wait()
                                 .map_err(|e| e.to_string())
-                                .and_then(|d| shared_fold(&d, sc, id));
+                                .and_then(|d| shared_fold(&d, qsc, id));
                             sh.record(intended, start, sh.now_ns(), r);
                         }
                     }
@@ -300,11 +352,11 @@ fn shared_fold(d: &karez_rt::engine::Done, sc: Scenario, id: i64) -> Result<u64,
     for ch in &d.chunks {
         for r in 0..ch.rows() {
             let row = ch.row(r).map_err(|e| e.to_string())?;
-            sum = sum.wrapping_add(karez_fold(&row, sc, id)?);
+            sum = sum.wrapping_add(karez_fold(&row, sc, id, n)?);
             n += 1;
         }
     }
-    if n != sc.rows() {
+    if !sc.rows_ok(n) {
         return Err(format!("{n} rows, wanted {}", sc.rows()));
     }
     Ok(sum)
@@ -378,13 +430,54 @@ fn runtime(sh: &Shared) -> tokio::runtime::Runtime {
 
 // ---- tokio-postgres ----------------------------------------------------------------------------
 
+fn tp_us(d: time::PrimitiveDateTime) -> u64 {
+    (d.assume_utc().unix_timestamp_nanos() / 1000) as i64 as u64
+}
+
+fn tp_taxi(r: &tokio_postgres::Row) -> u64 {
+    let mut s = r.get::<_, i64>(0) as u64;
+    s = s.wrapping_add(r.get::<_, i16>(1) as u64);
+    s = s.wrapping_add(tp_us(r.get(2)));
+    s = s.wrapping_add(tp_us(r.get(3)));
+    s = s.wrapping_add(r.get::<_, Option<i16>>(4).unwrap_or(0) as u64);
+    s = s.wrapping_add(r.get::<_, f64>(5).to_bits());
+    s = s.wrapping_add(r.get::<_, Option<i16>>(6).unwrap_or(0) as u64);
+    s = s.wrapping_add(r.get::<_, Option<&str>>(7).map_or(0, |v| v.len()) as u64);
+    s = s.wrapping_add(r.get::<_, i32>(8) as u64);
+    s = s.wrapping_add(r.get::<_, i32>(9) as u64);
+    s = s.wrapping_add(r.get::<_, i16>(10) as u64);
+    for i in 11..=15 {
+        s = s.wrapping_add(r.get::<_, f64>(i).to_bits());
+    }
+    s.wrapping_add(r.get::<_, Option<f64>>(16).map_or(0, |v| v.to_bits()))
+}
+
 fn tp_fold(rows: &[tokio_postgres::Row], sc: Scenario, id: i64) -> Result<u64, String> {
-    if rows.len() != sc.rows() {
+    if !sc.rows_ok(rows.len()) {
         return Err(format!("{} rows, wanted {}", rows.len(), sc.rows()));
     }
     let mut sum = 0u64;
-    for r in rows {
+    for (i, r) in rows.iter().enumerate() {
         match sc {
+            Scenario::R1 | Scenario::R2 => {
+                let rid: i64 = r.get(0);
+                let want = if sc == Scenario::R1 { id } else { id + i as i64 };
+                if rid != want {
+                    return Err(format!("{sc:?} returned id {rid}, wanted {want}"));
+                }
+                sum = sum.wrapping_add(tp_taxi(r));
+            }
+            Scenario::R3 => {
+                let pu: i32 = r.get(0);
+                if pu as i64 != id {
+                    return Err(format!("R3 returned zone {pu}, wanted {id}"));
+                }
+                sum = sum
+                    .wrapping_add(pu as u64)
+                    .wrapping_add(r.get::<_, i64>(1) as u64)
+                    .wrapping_add(r.get::<_, f64>(2).to_bits())
+                    .wrapping_add(r.get::<_, f64>(3).to_bits());
+            }
             Scenario::S1 => sum = sum.wrapping_add(r.get::<_, i32>(0) as u64),
             Scenario::S2 => {
                 let rid: i64 = r.get(0);
@@ -480,8 +573,11 @@ fn tokio_pg(sh: Arc<Shared>) -> String {
         let mut clients = Vec::new();
         for _ in 0..n {
             let c = tp_connect(&sh).await;
-            let st = c.prepare(sc.sql()).await.unwrap_or_else(|e| die(&format!("prepare: {e}")));
-            clients.push((Arc::new(c), st));
+            let mut sts = Vec::new();
+            for k in sc.kinds() {
+                sts.push((k, c.prepare(k.sql()).await.unwrap_or_else(|e| die(&format!("prepare: {e}")))));
+            }
+            clients.push((Arc::new(c), Arc::new(sts)));
         }
         let (txs, srcs) = async_queues(&sh, n);
         sh.start();
@@ -498,15 +594,19 @@ fn tokio_pg(sh: Arc<Shared>) -> String {
                         sh.drop_one(intended);
                         continue;
                     }
-                    let id = if sc == Scenario::S2 { rng.next(sh.cfg.rows) } else { 0 };
+                    let (qsc, id) = sc.request(&mut rng, &sh.cfg);
                     let (client, st, sh2) = (client.clone(), st.clone(), sh.clone());
                     let fut = async move {
-                        let r = if sc == Scenario::S2 {
-                            client.query(&st, &[&id]).await
+                        let stmt = &st.iter().find(|(k, _)| *k == qsc).unwrap().1;
+                        let id32 = id as i32;
+                        let r = if !qsc.has_param() {
+                            client.query(stmt, &[]).await
+                        } else if qsc.param_i32() {
+                            client.query(stmt, &[&id32]).await
                         } else {
-                            client.query(&st, &[]).await
+                            client.query(stmt, &[&id]).await
                         };
-                        let r = r.map_err(|e| e.to_string()).and_then(|rows| tp_fold(&rows, sc, id));
+                        let r = r.map_err(|e| e.to_string()).and_then(|rows| tp_fold(&rows, qsc, id));
                         sh2.record(intended, start, sh2.now_ns(), r);
                     };
                     if pipelined {
@@ -554,7 +654,9 @@ fn deadpool(sh: Arc<Shared>) -> String {
         let mut held = Vec::new();
         for _ in 0..size {
             let c = pool.get().await.unwrap_or_else(|e| die(&format!("pool: {e}")));
-            c.prepare_cached(sc.sql()).await.unwrap_or_else(|e| die(&format!("prepare: {e}")));
+            for k in sc.kinds() {
+                c.prepare_cached(k.sql()).await.unwrap_or_else(|e| die(&format!("prepare: {e}")));
+            }
             held.push(c);
         }
         drop(held);
@@ -573,17 +675,20 @@ fn deadpool(sh: Arc<Shared>) -> String {
                         sh.drop_one(intended);
                         continue;
                     }
-                    let id = if sc == Scenario::S2 { rng.next(sh.cfg.rows) } else { 0 };
+                    let (qsc, id) = sc.request(&mut rng, &sh.cfg);
                     let r = async {
                         let c = pool.get().await.map_err(|e| e.to_string())?;
-                        let st = c.prepare_cached(sc.sql()).await.map_err(|e| e.to_string())?;
-                        let rows = if sc == Scenario::S2 {
-                            c.query(&st, &[&id]).await
-                        } else {
+                        let st = c.prepare_cached(qsc.sql()).await.map_err(|e| e.to_string())?;
+                        let id32 = id as i32;
+                        let rows = if !qsc.has_param() {
                             c.query(&st, &[]).await
+                        } else if qsc.param_i32() {
+                            c.query(&st, &[&id32]).await
+                        } else {
+                            c.query(&st, &[&id]).await
                         }
                         .map_err(|e| e.to_string())?;
-                        tp_fold(&rows, sc, id)
+                        tp_fold(&rows, qsc, id)
                     }
                     .await;
                     sh.record(intended, start, sh.now_ns(), r);
@@ -622,9 +727,11 @@ fn sqlx_client(sh: Arc<Shared>, tuned: bool) -> String {
         let mut held = Vec::new();
         for _ in 0..size {
             let mut c = pool.acquire().await.unwrap();
-            let q = sqlx::query(sc.sql());
-            let q = if sc == Scenario::S2 { q.bind(1i64) } else { q };
-            let _ = c.fetch_all(q).await;
+            for k in sc.kinds() {
+                let q = sqlx::query(k.sql());
+                let q = if !k.has_param() { q } else if k.param_i32() { q.bind(1i32) } else { q.bind(1i64) };
+                let _ = c.fetch_all(q).await;
+            }
             held.push(c);
         }
         drop(held);
@@ -643,16 +750,51 @@ fn sqlx_client(sh: Arc<Shared>, tuned: bool) -> String {
                         sh.drop_one(intended);
                         continue;
                     }
-                    let id = if sc == Scenario::S2 { rng.next(sh.cfg.rows) } else { 0 };
-                    let q = sqlx::query(sc.sql());
-                    let q = if sc == Scenario::S2 { q.bind(id) } else { q };
+                    let (qsc, id) = sc.request(&mut rng, &sh.cfg);
+                    let q = sqlx::query(qsc.sql());
+                    let q = if !qsc.has_param() { q } else if qsc.param_i32() { q.bind(id as i32) } else { q.bind(id) };
                     let r = q.fetch_all(&pool).await.map_err(|e| e.to_string()).and_then(|rows| {
-                        if rows.len() != sc.rows() {
-                            return Err(format!("{} rows, wanted {}", rows.len(), sc.rows()));
+                        if !qsc.rows_ok(rows.len()) {
+                            return Err(format!("{} rows, wanted {}", rows.len(), qsc.rows()));
                         }
                         let mut sum = 0u64;
-                        for r in &rows {
-                            match sc {
+                        for (ri, r) in rows.iter().enumerate() {
+                            match qsc {
+                                Scenario::R1 | Scenario::R2 => {
+                                    let rid: i64 = r.get(0);
+                                    let want = if qsc == Scenario::R1 { id } else { id + ri as i64 };
+                                    if rid != want {
+                                        return Err(format!("{qsc:?} returned id {rid}, wanted {want}"));
+                                    }
+                                    let us = |i: usize| -> u64 { (r.get::<time::PrimitiveDateTime, _>(i).assume_utc().unix_timestamp_nanos() / 1000) as i64 as u64 };
+                                    let mut s = (rid as u64)
+                                        .wrapping_add(r.get::<i16, _>(1) as u64)
+                                        .wrapping_add(us(2))
+                                        .wrapping_add(us(3))
+                                        .wrapping_add(r.get::<Option<i16>, _>(4).unwrap_or(0) as u64)
+                                        .wrapping_add(r.get::<f64, _>(5).to_bits())
+                                        .wrapping_add(r.get::<Option<i16>, _>(6).unwrap_or(0) as u64)
+                                        .wrapping_add(r.get::<Option<&str>, _>(7).map_or(0, |v| v.len()) as u64)
+                                        .wrapping_add(r.get::<i32, _>(8) as u64)
+                                        .wrapping_add(r.get::<i32, _>(9) as u64)
+                                        .wrapping_add(r.get::<i16, _>(10) as u64);
+                                    for i in 11..=15 {
+                                        s = s.wrapping_add(r.get::<f64, _>(i).to_bits());
+                                    }
+                                    s = s.wrapping_add(r.get::<Option<f64>, _>(16).map_or(0, |v| v.to_bits()));
+                                    sum = sum.wrapping_add(s);
+                                }
+                                Scenario::R3 => {
+                                    let pu: i32 = r.get(0);
+                                    if pu as i64 != id {
+                                        return Err(format!("R3 returned zone {pu}, wanted {id}"));
+                                    }
+                                    sum = sum
+                                        .wrapping_add(pu as u64)
+                                        .wrapping_add(r.get::<i64, _>(1) as u64)
+                                        .wrapping_add(r.get::<f64, _>(2).to_bits())
+                                        .wrapping_add(r.get::<f64, _>(3).to_bits());
+                                }
                                 Scenario::S1 => sum = sum.wrapping_add(r.get::<i32, _>(0) as u64),
                                 Scenario::S2 => {
                                     let rid: i64 = r.get(0);
@@ -703,6 +845,9 @@ fn zero_pg(sh: Arc<Shared>) -> String {
     use zero_postgres::tokio::Conn;
     if sh.cfg.mode == Mode::Pipelined || sh.cfg.pool > 0 {
         die("zero-postgres: unpipelined, no pool");
+    }
+    if matches!(sh.cfg.scenario, Scenario::R1 | Scenario::R2 | Scenario::R3 | Scenario::R4) {
+        die("zero-postgres: no taxi scenarios (its tuple decoder stops at 12 columns)");
     }
     let rt = runtime(&sh);
     let sc = sh.cfg.scenario;

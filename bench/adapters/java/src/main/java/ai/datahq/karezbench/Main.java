@@ -95,6 +95,8 @@ public final class Main {
 
     interface Submit { void run(long id, long intended, long start) throws Exception; }
 
+    static long utf8(String s) { return s.getBytes(java.nio.charset.StandardCharsets.UTF_8).length; }
+
     static void die(String m) { System.err.println("javaadapter: " + m); System.exit(2); }
 
     public static void main(String[] a) throws Exception {
@@ -121,15 +123,17 @@ public final class Main {
         }
 
         String version;
+        boolean taxi = scenario.startsWith("r");
+        Taxi.taxiRows = (long) Double.parseDouble(arg.getOrDefault("taxi-rows", "1000000"));
         switch (client) {
             case "pgjdbc", "pgjdbc-tuned" -> {
                 if (pipelined) die(client + ": unpipelined only");
-                version = runJdbc(client.endsWith("tuned"));
+                version = taxi ? Taxi.runJdbc(client.endsWith("tuned")) : runJdbc(client.endsWith("tuned"));
             }
-            case "vertx-pg-client" -> version = runVertx(pipelined);
+            case "vertx-pg-client" -> version = taxi ? Taxi.runVertx(pipelined) : runVertx(pipelined);
             case "r2dbc-postgresql" -> {
                 if (pipelined) die("r2dbc-postgresql: run unpipelined");
-                version = runR2dbc();
+                version = taxi ? Taxi.runR2dbc() : runR2dbc();
             }
             default -> { die("unknown client " + client); return; }
         }
@@ -222,10 +226,10 @@ public final class Main {
                 case "s2" -> {
                     long id = rs.getLong(1);
                     if (id != want) throw new IllegalStateException("S2 returned id " + id + ", wanted " + want);
-                    sum += id + rs.getInt(2) + rs.getShort(3) + (rs.getBoolean(4) ? 1 : 0) + (long) rs.getDouble(5)
-                            + rs.getString(6).length() + rs.getString(7).length() + rs.getLong(8) + rs.getString(9).length() + rs.getLong(10);
+                    sum += id + rs.getInt(2) + rs.getShort(3) + (rs.getBoolean(4) ? 1 : 0) + Double.doubleToRawLongBits(rs.getDouble(5))
+                            + utf8(rs.getString(6)) + utf8(rs.getString(7)) + rs.getLong(8) + utf8(rs.getString(9)) + rs.getLong(10);
                 }
-                default -> sum += rs.getInt(1) + rs.getString(2).length();
+                default -> sum += rs.getInt(1) + utf8(rs.getString(2));
             }
         }
         if (n != ROWS.get(scenario)) throw new IllegalStateException(n + " rows, wanted " + ROWS.get(scenario));
@@ -354,10 +358,10 @@ public final class Main {
                 case "s2" -> {
                     long id = r.getLong(0);
                     if (id != want) throw new IllegalStateException("S2 returned id " + id + ", wanted " + want);
-                    sum += id + r.getInteger(1) + r.getShort(2) + (r.getBoolean(3) ? 1 : 0) + (long) (double) r.getDouble(4)
-                            + r.getString(5).length() + r.getString(6).length() + r.getLong(7) + r.getString(8).length() + r.getLong(9);
+                    sum += id + r.getInteger(1) + r.getShort(2) + (r.getBoolean(3) ? 1 : 0) + Double.doubleToRawLongBits(r.getDouble(4))
+                            + utf8(r.getString(5)) + utf8(r.getString(6)) + r.getLong(7) + utf8(r.getString(8)) + r.getLong(9);
                 }
-                default -> sum += r.getInteger(0) + r.getString(1).length();
+                default -> sum += r.getInteger(0) + utf8(r.getString(1));
             }
         }
         if (n != ROWS.get(scenario)) throw new IllegalStateException(n + " rows, wanted " + ROWS.get(scenario));
@@ -417,10 +421,10 @@ public final class Main {
                     long rid = row.get(0, Long.class);
                     if (rid != id) throw new IllegalStateException("S2 returned id " + rid + ", wanted " + id);
                     return rid + row.get(1, Integer.class) + row.get(2, Short.class) + (row.get(3, Boolean.class) ? 1 : 0)
-                            + (long) (double) row.get(4, Double.class) + row.get(5, String.class).length() + row.get(6, String.class).length()
-                            + row.get(7, Long.class) + row.get(8, String.class).length() + row.get(9, Long.class);
+                            + Double.doubleToRawLongBits(row.get(4, Double.class)) + utf8(row.get(5, String.class)) + utf8(row.get(6, String.class))
+                            + row.get(7, Long.class) + utf8(row.get(8, String.class)) + row.get(9, Long.class);
                 }
-                default: return (long) row.get(0, Integer.class) + row.get(1, String.class).length();
+                default: return (long) row.get(0, Integer.class) + utf8(row.get(1, String.class));
             }
         })).collectList().map(l -> {
             if (l.size() != ROWS.get(scenario)) throw new IllegalStateException(l.size() + " rows, wanted " + ROWS.get(scenario));

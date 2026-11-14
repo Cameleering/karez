@@ -25,6 +25,11 @@ SCENARIOS = {
     "s2": dict(sql="point select", bound_ms=2.0),
     "s3": dict(sql="12-row select", bound_ms=3.0),
     "s7": dict(sql="point select over TLS", bound_ms=2.0),
+    # NYC taxi data (data/load_taxi.py): real rows, NULLs, timestamps
+    "r1": dict(sql="taxi point select, 17 columns", bound_ms=3.0),
+    "r2": dict(sql="taxi 100-row primary-key range", bound_ms=8.0),
+    "r3": dict(sql="taxi aggregate over one zone", bound_ms=60.0, start_rate=50),
+    "r4": dict(sql="taxi mixed: 80% r1, 15% r2, 5% r3", bound_ms=15.0),
 }
 
 
@@ -82,7 +87,8 @@ def run_cell(a, client, scenario, mode, conns, rate, duration, warmup, pool=0, d
              db_host=None, extra=None, probe=False, tls=False):
     spec = CLIENTS[client]
     # JIT-compiled clients need a longer warm-up (plan 6.2: 60 s for JVM load tests; probes use half)
-    warmup = max(warmup, spec.get("warmup_min", 0) * (0.5 if probe else 1))
+    if not getattr(a, "exact_warmup", False):
+        warmup = max(warmup, spec.get("warmup_min", 0) * (0.5 if probe else 1))
     exe = spec["cmd"][0]
     if not os.path.isabs(exe):
         exe = os.path.join(HERE, exe)
@@ -90,7 +96,7 @@ def run_cell(a, client, scenario, mode, conns, rate, duration, warmup, pool=0, d
         "--client", client, "--url", (a.url_tls if tls and a.url_tls else a.url), "--scenario", scenario, "--mode", mode,
         "--conns", str(conns), "--pool", str(pool), "--rate", str(rate),
         "--duration", str(duration), "--warmup", str(warmup), "--dispatch", dispatch,
-        "--rt-threads", str(a.rt_threads),
+        "--rt-threads", str(a.rt_threads), "--taxi-rows", str(getattr(a, "taxi_rows", 1000000)),
     ]
     if a.root_cert:
         cmd += ["--root-cert", a.root_cert]
@@ -235,7 +241,7 @@ def sweep(a, log, client, scenario, mode, conns, pool=0, dispatch="shared", hint
     Returns the summaries of the final runs and the chosen rate."""
     tags = dict(tags or {})
     bound = SCENARIOS[scenario]["bound_ms"]
-    rate = hint or a.start_rate
+    rate = hint or SCENARIOS[scenario].get("start_rate", a.start_rate)
     lo, hi = 0.0, None
 
     def probe(rt):
@@ -314,6 +320,8 @@ def common_args(p):
     p.add_argument("--url-tls", default=os.environ.get("BENCH_URL_TLS"), help="URL with sslmode=verify-full, for S7 (or env BENCH_URL_TLS)")
     p.add_argument("--root-cert", default=None)
     p.add_argument("--rt-threads", type=int, default=4)
+    p.add_argument("--taxi-rows", type=int, default=int(os.environ.get("BENCH_TAXI_ROWS", "1000000")),
+                   help="rows of taxi_trips (written by data/load_taxi.py; env BENCH_TAXI_ROWS)")
     p.add_argument("--db-host", default=None, help="ssh target of the database host, to sample its CPU")
     p.add_argument("--duration", type=float, default=15)
     p.add_argument("--warmup", type=float, default=3)
@@ -323,6 +331,37 @@ def common_args(p):
     p.add_argument("--start-rate", type=float, default=2000)
     p.add_argument("--max-rate", type=float, default=400000)
     p.add_argument("--bisect-steps", type=int, default=5)
+
+
+def cmd_verify(a):
+    """Every adapter draws the same request sequence from the same generator (one worker, seed 1), so the
+    checksum of a short single-connection run must be identical across clients. A mismatch means one
+    client decodes or counts differently, and its numbers are not comparable until that is fixed."""
+    clients = a.clients.split(",") if a.clients else [c for c in CLIENTS if CLIENTS[c]["modes"]]
+    a.exact_warmup = True
+    bad = 0
+    for sc in a.scenarios.split(","):
+        sums = {}
+        for c in clients:
+            if "unpipelined" not in CLIENTS[c]["modes"]:
+                continue
+            if sc.startswith("r") and c == "zero-postgres":
+                continue
+            raw = run_cell(a, c, sc, "unpipelined", 1, 200, 4, 1, 0, "shared")
+            if raw.get("failed"):
+                print(f"{sc} {c}: FAILED {str(raw.get('stderr'))[-160:]}")
+                bad += 1
+                continue
+            sums[c] = (raw["checksum"], raw["ok"], raw["errors"])
+        groups = {}
+        for c, v in sums.items():
+            groups.setdefault(v, []).append(c)
+        status = "OK" if len(groups) == 1 else "MISMATCH"
+        bad += 0 if len(groups) == 1 else 1
+        print(f"{sc}: {status}")
+        for v, cs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            print(f"    checksum {v[0]} ok {v[1]} errors {v[2]}: {', '.join(cs)}")
+    sys.exit(1 if bad else 0)
 
 
 def cmd_cell(a):
@@ -338,26 +377,31 @@ def cmd_sweep(a):
 
 
 PROFILES = {
-    # smoke: finishes in a couple of minutes, only proves the machinery works
+    # smoke: finishes in a few minutes, only proves the machinery works
     "smoke": dict(repeats=2, duration=4, warmup=1, probe_s=2, probe_warm=1, bisect_steps=2,
-                  configs=[("s2", "unpipelined", 8, 0)], bulk=dict(repeats=2, s5_rows=20000, s6_rows=100000)),
-    # quick: a first look, about 10 minutes per client
+                  configs=[("s2", "unpipelined", 8, 0), ("r4", "unpipelined", 8, 0)],
+                  bulk=dict(repeats=2, s5_rows=20000, s6_rows=100000)),
+    # quick: a first look
     "quick": dict(repeats=3, duration=8, warmup=2, probe_s=3, probe_warm=1, bisect_steps=3,
                   configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 1, 0), ("s2", "unpipelined", 64, 0),
-                           ("s3", "unpipelined", 64, 0)], bulk=dict(repeats=3, s5_rows=100000, s6_rows=1000000)),
-    # repeat: what rounds 2 and 3 repeat (plan 6.2: at least 5 runs per cell are met across the rounds)
-    "repeat": dict(repeats=5, duration=15, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
-                   configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 1, 0), ("s2", "unpipelined", 64, 0),
-                            ("s2", "unpipelined", 512, 0), ("s3", "unpipelined", 64, 0)]),
-    # full: plan section 6: connection sweep for S2, S1, S3, pipelined separately, S8 pool
-    "full": dict(repeats=5, duration=20, warmup=4, probe_s=4, probe_warm=1, bisect_steps=5,
-                 configs=[("s1", "unpipelined", 64, 0)]
-                         + [("s2", "unpipelined", c, 0) for c in (1, 8, 64, 256, 512)]
-                         + [("s3", "unpipelined", 64, 0),
-                            ("s2", "pipelined", 8, 0),
-                            ("s2", "unpipelined", 512, 32),
-                            ("s7", "unpipelined", 64, 0)],
+                           ("r1", "unpipelined", 64, 0), ("r4", "unpipelined", 64, 0)],
+                  bulk=dict(repeats=3, s5_rows=100000, s6_rows=1000000)),
+    # full (round 1 of a campaign): synthetic and NYC-taxi scenarios, connection sweeps, pipelined, pool, TLS, bulk
+    "full": dict(repeats=3, duration=12, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
+                 configs=[("s1", "unpipelined", 64, 0),
+                          ("s2", "unpipelined", 1, 0), ("s2", "unpipelined", 64, 0), ("s2", "unpipelined", 512, 0),
+                          ("s2", "unpipelined", 512, 32),
+                          ("s7", "unpipelined", 64, 0),
+                          ("r1", "unpipelined", 1, 0), ("r1", "unpipelined", 64, 0), ("r1", "unpipelined", 512, 0),
+                          ("r1", "pipelined", 8, 0),
+                          ("r2", "unpipelined", 64, 0),
+                          ("r3", "unpipelined", 8, 0),
+                          ("r4", "unpipelined", 8, 0), ("r4", "unpipelined", 64, 0), ("r4", "unpipelined", 256, 0)],
                  bulk=dict(repeats=5, s5_rows=100000, s6_rows=10_000_000)),
+    # repeat (rounds 2 and 3): what is measured again on the other droplets
+    "repeat": dict(repeats=5, duration=12, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
+                   configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 64, 0),
+                            ("r1", "unpipelined", 64, 0), ("r2", "unpipelined", 64, 0), ("r4", "unpipelined", 64, 0)]),
 }
 
 
@@ -494,13 +538,15 @@ def main():
     p.add_argument("--profile", choices=list(PROFILES), default="smoke"); p.add_argument("--out", required=True)
     p.add_argument("--clients", default=None); p.add_argument("--lane", default="local"); p.add_argument("--round", default="1")
     p.add_argument("--only", default=None, help="substring filter on scenario-mode-conns-pool")
+    p = sub.add_parser("verify"); common_args(p); p.set_defaults(f=cmd_verify)
+    p.add_argument("--clients", default=None); p.add_argument("--scenarios", default="s2,s3,r1,r2,r3,r4")
     p = sub.add_parser("bulk"); common_args(p); p.set_defaults(f=cmd_bulk)
     p.add_argument("--out", required=True); p.add_argument("--clients", default=None); p.add_argument("--lane", default="local")
     p.add_argument("--round", default="1"); p.add_argument("--only", default=None)
     p.add_argument("--s5-rows", type=int, default=100000); p.add_argument("--s6-rows", type=int, default=1000000)
     p = sub.add_parser("report"); p.add_argument("dir"); p.set_defaults(f=cmd_report)
     a = ap.parse_args()
-    if a.cmd in ("cell", "sweep", "campaign", "bulk") and not a.url:
+    if a.cmd in ("cell", "sweep", "campaign", "bulk", "verify") and not a.url:
         ap.error("--url or BENCH_URL is required")
     a.f(a)
 

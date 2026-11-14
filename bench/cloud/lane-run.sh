@@ -8,11 +8,17 @@ cd /root/karez/bench
 PW="$(cat /root/bench-pw)"
 export BENCH_URL="postgresql://bench:$PW@$DB:5432/bench?sslmode=disable"
 export BENCH_URL_TLS="postgresql://bench:$PW@$DB:5432/bench?sslmode=verify-full&sslrootcert=/root/ca.crt"
+export BENCH_TAXI_ROWS="$(cat /root/taxi_rows)"
 OUT="/root/out/lane$LANE-round$ROUND-$PROFILE"
 mkdir -p "$OUT"
 cp /root/machine-cl.txt "$OUT/machine-cl.txt" 2>/dev/null
 ssh -o BatchMode=yes "root@$DB" cat /root/machine-db.txt > "$OUT/machine-db.txt" 2>/dev/null
 echo "$(date -u +%FT%TZ) lane $LANE round $ROUND profile $PROFILE clients $CLIENTS"
+if [ "$PROFILE" = full ] || [ "$PROFILE" = smoke ]; then
+  # every client must produce the same checksum on the same request sequence (see run.py verify)
+  python3 run.py verify --clients "$CLIENTS" --root-cert /root/ca.crt > "$OUT/verify.txt" 2>&1
+  echo "verify: rc=$? (see verify.txt)"
+fi
 python3 run.py campaign --profile "$PROFILE" --out "$OUT" --clients "$CLIENTS" --lane "lane$LANE" --round "$ROUND" \
   --db-host "root@$DB" --root-cert /root/ca.crt
 rc=$?

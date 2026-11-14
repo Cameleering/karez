@@ -36,8 +36,6 @@ static char first_err[512];
 static pthread_mutex_t err_m = PTHREAD_MUTEX_INITIALIZER;
 static queue_t *queues;
 static int nq;
-static const char *sql;
-static int expect_rows;
 
 /* the pool for S8 */
 static PGconn **pool_conns;
@@ -80,17 +78,56 @@ static void record(uint64_t intended, uint64_t start, uint64_t end, const char *
 static uint64_t be64(const char *p) { uint64_t v; memcpy(&v, p, 8); return __builtin_bswap64(v); }
 static uint32_t be32(const char *p) { uint32_t v; memcpy(&v, p, 4); return ntohl(v); }
 static uint16_t be16(const char *p) { uint16_t v; memcpy(&v, p, 2); return ntohs(v); }
+static void put64_(char *p, uint64_t v) { v = __builtin_bswap64(v); memcpy(p, &v, 8); }
+static void put32_(char *p, uint32_t v) { v = htonl(v); memcpy(p, &v, 4); }
+
+#define TAXI "trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion"
+static const char *SQLR1 = "SELECT " TAXI " FROM taxi_trips WHERE trip_id = $1";
+static const char *SQLR2 = "SELECT " TAXI " FROM taxi_trips WHERE trip_id BETWEEN $1 AND $1 + 99 ORDER BY trip_id";
+static const char *SQLR3 = "SELECT pu, count(*), max(fare), max(total) FROM taxi_trips WHERE pu = $1 GROUP BY pu";
+static long taxi_rows_n = 1000000;
+
+static const char *sql_of(const char *k) {
+    if (!strcmp(k, "s1")) return SQL1;
+    if (!strcmp(k, "s2")) return SQL2;
+    if (!strcmp(k, "s3")) return SQL3;
+    if (!strcmp(k, "r1")) return SQLR1;
+    if (!strcmp(k, "r2")) return SQLR2;
+    return SQLR3;
+}
+static int rows_of(const char *k) { return !strcmp(k, "s3") ? 12 : !strcmp(k, "r2") ? 100 : 1; }
+static int has_param(const char *k) { return !strcmp(k, "s2") || k[0] == 'r'; }
+
+/* the concrete query of one request, and its parameter */
+static const char *pick(uint64_t *rng, long *id) {
+    uint64_t x = *rng; x ^= x >> 12; x ^= x << 25; x ^= x >> 27; *rng = x;
+    uint64_t v = (x * 0x2545F4914F6CDD1Dull) >> 11;
+    const char *k = scenario;
+    if (!strcmp(scenario, "r4")) { uint64_t m = v % 100 + 1; k = m <= 80 ? "r1" : m <= 95 ? "r2" : "r3"; x ^= x >> 12; x ^= x << 25; x ^= x >> 27; *rng = x; v = (x * 0x2545F4914F6CDD1Dull) >> 11; }
+    if (!strcmp(k, "s2")) *id = (long)(v % (uint64_t)rows_n) + 1;
+    else if (!strcmp(k, "r1")) *id = (long)(v % (uint64_t)taxi_rows_n) + 1;
+    else if (!strcmp(k, "r2")) *id = (long)(v % (uint64_t)(taxi_rows_n > 99 ? taxi_rows_n - 99 : 1)) + 1;
+    else if (!strcmp(k, "r3")) *id = (long)(v % 260) + 1;
+    else *id = 0;
+    return k;
+}
+
+static double be_double(const char *p) { uint64_t b = be64(p); double d; memcpy(&d, &b, 8); return d; }
+#define PG_EPOCH_US 946684800000000LL
 
 /* run one query on c and fold the result; returns NULL or an error message */
-static const char *run_query(PGconn *c, long id, uint64_t *sum_out, char *errbuf, size_t errlen) {
+static const char *run_query(PGconn *c, const char *k, long id, uint64_t *sum_out, char *errbuf, size_t errlen) {
     PGresult *r;
-    if (!strcmp(scenario, "s2")) {
-        uint64_t be = __builtin_bswap64((uint64_t)id);
-        const char *vals[1] = {(const char *)&be};
-        int lens[1] = {8}, fmts[1] = {1};
-        r = PQexecPrepared(c, "q", 1, vals, lens, fmts, 1);
+    char stmt[8];
+    snprintf(stmt, sizeof stmt, "q_%s", k);
+    if (has_param(k)) {
+        char b8[8], b4[4];
+        const char *vals[1]; int lens[1], fmts[1] = {1};
+        if (!strcmp(k, "r3")) { put32_(b4, (uint32_t)id); vals[0] = b4; lens[0] = 4; }
+        else { put64_(b8, (uint64_t)id); vals[0] = b8; lens[0] = 8; }
+        r = PQexecPrepared(c, stmt, 1, vals, lens, fmts, 1);
     } else {
-        r = PQexecPrepared(c, "q", 0, NULL, NULL, NULL, 1);
+        r = PQexecPrepared(c, stmt, 0, NULL, NULL, NULL, 1);
     }
     if (PQresultStatus(r) != PGRES_TUPLES_OK) {
         snprintf(errbuf, errlen, "%s", PQerrorMessage(c));
@@ -98,18 +135,39 @@ static const char *run_query(PGconn *c, long id, uint64_t *sum_out, char *errbuf
         return errbuf;
     }
     int n = PQntuples(r);
-    if (n != expect_rows) { snprintf(errbuf, errlen, "%d rows, wanted %d", n, expect_rows); PQclear(r); return errbuf; }
+    int ok = !strcmp(k, "r3") ? n <= 1 : n == rows_of(k);
+    if (!ok) { snprintf(errbuf, errlen, "%d rows, wanted %d", n, rows_of(k)); PQclear(r); return errbuf; }
     uint64_t sum = 0;
     for (int i = 0; i < n; i++) {
-        if (!strcmp(scenario, "s1")) sum += be32(PQgetvalue(r, i, 0));
-        else if (!strcmp(scenario, "s2")) {
+        if (!strcmp(k, "s1")) sum += be32(PQgetvalue(r, i, 0));
+        else if (!strcmp(k, "s2")) {
             long rid = (long)be64(PQgetvalue(r, i, 0));
             if (rid != id) { snprintf(errbuf, errlen, "S2 returned id %ld, wanted %ld", rid, id); PQclear(r); return errbuf; }
-            double score; uint64_t sb = be64(PQgetvalue(r, i, 4)); memcpy(&score, &sb, 8);
+            double score = be_double(PQgetvalue(r, i, 4));
             sum += (uint64_t)rid + be32(PQgetvalue(r, i, 1)) + be16(PQgetvalue(r, i, 2)) + (uint8_t)PQgetvalue(r, i, 3)[0]
-                 + (uint64_t)(int64_t)score + (uint64_t)PQgetlength(r, i, 5) + (uint64_t)PQgetlength(r, i, 6)
+                 + be64(PQgetvalue(r, i, 4)) + (uint64_t)PQgetlength(r, i, 5) + (uint64_t)PQgetlength(r, i, 6)
                  + be64(PQgetvalue(r, i, 7)) + (uint64_t)PQgetlength(r, i, 8) + be64(PQgetvalue(r, i, 9));
-        } else sum += be32(PQgetvalue(r, i, 0)) + (uint64_t)PQgetlength(r, i, 1);
+        } else if (!strcmp(k, "s3")) sum += be32(PQgetvalue(r, i, 0)) + (uint64_t)PQgetlength(r, i, 1);
+        else if (!strcmp(k, "r3")) {
+            long pu = (long)(int32_t)be32(PQgetvalue(r, i, 0));
+            if (pu != id) { snprintf(errbuf, errlen, "R3 returned zone %ld, wanted %ld", pu, id); PQclear(r); return errbuf; }
+            double avg = be_double(PQgetvalue(r, i, 2)), mx = be_double(PQgetvalue(r, i, 3)); uint64_t ab, mb; memcpy(&ab, &avg, 8); memcpy(&mb, &mx, 8);
+            sum += (uint64_t)pu + be64(PQgetvalue(r, i, 1)) + ab + mb;
+        } else { /* r1, r2 */
+            long rid = (long)be64(PQgetvalue(r, i, 0));
+            long want = !strcmp(k, "r1") ? id : id + i;
+            if (rid != want) { snprintf(errbuf, errlen, "%s returned id %ld, wanted %ld", k, rid, want); PQclear(r); return errbuf; }
+            #define NUL(col) PQgetisnull(r, i, col)
+            #define F64(col) ({ double d_ = be_double(PQgetvalue(r, i, col)); uint64_t b_; memcpy(&b_, &d_, 8); b_; })
+            uint64_t s2 = (uint64_t)rid + (uint64_t)(int64_t)(int16_t)be16(PQgetvalue(r, i, 1))
+                 + (uint64_t)((int64_t)be64(PQgetvalue(r, i, 2)) + PG_EPOCH_US) + (uint64_t)((int64_t)be64(PQgetvalue(r, i, 3)) + PG_EPOCH_US)
+                 + (NUL(4) ? 0 : (uint64_t)(int64_t)(int16_t)be16(PQgetvalue(r, i, 4))) + F64(5)
+                 + (NUL(6) ? 0 : (uint64_t)(int64_t)(int16_t)be16(PQgetvalue(r, i, 6))) + (NUL(7) ? 0 : (uint64_t)PQgetlength(r, i, 7))
+                 + (uint64_t)(int64_t)(int32_t)be32(PQgetvalue(r, i, 8)) + (uint64_t)(int64_t)(int32_t)be32(PQgetvalue(r, i, 9))
+                 + (uint64_t)(int64_t)(int16_t)be16(PQgetvalue(r, i, 10)) + F64(11) + F64(12) + F64(13) + F64(14) + F64(15)
+                 + (NUL(16) ? 0 : F64(16));
+            sum += s2;
+        }
     }
     PQclear(r);
     *sum_out = sum;
@@ -119,9 +177,14 @@ static const char *run_query(PGconn *c, long id, uint64_t *sum_out, char *errbuf
 static PGconn *open_conn(void) {
     PGconn *c = PQconnectdb(url);
     if (PQstatus(c) != CONNECTION_OK) { fprintf(stderr, "libpq_adapter: connect: %s", PQerrorMessage(c)); exit(2); }
-    PGresult *r = PQprepare(c, "q", sql, 0, NULL);
-    if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "libpq_adapter: prepare: %s", PQerrorMessage(c)); exit(2); }
-    PQclear(r);
+    const char *ks[3]; int nk = 0;
+    if (!strcmp(scenario, "r4")) { ks[0] = "r1"; ks[1] = "r2"; ks[2] = "r3"; nk = 3; } else { ks[0] = scenario; nk = 1; }
+    for (int i = 0; i < nk; i++) {
+        char name[8]; snprintf(name, sizeof name, "q_%s", ks[i]);
+        PGresult *r = PQprepare(c, name, sql_of(ks[i]), 0, NULL);
+        if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "libpq_adapter: prepare: %s", PQerrorMessage(c)); exit(2); }
+        PQclear(r);
+    }
     return c;
 }
 
@@ -156,10 +219,7 @@ static void *worker_run(void *arg) {
         uint64_t start = now_ns();
         if (start > end_ns + 5000000000ull) { if ((uint64_t)intended >= warm_ns && (uint64_t)intended < end_ns) dropc++; continue; }
         long id = 0;
-        if (!strcmp(scenario, "s2")) {
-            uint64_t x = rng; x ^= x >> 12; x ^= x << 25; x ^= x >> 27; rng = x;
-            id = (long)((x * 0x2545F4914F6CDD1Dull) >> 11) % rows_n + 1;
-        }
+        const char *kind = pick(&rng, &id);
         PGconn *c = own;
         int slot = -1;
         if (pool_n > 0) {
@@ -170,7 +230,7 @@ static void *worker_run(void *arg) {
             pthread_mutex_unlock(&pool_m);
         }
         uint64_t sum = 0;
-        const char *err = run_query(c, id, &sum, eb, sizeof eb);
+        const char *err = run_query(c, kind, id, &sum, eb, sizeof eb);
         if (pool_n > 0) {
             pthread_mutex_lock(&pool_m);
             pool_conns[pool_free_n++] = c;
@@ -333,11 +393,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(k, "dispatch")) per_conn = !strcmp(v, "perconn");
         else if (!strcmp(k, "repeats")) repeats = atoi(v);
         else if (!strcmp(k, "bulk-rows")) bulk_rows_arg = atol(v);
+        else if (!strcmp(k, "taxi-rows")) taxi_rows_n = atol(v);
     }
     if (!url) die("--url is required");
     if (!strcmp(scenario, "s4") || !strcmp(scenario, "s5") || !strcmp(scenario, "s6")) bulk_main(scenario, repeats, bulk_rows_arg);
-    sql = !strcmp(scenario, "s1") ? SQL1 : !strcmp(scenario, "s2") ? SQL2 : SQL3;
-    expect_rows = !strcmp(scenario, "s3") ? 12 : 1;
     warm_ns = (uint64_t)(warmup * 1e9);
     end_ns = (uint64_t)((warmup + duration) * 1e9);
     nq = per_conn ? conns : 1;

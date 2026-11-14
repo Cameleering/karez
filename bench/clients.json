@@ -149,7 +149,7 @@
   ],
   "pool": true,
   "family": "jvm",
-  "warmup_min": 30,
+  "warmup_min": 20,
   "bulk": [
    "s4",
    "s5",
@@ -165,7 +165,7 @@
   ],
   "pool": true,
   "family": "jvm",
-  "warmup_min": 30,
+  "warmup_min": 20,
   "bulk": [
    "s4",
    "s5",
@@ -182,7 +182,7 @@
   ],
   "pool": true,
   "family": "jvm",
-  "warmup_min": 30,
+  "warmup_min": 20,
   "bulk": [
    "s4",
    "s5"
@@ -197,7 +197,7 @@
   ],
   "pool": true,
   "family": "jvm",
-  "warmup_min": 30,
+  "warmup_min": 20,
   "bulk": [
    "s4"
   ]
