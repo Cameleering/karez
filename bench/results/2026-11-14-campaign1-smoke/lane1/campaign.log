@@ -1,0 +1,154 @@
+2026-11-14T03:11:14Z lane 1 round 1 profile smoke clients karez-blocking,karez-shared,libpq,tokio-postgres,pgjdbc,asyncpg
+verify: rc=1 (see verify.txt)
+[karez-blocking] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 569us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 485us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 367us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 510us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 350us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 1870660us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 574620us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 235930us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 1161us, 2/2 runs inside the bound
+[karez-blocking] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2298479us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 267387us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 7373us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 400556us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 200278us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 15630us, 2/2 runs inside the bound
+[karez-shared] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 635us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 510us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 350us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 358us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 651us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 2634023us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 1132462us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 367002us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 3244us, 0/2 runs inside the bound
+    confirm     30400/s: median p99 1608us, 1/2 runs inside the bound
+[karez-shared] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2071986us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 233832us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 9896us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 371196us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 125305us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 12845us, 2/2 runs inside the bound
+[libpq] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 578us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 498us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 317us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 338us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 346us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 2088763us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 843055us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 54264us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 939us, 2/2 runs inside the bound
+[libpq] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2197815us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 325059us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 8978us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 429916us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 111673us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 12190us, 2/2 runs inside the bound
+[tokio-postgres] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 522us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 453us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 309us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 317us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 362us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 2038432us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 910164us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 101188us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 688us, 2/2 runs inside the bound
+[tokio-postgres] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2164261us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 198181us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 12124us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 549454us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 133693us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 13959us, 2/2 runs inside the bound
+[pgjdbc] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 528us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 453us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 346us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 338us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 403us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 0us ok 0/128000 err 0 drop 128000
+    probe     48000/s: p99 3472884us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 935330us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 1823us, 1/2 runs inside the bound
+[pgjdbc] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 0us ok 0/4000 err 0 drop 4000
+    probe      1000/s: p99 31588us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 11076us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 1551892us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 7111us ok 1750/1750 err 0 drop 0
+    confirm       875/s: median p99 21594us, 1/2 runs inside the bound
+    confirm       831/s: median p99 70320us, 0/2 runs inside the bound
+    confirm       790/s: median p99 24543us, 1/2 runs inside the bound
+    confirm       750/s: median p99 11993us, 2/2 runs inside the bound
+[asyncpg] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 668us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 473us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 412us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 3097us ok 32000/32000 err 0 drop 0
+    probe     12000/s: p99 465us ok 24000/24000 err 0 drop 0
+    probe     14000/s: p99 717us ok 28000/28000 err 0 drop 0
+    confirm     14000/s: median p99 631us, 2/2 runs inside the bound
+[asyncpg] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2164261us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 299893us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 9503us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 484442us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 160432us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 10486us, 2/2 runs inside the bound
+[karez-blocking] bulk s4 rows=1000000
+    median 1.025s rows 1000000
+[karez-blocking] bulk s5 rows=20000
+    median 0.175s rows 20000
+[karez-blocking] bulk s6 rows=100000
+    median 0.178s rows 100000
+[karez-blocking] bulk s8 rows=13069067
+    FAILED rustbench: unknown scenario s8 (s1 to s6)
+
+[libpq] bulk s4 rows=1000000
+    median 1.006s rows 1000000
+[libpq] bulk s5 rows=20000
+    median 0.182s rows 20000
+[libpq] bulk s6 rows=100000
+    median 0.173s rows 100000
+[libpq] bulk s8 rows=13069067
+    median 26.854s rows 13069067
+[tokio-postgres] bulk s4 rows=1000000
+    median 1.238s rows 1000000
+[tokio-postgres] bulk s5 rows=20000
+    median 0.333s rows 20000
+[tokio-postgres] bulk s6 rows=100000
+    median 0.175s rows 100000
+[tokio-postgres] bulk s8 rows=13069067
+    FAILED rustbench: unknown scenario s8 (s1 to s6)
+
+[pgjdbc] bulk s4 rows=1000000
+    median 1.837s rows 1000000
+[pgjdbc] bulk s5 rows=20000
+    median 0.359s rows 20000
+[pgjdbc] bulk s6 rows=100000
+    median 0.551s rows 100000
+[pgjdbc] bulk s8 rows=13069067
+    FAILED SLF4J: Failed to load class "org.slf4j.impl.StaticLoggerBinder".
+SLF4J: Defaulting to no-operation (NOP) logger implementation
+SLF4J: See http://www.slf4j.org/codes.html#StaticLoggerBinder for further details.
+
+Exception: java.lang.OutOfMemoryError thrown from the UncaughtExceptionHandler in thread 
+[asyncpg] bulk s4 rows=1000000
+    median 2.720s rows 1000000
+[asyncpg] bulk s5 rows=20000
+    median 0.164s rows 20000
+[asyncpg] bulk s6 rows=100000
+    median 0.194s rows 100000
+[asyncpg] bulk s8 rows=13069067
+    median 124.233s rows 13069067
+campaign done: 12 configurations
+2026-11-14T03:41:27Z lane 1 round 1 finished, rc=0

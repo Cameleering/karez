@@ -160,7 +160,8 @@ case "${1:-status}" in
       n="karez-bench-l$l-cl"
       [ -n "$(ip_of $n)" ] || continue
       mkdir -p "$OUT/lane$l"
-      rssh "$n" "cd /root && tar czf - out campaign.log machine-*.txt 2>/dev/null" | tar xzf - -C "$OUT/lane$l" 2>/dev/null || echo "lane $l: nothing to pull yet" >&2
+      rssh "$n" "cd /root && tar czf - --ignore-failed-read out campaign.log machine-cl.txt 2>/dev/null; true" | tar xzf - -C "$OUT/lane$l" 2>/dev/null || echo "lane $l: nothing to pull yet" >&2
+      rssh "karez-bench-l$l-db" "cat /root/machine-db.txt" > "$OUT/lane$l/machine-db.txt" 2>/dev/null || true
     done
     echo "pulled to $OUT"
     ;;

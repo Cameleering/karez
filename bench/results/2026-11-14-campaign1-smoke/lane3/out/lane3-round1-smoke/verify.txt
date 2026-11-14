@@ -1,0 +1,14 @@
+s2: OK
+    checksum 4181340182376054073 ok 800 errors 0: karez-blocking, karez-shared, sqlx, sqlx-tuned, pgjdbc-tuned, r2dbc-postgresql
+s3: OK
+    checksum 492800 ok 800 errors 0: karez-blocking, karez-shared, sqlx, sqlx-tuned, pgjdbc-tuned, r2dbc-postgresql
+r1: OK
+    checksum 1706228206517276571 ok 800 errors 0: karez-blocking, karez-shared, sqlx, sqlx-tuned, pgjdbc-tuned, r2dbc-postgresql
+r2: OK
+    checksum 6440589124338694347 ok 800 errors 0: karez-blocking, karez-shared, sqlx, sqlx-tuned, pgjdbc-tuned, r2dbc-postgresql
+r3: MISMATCH
+    checksum 5472207578892195075 ok 91 errors 0: karez-shared, sqlx, sqlx-tuned, pgjdbc-tuned
+    checksum 2846573196035171453 ok 47 errors 0: karez-blocking
+    checksum 15543997664248401635 ok 104 errors 695: r2dbc-postgresql
+r4: OK
+    checksum 11030793754039600785 ok 800 errors 0: karez-blocking, karez-shared, sqlx, sqlx-tuned, pgjdbc-tuned, r2dbc-postgresql

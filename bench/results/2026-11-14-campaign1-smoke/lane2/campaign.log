@@ -1,0 +1,147 @@
+2026-11-14T03:11:15Z lane 2 round 1 profile smoke clients karez-blocking,karez-shared,deadpool-postgres,pgx,vertx-pg-client,psycopg3,zero-postgres
+verify: rc=1 (see verify.txt)
+[karez-blocking] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 465us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 399us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 338us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 268us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 305us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 868221us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 399us ok 96000/96000 err 0 drop 0
+    probe     56000/s: p99 270533us ok 112000/112000 err 0 drop 0
+    confirm     48000/s: median p99 3178us, 0/2 runs inside the bound
+    confirm     45600/s: median p99 1866us, 1/2 runs inside the bound
+[karez-blocking] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 1971323us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 283116us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 11862us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 341836us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 67633us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 14483us, 2/2 runs inside the bound
+[karez-shared] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 387us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 408us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 313us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 317us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 391us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 1635779us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 530579us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 5341us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 1806us, 1/2 runs inside the bound
+[karez-shared] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2164261us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 200278us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 11993us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 429916us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 71827us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 11469us, 2/2 runs inside the bound
+[deadpool-postgres] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 424us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 408us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 268us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 289us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 322us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 901775us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 135266us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 594us ok 80000/80000 err 0 drop 0
+    confirm     40000/s: median p99 2144us, 1/2 runs inside the bound
+    confirm     38000/s: median p99 807us, 2/2 runs inside the bound
+[deadpool-postgres] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2264924us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 244318us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 12255us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 450888us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 41681us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 14189us, 2/2 runs inside the bound
+[pgx] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 1352us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 1401us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 676us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 371us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 1876us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 1132462us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 238027us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 3588us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 538us, 2/2 runs inside the bound
+[pgx] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2038432us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 202375us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 11469us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 375390us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 23200us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 13763us, 2/2 runs inside the bound
+[vertx-pg-client] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 330us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 301us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 268us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 309us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 440us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 6073352us ok 125669/128000 err 2331 drop 0
+    probe     48000/s: p99 1283457us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 122159us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 944us, 2/2 runs inside the bound
+[vertx-pg-client] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 0us ok 0/4000 err 4000 drop 0
+    probe      1000/s: p99 658506us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 16187us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 2634023us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 425722us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 15270us, 2/2 runs inside the bound
+[psycopg3] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 537us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 553us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 526385us ok 16000/16000 err 0 drop 0
+    probe      6000/s: p99 54264us ok 12000/12000 err 0 drop 0
+    probe      5000/s: p99 12780us ok 10000/10000 err 0 drop 0
+    confirm      4000/s: median p99 655us, 2/2 runs inside the bound
+[psycopg3] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2197815us ok 4000/4000 err 0 drop 0
+    probe      1000/s: p99 181404us ok 2000/2000 err 0 drop 0
+    probe       500/s: p99 7635us ok 1000/1000 err 0 drop 0
+    probe      1250/s: p99 337641us ok 2500/2500 err 0 drop 0
+    probe       875/s: p99 87556us ok 1750/1750 err 0 drop 0
+    confirm       500/s: median p99 14287us, 2/2 runs inside the bound
+[zero-postgres] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 399us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 387us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 272us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 272us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 313us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 767558us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 113770us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 358us ok 80000/80000 err 0 drop 0
+    confirm     40000/s: median p99 7737us, 1/2 runs inside the bound
+    confirm     38000/s: median p99 672us, 2/2 runs inside the bound
+[zero-postgres] r4 unpipelined conns=8 pool=0
+    probe      2000/s: FAILED rustbench: zero-postgres: no taxi scenarios (its tuple decoder stops at 12 columns)
+[karez-blocking] bulk s4 rows=1000000
+    median 0.739s rows 1000000
+[karez-blocking] bulk s5 rows=20000
+    median 0.162s rows 20000
+[karez-blocking] bulk s6 rows=100000
+    median 0.162s rows 100000
+[karez-blocking] bulk s8 rows=13069067
+    FAILED rustbench: unknown scenario s8 (s1 to s6)
+
+[pgx] bulk s4 rows=1000000
+    median 1.001s rows 1000000
+[pgx] bulk s5 rows=20000
+    median 0.227s rows 20000
+[pgx] bulk s6 rows=100000
+    median 0.250s rows 100000
+[pgx] bulk s8 rows=13069067
+    median 17.441s rows 13069067
+[vertx-pg-client] bulk s4 rows=1000000
+    median 1.205s rows 1000000
+[vertx-pg-client] bulk s5 rows=20000
+    median 0.364s rows 20000
+[psycopg3] bulk s4 rows=1000000
+    median 3.307s rows 1000000
+[psycopg3] bulk s5 rows=20000
+    median 0.621s rows 20000
+[psycopg3] bulk s6 rows=100000
+    median 0.486s rows 100000
+[psycopg3] bulk s8 rows=13069067
+    median 134.121s rows 13069067
+campaign done: 14 configurations
+2026-11-14T03:31:35Z lane 2 round 1 finished, rc=0

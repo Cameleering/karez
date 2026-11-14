@@ -220,7 +220,8 @@
   ],
   "pool": false,
   "family": "rust",
-  "tls": false
+  "tls": false,
+  "taxi": false
  },
  "karez-blocking-chunk": {
   "cmd": [

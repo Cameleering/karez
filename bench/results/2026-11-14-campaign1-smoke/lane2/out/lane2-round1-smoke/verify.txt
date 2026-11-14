@@ -1,0 +1,16 @@
+s2: OK
+    checksum 4181340182376054073 ok 800 errors 0: karez-blocking, karez-shared, deadpool-postgres, pgx, vertx-pg-client, psycopg3, zero-postgres
+s3: OK
+    checksum 492800 ok 800 errors 0: karez-blocking, karez-shared, deadpool-postgres, pgx, vertx-pg-client, psycopg3, zero-postgres
+r1: OK
+    checksum 1706228206517276571 ok 800 errors 0: karez-blocking, karez-shared, deadpool-postgres, pgx, vertx-pg-client, psycopg3
+r2: OK
+    checksum 6440589124338694347 ok 800 errors 0: karez-blocking, karez-shared, deadpool-postgres, pgx, vertx-pg-client, psycopg3
+r3: MISMATCH
+    checksum 5895126238287064552 ok 97 errors 0: karez-shared, deadpool-postgres
+    checksum 3091197468795060525 ok 51 errors 0: karez-blocking
+    checksum 5472207578892195075 ok 91 errors 0: pgx
+    checksum 7130542429069224722 ok 118 errors 682: vertx-pg-client
+    checksum 14869168752321645325 ok 94 errors 0: psycopg3
+r4: OK
+    checksum 11030793754039600785 ok 800 errors 0: karez-blocking, karez-shared, deadpool-postgres, pgx, vertx-pg-client, psycopg3

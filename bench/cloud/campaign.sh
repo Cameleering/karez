@@ -17,7 +17,7 @@ KEY="$STATE/karez-bench-key"
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 ip_of() { awk -v n="$1" '$1==n { print $2 }' "$STATE/droplets.txt"; }
 lane_state() { ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile="$STATE/known_hosts" -o BatchMode=yes -o ConnectTimeout=15 \
-  "root@$(ip_of "karez-bench-l$1-cl")" "systemctl is-active karez-campaign" 2>/dev/null || echo unreachable; }
+  "root@$(ip_of "karez-bench-l$1-cl")" "systemctl is-active karez-campaign 2>/dev/null; true" 2>/dev/null | head -1 | grep . || echo unreachable; }
 
 read -r -a PROFILES <<< "${1:?profiles, e.g. \"full repeat repeat\"}"
 round=0

@@ -12,7 +12,7 @@ Standard library only. Method: docs/design/plan.md section 6 and bench/README.md
 Every cell appends one JSON line (adapter output plus orchestrator measurements) to
 DIR/cells.jsonl. Nothing is overwritten and nothing is averaged away: the report reads the raw lines.
 """
-import argparse, json, os, platform, resource, statistics, subprocess, sys, threading, time
+import argparse, json, os, platform, statistics, subprocess, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLIENTS = json.load(open(os.path.join(HERE, "clients.json")))
@@ -347,7 +347,8 @@ def cmd_verify(a):
                 continue
             if sc.startswith("r") and c == "zero-postgres":
                 continue
-            raw = run_cell(a, c, sc, "unpipelined", 1, 200, 4, 1, 0, "shared")
+            # R3 is server-bound (tens of ms per query): a low rate, or the number of finished requests differs
+            raw = run_cell(a, c, sc, "unpipelined", 1, 20 if sc == "r3" else 200, 4, 1, 0, "shared")
             if raw.get("failed"):
                 print(f"{sc} {c}: FAILED {str(raw.get('stderr'))[-160:]}")
                 bad += 1
@@ -420,6 +421,8 @@ def cmd_campaign(a):
         spec = CLIENTS[client]
         for (sc, mode, conns, pool) in prof["configs"]:
             if mode not in spec["modes"]:
+                continue
+            if sc.startswith("r") and not spec.get("taxi", True):
                 continue
             if pool and not spec.get("pool"):
                 continue
