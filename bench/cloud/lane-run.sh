@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# One lane's campaign round, on the client droplet: lane-run.sh LANE ROUND PROFILE DB_PRIVATE_IP CLIENTS
+set -uo pipefail
+LANE="$1"; ROUND="$2"; PROFILE="$3"; DB="$4"; CLIENTS="$5"
+export PATH=/root/.cargo/bin:/usr/local/go/bin:$PATH
+export BENCH_VENV=/root/venv
+cd /root/karez/bench
+PW="$(cat /root/bench-pw)"
+export BENCH_URL="postgresql://bench:$PW@$DB:5432/bench?sslmode=disable"
+export BENCH_URL_TLS="postgresql://bench:$PW@$DB:5432/bench?sslmode=verify-full&sslrootcert=/root/ca.crt"
+OUT="/root/out/lane$LANE-round$ROUND-$PROFILE"
+mkdir -p "$OUT"
+cp /root/machine-cl.txt "$OUT/machine-cl.txt" 2>/dev/null
+ssh -o BatchMode=yes "root@$DB" cat /root/machine-db.txt > "$OUT/machine-db.txt" 2>/dev/null
+echo "$(date -u +%FT%TZ) lane $LANE round $ROUND profile $PROFILE clients $CLIENTS"
+python3 run.py campaign --profile "$PROFILE" --out "$OUT" --clients "$CLIENTS" --lane "lane$LANE" --round "$ROUND" \
+  --db-host "root@$DB" --root-cert /root/ca.crt
+rc=$?
+python3 run.py report "$OUT" > /dev/null 2>&1
+echo "$(date -u +%FT%TZ) lane $LANE round $ROUND finished, rc=$rc"

@@ -1,0 +1,165 @@
+# karez benchmark harness
+
+The harness that measures karez against the PostgreSQL clients listed in
+[plan.md section 6.3](../docs/design/plan.md). It follows the plan's method (section 6) and the
+campaign design of the simoom project ([bench/cloud](cloud) is adapted from simoom's scripts).
+
+**Status (2026-11-14): built and tested on one machine in WSL; no campaign has run.** The numbers
+anyone may quote come from the campaign on DigitalOcean, not from WSL. The WSL runs only prove that
+every adapter works. They share one CPU between the client and the database and say nothing about
+speed.
+
+## What is measured
+
+| scenario | what | harness |
+|---|---|---|
+| S1 | `SELECT 1` | open loop, `run.py` |
+| S2 | point select by primary key, one 10-column mixed row | open loop |
+| S3 | 12-row select with a string column (Fortunes-like) | open loop |
+| S7 | S2 over TLS (`sslmode=verify-full`) | open loop, `--url-tls` |
+| S8 | S2 at 512 workers with a pool of 32 | open loop, `--pool 32` |
+| S4 | scan of 1,000,000 rows x 10 columns (karez: row view and chunk path) | closed loop, `run.py bulk` |
+| S5 | batch insert of 100,000 rows, prepared, one transaction | closed loop; each client's own best path |
+| S6 | COPY of 10,000,000 rows (text, binary where the client's fast path is binary) | closed loop |
+| S9, S10 | partitioned parallel scan (ConnectorX), ADBC and JDBC exports | **not built yet** (see "Not built") |
+
+Per configuration the harness searches the **SLO throughput**: the highest arrival rate at which the
+p99 latency stays under the scenario's bound (S1, S2, S7: 2 ms; S3: 3 ms; fixed before measuring,
+the same for every client). It then runs `repeats` full-length runs at that rate and reports the
+median p50, p99, p99.9, CPU-seconds per million requests and peak RSS. A configuration whose median
+p99 is over the bound is stepped down 5% until it passes. Nothing is best-of-N.
+
+## Method (what makes the numbers comparable)
+
+- **Open loop.** A generator thread issues arrivals at a fixed rate on a fixed schedule. Latency is
+  measured from the *intended* start time, so a slow server cannot hide its queueing (coordinated
+  omission corrected). Overdue arrivals are emitted in a burst, not skipped.
+- **Same arrival model for every client.** Rust and Go adapters take arrivals from a queue that
+  one generator thread feeds. Python, Java and C adapters do the same in their language.
+  `--dispatch shared` (default): all workers draw from one queue, like a pool. `--dispatch perconn`:
+  one queue per connection, which is what `pgbench -R` does; used by `crosscheck.py`.
+- **Unpipelined and pipelined are separate tables.** `--mode unpipelined`: one request at a time per
+  connection. `--mode pipelined`: several requests in flight on one connection (karez-rt,
+  tokio-postgres, vertx-pg-client). TechEmpower banned cross-request pipelining for a reason;
+  readers must see both.
+- **Prepared statements, native types.** Every adapter opens its connections and prepares its
+  statement before the clock starts, reads every column of every row in its native type, folds it
+  into a checksum, checks the row count (and for S2 the row id), and counts a mismatch as an error.
+  An adapter may not skip decoding.
+- **Latency histogram.** 64 buckets per power of two (at most 1.6% error), identical in every
+  language ([hist.rs](rustbench/src/hist.rs)); adapters print the sparse bucket list, the
+  orchestrator computes the percentiles.
+- **CPU is measured inside the window.** The orchestrator reads `/proc/<pid>/stat` when the adapter
+  prints `T0` on stderr plus the warm-up, and again just before the window closes, so connection
+  setup and warm-up are not counted. With `--db-host` it samples the database host's `/proc/stat`
+  over ssh the same way.
+- **Warm-up.** 3 s by default; JIT clients (`warmup_min` in `clients.json`) get 30 s in final runs
+  and 15 s in probes (the plan asks for 60 s on the JVM; this is the budgeted value and is stated
+  in the report).
+- **Servers.** PostgreSQL 18 on its own host, the clients on another, same VPC, the same
+  configuration and dataset for every client ([setup-db.sh](cloud/setup-db.sh)). PostgreSQL 18
+  because zero-postgres 0.9 requires protocol 3.2.
+- **Lanes and rounds.** Three lanes, each a database host and a client host. karez runs in every
+  lane and every round; the other clients rotate across lanes, so each client meets each pair of
+  droplets. A ratio is only ever computed between rows of the same lane and round. Absolute numbers
+  are shown with their lane.
+- **Defaults and tuned.** Where a client's defaults cost something it can switch off (pgJDBC
+  prepare threshold, sqlx's ping on acquire), both variants run and both are published
+  (`pgjdbc`/`pgjdbc-tuned`, `sqlx`/`sqlx-tuned`).
+- **Raw data first.** Every cell appends its full adapter output (including both histograms) to
+  `cells.jsonl`. `run.py report` builds the tables from the raw lines; nothing is averaged away
+  or overwritten.
+
+## Clients
+
+| client | language | modes | pool | TLS | notes |
+|---|---|---|---|---|---|
+| karez-blocking | Rust | unpipelined | karez `Pool` | yes | the blocking `Connection` |
+| karez-shared | Rust | both | no | yes | `karez-rt` shared connection, runtime-free |
+| tokio-postgres | Rust | both | no | yes | prepared once per connection; pipelined = one client, many tasks |
+| deadpool-postgres | Rust | unpipelined | yes | not yet | `prepare_cached`, recycling `Fast` |
+| sqlx, sqlx-tuned | Rust | unpipelined | yes | yes | tuned: no ping on acquire |
+| zero-postgres | Rust | unpipelined | no | not yet | tokio flavour, needs PostgreSQL 18 |
+| libpq | C | unpipelined | ad-hoc list | yes | binary format, `PQexecPrepared` |
+| pgx | Go | unpipelined | pgxpool | yes | statement cache |
+| asyncpg | Python | unpipelined | yes | yes | on uvloop |
+| psycopg3 | Python | unpipelined | yes | yes | binary, prepared, `psycopg_pool` |
+| pgjdbc, pgjdbc-tuned | Java | unpipelined | HikariCP | yes | tuned: `prepareThreshold=1`, statement cache |
+| vertx-pg-client | Java | both | yes | yes | pipelining limit 1 or 256 |
+| r2dbc-postgresql | Java | unpipelined | r2dbc-pool | yes | |
+
+## Not built (be honest in any report)
+
+- S9 (ConnectorX-style partitioned scan) and S10 (ADBC and JDBC exports): karez has no exports yet.
+- Bulk adapters for deadpool-postgres and zero-postgres; S6 for vertx-pg-client (no COPY support)
+  and r2dbc-postgresql; S5 for r2dbc-postgresql. The report lists failures and gaps.
+- The S4 columnar comparison against a real Arrow consumer: the "chunk path" folds columns straight
+  over karez's own Arrow-layout buffers; no other client has an equivalent, so its row is shown next
+  to the row-view rows of the same lane and labelled as a different access path.
+- Competitors from plan 6.3 without an adapter: wtx, diesel (and diesel-async), ConnectorX, MySQL,
+  SQL Server and SQLite clients (karez has no driver for them yet), vertx pipelining variants beyond
+  the one above, a GraalVM native build of the JVM clients.
+- Rust size and dependency floor of tokio-postgres, sqlx, diesel and rusqlite hello-worlds (M0 item).
+- Allocations per row, bytes on the wire, `perf stat`.
+- A JVM warm-up of 60 s and 300 s runs (shortened for the budget, see above).
+- `deadpool-postgres` and `zero-postgres` over TLS.
+
+## Run it
+
+Local (Linux or WSL), against a throwaway PostgreSQL:
+
+```sh
+docker run -d --name karez-test-bench-pg -p 127.0.0.1:55432:5432 -e POSTGRES_USER=bench \
+  -e POSTGRES_PASSWORD=bench_pw_local -e POSTGRES_DB=bench postgres:18 -c max_connections=1000
+docker exec -i karez-test-bench-pg psql -U bench -d bench -v ON_ERROR_STOP=1 < sql/schema.sql
+cargo build --release                                   # in bench/, builds rustbench
+(cd adapters/go && go build -o karez-bench-go .)        # Go 1.22 or newer
+(cd adapters/java && mvn -q -B package -DskipTests)     # JDK 21
+(cd adapters/c && cc -O2 -o libpq_adapter libpq_adapter.c -I$(pg_config --includedir) -L$(pg_config --libdir) -lpq -lpthread)
+python3 -m venv ~/venv && ~/venv/bin/pip install asyncpg "psycopg[binary,pool]" uvloop
+export BENCH_URL='postgresql://bench:bench_pw_local@127.0.0.1:55432/bench?sslmode=disable'
+python3 run.py campaign --profile smoke --out /tmp/out        # a few minutes, proves the machinery (OLTP and bulk)
+python3 run.py bulk --out /tmp/out --s6-rows 1000000          # the bulk scenarios on their own
+python3 run.py cell --client karez-blocking --scenario s2 --conns 8 --rate 5000 --out /tmp/out
+python3 crosscheck.py --pgbench pgbench --rates 2000,8000     # method check against pgbench -R
+```
+
+`karez-test-*` is the naming rule for throwaway containers in this repository. WSL stops idle
+containers when the last `wsl.exe` session ends, so run long jobs inside one `wsl.exe` command.
+
+### Adapter contract
+
+Every adapter takes the same flags (`--client --url --scenario s1|s2|s3 --mode --conns --pool --rate
+--duration --warmup --dispatch --rows --rt-threads --root-cert`), prints `T0` on stderr when its
+clock starts, and prints one JSON line on stdout with `client version scenario mode conns pool rate
+duration_s warmup_s sent ok errors dropped checksum first_error wall_s cpu_user_s cpu_sys_s rss_kb
+hist service_hist`. `hist` is the latency from the intended start, `service_hist` from the actual
+send, both as `[[bucket, count], ...]`. A new client is a new adapter plus an entry in `clients.json`.
+
+## The campaign on DigitalOcean
+
+Scripts in [cloud/](cloud): `droplets.sh` (create and delete, by tag `karez-bench` only),
+`safety-net.sh` (deletes everything at a hard deadline, even if the operator is gone; adapted from
+simoom, which lost droplet-hours twice without it), `setup-db.sh`, `setup-client.sh`, `lane-run.sh`
+and `ctl.sh` (the operator). Token: a file read only by these scripts, never printed
+(`DO_TOKEN_FILE`). Six `c-4` droplets in `blr1` (4 dedicated vCPU, 8 GB), $0.125 per hour each,
+`[vendor, DigitalOcean API, checked 2026-11-14]`, so $0.75 per hour for the set.
+
+```sh
+bash bench/cloud/ctl.sh up              # create, arm the safety net, set up every node
+bash bench/cloud/ctl.sh run 1 full      # round 1 on all lanes
+bash bench/cloud/ctl.sh status ; bash bench/cloud/ctl.sh tail 1
+bash bench/cloud/ctl.sh pull            # results to bench/results/<date>-campaign1/
+bash bench/cloud/ctl.sh down            # final pull, delete droplets and key
+```
+
+## Reporting rules
+
+1. Every number carries its evidence tag and its lane. WSL and droplet numbers never share a table.
+2. One table per scenario with every client in it, losses included, and the ratio to karez computed
+   per lane and round (the median of the per-round ratios is the published figure).
+3. The owner chose "both" (2026-11-14): raw files and a script-built report always, and headline
+   numbers may be published after the campaign. A headline in the README or STATUS appears only
+   next to a link to the full table, with its tag, lane count and the losses stated in the same
+   place. No headline on the About line or in images. "Fastest" and similar words are never
+   written; the table says it or it does not.

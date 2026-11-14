@@ -1,0 +1,228 @@
+{
+ "_comment": "One entry per client adapter. cmd is the adapter executable (relative to bench/ unless absolute); every adapter takes the same flags (bench/README.md). modes: which of unpipelined/pipelined it supports. pool: supports --pool. family is only used for grouping in the report.",
+ "karez-blocking": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "karez-shared": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined",
+   "pipelined"
+  ],
+  "pool": false,
+  "family": "rust"
+ },
+ "tokio-postgres": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined",
+   "pipelined"
+  ],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "deadpool-postgres": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "tls": false
+ },
+ "sqlx": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "notes": "defaults: test_before_acquire on",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "sqlx-tuned": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "notes": "test_before_acquire off"
+ },
+ "asyncpg": {
+  "cmd": [
+   "adapters/py/run-py.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "python",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "psycopg3": {
+  "cmd": [
+   "adapters/py/run-py.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "python",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "pgx": {
+  "cmd": [
+   "adapters/go/karez-bench-go"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "go",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "libpq": {
+  "cmd": [
+   "adapters/c/libpq_adapter"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "c",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "pgjdbc": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 30,
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "pgjdbc-tuned": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 30,
+  "bulk": [
+   "s4",
+   "s5",
+   "s6"
+  ]
+ },
+ "vertx-pg-client": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined",
+   "pipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 30,
+  "bulk": [
+   "s4",
+   "s5"
+  ]
+ },
+ "r2dbc-postgresql": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 30,
+  "bulk": [
+   "s4"
+  ]
+ },
+ "zero-postgres": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": false,
+  "family": "rust",
+  "tls": false
+ },
+ "karez-blocking-chunk": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s4"
+  ],
+  "notes": "S4 through the chunk path (whole columns over the Arrow-layout buffers)"
+ }
+}
