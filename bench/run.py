@@ -399,6 +399,19 @@ PROFILES = {
                           ("r3", "unpipelined", 8, 0),
                           ("r4", "unpipelined", 8, 0), ("r4", "unpipelined", 64, 0), ("r4", "unpipelined", 256, 0)],
                  bulk=dict(repeats=5, s5_rows=100000, s6_rows=10_000_000)),
+    # lean: the one round that fits the time left after the first campaign attempt lost its databases to the
+    # kernel OOM killer (see bench/README.md, Campaign log). Same method as full; fewer configurations, 3 repeats,
+    # shorter runs, no 256-connection mix, smaller S6.
+    "lean": dict(repeats=3, duration=10, warmup=3, probe_s=3, probe_warm=1, bisect_steps=3,
+                 configs=[("s1", "unpipelined", 64, 0),
+                          ("s2", "unpipelined", 1, 0), ("s2", "unpipelined", 64, 0), ("s2", "unpipelined", 512, 0),
+                          ("s7", "unpipelined", 64, 0),
+                          ("r1", "unpipelined", 64, 0), ("r1", "unpipelined", 512, 0),
+                          ("r1", "pipelined", 8, 0),
+                          ("r2", "unpipelined", 64, 0),
+                          ("r3", "unpipelined", 8, 0),
+                          ("r4", "unpipelined", 64, 0)],
+                 bulk=dict(repeats=3, s5_rows=100000, s6_rows=3_000_000)),
     # repeat (rounds 2 and 3): what is measured again on the other droplets
     "repeat": dict(repeats=5, duration=12, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
                    configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 64, 0),

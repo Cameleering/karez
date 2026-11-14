@@ -40,6 +40,8 @@ for profile in "${PROFILES[@]}"; do
     if [ "$gone" = 1 ]; then lost=$((lost + 1)); else lost=0; fi
     [ "$lost" -ge 20 ] && { log "a lane stayed unreachable; giving up the wait"; break; }
     [ "$busy" = 0 ] && [ "$gone" = 0 ] && break
+    # STOP_AT (epoch seconds): stop waiting, pull what exists, delete the droplets before the safety net does
+    if [ -n "${STOP_AT:-}" ] && [ "$(date +%s)" -ge "$STOP_AT" ]; then log "STOP_AT reached; pulling partial results"; break; fi
     bash "$ROOT/bench/cloud/safety-net.sh" due >> "$LOG" 2>&1
     sleep 120
   done
