@@ -2,6 +2,8 @@
 # Operator of the karez benchmark campaign on DigitalOcean (run from the owner's machine, Git Bash).
 #
 #   ctl.sh up              create 6 droplets (3 lanes x db + client), ship the tree, set every node up
+#   ctl.sh stage-data      download the NYC taxi parquet files here and copy them to the db hosts
+#   ctl.sh load-data       load them into PostgreSQL on every lane (also called by setup)
 #   ctl.sh ship            ship the current tree again and rebuild the adapters on the clients
 #   ctl.sh status          droplets, setup state, running campaign units, safety-net deadline
 #   ctl.sh run ROUND PROFILE   start the campaign of one round on every lane (detached on the droplets)
@@ -79,16 +81,7 @@ case "${1:-status}" in
     fail=0; for p in "${pids[@]}"; do wait "$p" || fail=1; done
     echo "setup finished (failures: $fail); logs in $STATE/logs"
     [ "$fail" = 0 ] || { tail -n 5 "$STATE"/logs/setup-*.log; exit 1; }
-    # copy the client's trust root (the db's throwaway CA) to its client
-    for l in 1 2 3; do
-      rscp "root@$(ip_of karez-bench-l$l-db):/root/ca.crt" "$STATE/ca-l$l.crt" >/dev/null &&
-      rscp "$STATE/ca-l$l.crt" "root@$(ip_of karez-bench-l$l-cl):/root/ca.crt" >/dev/null
-      rssh "karez-bench-l$l-db" "cat /root/taxi_rows" | rssh "karez-bench-l$l-cl" "cat > /root/taxi_rows"
-      rssh "karez-bench-l$l-db" "cat /root/bench-pw" | rssh "karez-bench-l$l-cl" "cat > /root/bench-pw && chmod 600 /root/bench-pw"
-      # the client samples its database host's CPU over ssh: the bench key (throwaway, deleted with the droplets)
-      rscp "$KEY" "root@$(ip_of karez-bench-l$l-cl):/root/.ssh/id_ed25519" >/dev/null
-      rssh "karez-bench-l$l-cl" "chmod 600 /root/.ssh/id_ed25519"
-    done
+    bash "$0" link || exit 1
     echo "nodes ready"
     ;;
   ship)
@@ -103,6 +96,39 @@ case "${1:-status}" in
     done
     wait
     echo "shipped and rebuilt"
+    ;;
+  link)
+    # copy the client's trust root (the db's throwaway CA) to its client
+    for l in 1 2 3; do
+      rscp "root@$(ip_of karez-bench-l$l-db):/root/ca.crt" "$STATE/ca-l$l.crt" >/dev/null &&
+      rscp "$STATE/ca-l$l.crt" "root@$(ip_of karez-bench-l$l-cl):/root/ca.crt" >/dev/null
+      rssh "karez-bench-l$l-db" "cat /root/taxi_rows" | rssh "karez-bench-l$l-cl" "cat > /root/taxi_rows"
+      rssh "karez-bench-l$l-db" "cat /root/bench-pw" | rssh "karez-bench-l$l-cl" "cat > /root/bench-pw && chmod 600 /root/bench-pw"
+      # the client samples its database host's CPU over ssh: the bench key (throwaway, deleted with the droplets)
+      rscp "$KEY" "root@$(ip_of karez-bench-l$l-cl):/root/.ssh/id_ed25519" >/dev/null
+      rssh "karez-bench-l$l-cl" "chmod 600 /root/.ssh/id_ed25519"
+    done
+    echo "nodes linked"
+    ;;
+  stage-data)
+    # the NYC taxi parquet files: downloaded here (CloudFront refuses the droplets), copied to every db host
+    mkdir -p "$STATE/taxi"
+    for m in 2024-01 2024-02 2024-03 2024-04; do
+      f="$STATE/taxi/yellow_$m.parquet"
+      [ -s "$f" ] || curl -sSL -o "$f" "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_$m.parquet"
+    done
+    for l in 1 2 3; do
+      rssh "karez-bench-l$l-db" "mkdir -p /tmp/taxi" && rscp "$STATE"/taxi/yellow_*.parquet "root@$(ip_of karez-bench-l$l-db):/tmp/taxi/" > /dev/null &&
+        echo "lane $l: data staged"
+    done
+    ;;
+  load-data)
+    for l in 1 2 3; do
+      pw="$(rssh "karez-bench-l$l-db" "cat /root/bench-pw")"
+      priv="$(ip_of karez-bench-l$l-db private)"
+      ( rssh "karez-bench-l$l-db" "bash /root/karez/bench/cloud/load-data.sh $pw $priv" > "$STATE/logs/load-l$l.log" 2>&1 && echo "lane $l: data loaded" || echo "lane $l: load FAILED (logs/load-l$l.log)" ) &
+    done
+    wait
     ;;
   status)
     bash "$CLOUD/droplets.sh" status 2>&1
