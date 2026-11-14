@@ -29,7 +29,7 @@ SCENARIOS = {
     "r1": dict(sql="taxi point select, 17 columns", bound_ms=3.0),
     "r2": dict(sql="taxi 100-row primary-key range", bound_ms=8.0),
     "r3": dict(sql="taxi aggregate over one zone", bound_ms=60.0, start_rate=50),
-    "r4": dict(sql="taxi mixed: 80% r1, 15% r2, 5% r3", bound_ms=15.0),
+    "r4": dict(sql="taxi mixed: 80% r1, 15% r2, 5% r3", bound_ms=20.0),
 }
 
 

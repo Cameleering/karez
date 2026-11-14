@@ -46,8 +46,9 @@ real table, so every client decodes the same real values, NULLs and timestamps.
 
 **Correctness check before any number is taken:** `python3 run.py verify` runs every client for one
 worker on the same request sequence (every adapter uses the same generator and seed) and compares the
-checksum of all values read. On PostgreSQL 18 in WSL, with 2,964,624 rows of January 2024 loaded, all 15
-clients produce identical checksums on S2, S3, R1, R2, R3 and R4 (2026-11-14). The campaign runs
+checksum of all values read. On PostgreSQL 18 in WSL, with 2,964,624 rows of January 2024 loaded, every client that
+implements a scenario produces the identical checksum: 15 clients on S2 and S3, 14 on R1 to R4 (zero-postgres
+has no taxi adapter: its tuple decoder stops at 12 columns) (2026-11-14, `[measured here]`). The campaign runs
 `verify` first on every lane and keeps its output (`verify.txt`).
 
 ## Method (what makes the numbers comparable)
