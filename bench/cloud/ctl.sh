@@ -62,14 +62,14 @@ case "${1:-status}" in
     bash "$CLOUD/safety-net.sh" arm "${SAFETY_HOURS:-10}" || echo "WARNING: safety net not armed" >&2
     tarball="$(pack)" || exit 1
     echo "waiting for ssh"
-    while read -r name pub priv status _; do
-      for _ in $(seq 60); do rssh "$name" true 2>/dev/null && break; sleep 5; done
-    done < "$STATE/droplets.txt"
+    while read -r name pub priv status _ <&3; do
+      for _ in $(seq 60); do rssh "$name" true 2>/dev/null </dev/null && break; sleep 5; done
+    done 3< "$STATE/droplets.txt"
     # private IPs of the db hosts go to every node
     for l in 1 2 3; do echo "$(ip_of karez-bench-l$l-db private)"; done > "$STATE/db-private-ips.txt"
     mkdir -p "$STATE/logs"
     pids=()
-    while read -r name pub priv status _; do
+    while read -r name pub priv status _ <&3; do
       ( rscp "$tarball" "root@$pub:/root/karez-tree.tar.gz" >/dev/null &&
         rssh "$name" "mkdir -p /root/karez && tar xzf /root/karez-tree.tar.gz -C /root/karez && find /root/karez/bench -type f \( -name '*.sh' -o -name '*.env' -o -name '*.py' -o -name '*.json' \) -exec sed -i 's/\r\$//' {} +" &&
         case "$name" in
@@ -77,7 +77,7 @@ case "${1:-status}" in
           *-cl) rssh "$name" "bash /root/karez/bench/cloud/setup-client.sh" ;;
         esac ) > "$STATE/logs/setup-$name.log" 2>&1 &
       pids+=($!)
-    done < "$STATE/droplets.txt"
+    done 3< "$STATE/droplets.txt"
     fail=0; for p in "${pids[@]}"; do wait "$p" || fail=1; done
     echo "setup finished (failures: $fail); logs in $STATE/logs"
     [ "$fail" = 0 ] || { tail -n 5 "$STATE"/logs/setup-*.log; exit 1; }
@@ -87,10 +87,10 @@ case "${1:-status}" in
   ship)
     # ship the current tree again and rebuild the adapters on the clients (after a code change)
     tarball="$(pack)" || exit 1
-    while read -r name pub priv status _; do
+    while read -r name pub priv status _ <&3; do
       rscp "$tarball" "root@$pub:/root/karez-tree.tar.gz" >/dev/null &&
       rssh "$name" "tar xzf /root/karez-tree.tar.gz -C /root/karez && find /root/karez/bench -type f \( -name '*.sh' -o -name '*.env' -o -name '*.py' -o -name '*.json' \) -exec sed -i 's/\r\$//' {} +" || echo "ship to $name failed" >&2
-    done < "$STATE/droplets.txt"
+    done 3< "$STATE/droplets.txt"
     for l in 1 2 3; do
       ( rssh "karez-bench-l$l-cl" "bash /root/karez/bench/cloud/build-adapters.sh" > "$STATE/logs/build-l$l.log" 2>&1 || echo "build on lane $l failed (see logs/build-l$l.log)" >&2 ) &
     done
