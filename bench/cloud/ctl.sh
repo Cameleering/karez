@@ -2,6 +2,7 @@
 # Operator of the karez benchmark campaign on DigitalOcean (run from the owner's machine, Git Bash).
 #
 #   ctl.sh up              create 6 droplets (3 lanes x db + client), ship the tree, set every node up
+#   ctl.sh ship            ship the current tree again and rebuild the adapters on the clients
 #   ctl.sh status          droplets, setup state, running campaign units, safety-net deadline
 #   ctl.sh run ROUND PROFILE   start the campaign of one round on every lane (detached on the droplets)
 #   ctl.sh tail LANE       last lines of a lane's campaign log
@@ -89,6 +90,19 @@ case "${1:-status}" in
       rssh "karez-bench-l$l-cl" "chmod 600 /root/.ssh/id_ed25519"
     done
     echo "nodes ready"
+    ;;
+  ship)
+    # ship the current tree again and rebuild the adapters on the clients (after a code change)
+    tarball="$(pack)" || exit 1
+    while read -r name pub priv status _; do
+      rscp "$tarball" "root@$pub:/root/karez-tree.tar.gz" >/dev/null &&
+      rssh "$name" "tar xzf /root/karez-tree.tar.gz -C /root/karez && find /root/karez/bench -type f \( -name '*.sh' -o -name '*.env' -o -name '*.py' -o -name '*.json' \) -exec sed -i 's/\r\$//' {} +" || echo "ship to $name failed" >&2
+    done < "$STATE/droplets.txt"
+    for l in 1 2 3; do
+      ( rssh "karez-bench-l$l-cl" "bash /root/karez/bench/cloud/build-adapters.sh" > "$STATE/logs/build-l$l.log" 2>&1 || echo "build on lane $l failed (see logs/build-l$l.log)" >&2 ) &
+    done
+    wait
+    echo "shipped and rebuilt"
     ;;
   status)
     bash "$CLOUD/droplets.sh" status 2>&1

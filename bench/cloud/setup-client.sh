@@ -51,12 +51,7 @@ go version >&2
 log "Python packages"
 python3 -m venv /root/venv
 /root/venv/bin/pip install -q "asyncpg==$ASYNCPG_VERSION" "psycopg[binary,pool]==$PSYCOPG_VERSION" "psycopg-pool==$PSYCOPG_POOL_VERSION" "uvloop==$UVLOOP_VERSION"
-log "building the adapters"
-cd /root/karez/bench
-cargo build --release -q 2>&1 | tail -5 >&2
-(cd adapters/go && go mod download && go build -o karez-bench-go .)
-(cd adapters/java && mvn -q -B package -DskipTests 2>&1 | tail -5 >&2)
-(cd adapters/c && cc -O2 -Wall -o libpq_adapter libpq_adapter.c -I"$(pg_config --includedir)" -L"$(pg_config --libdir)" -lpq -lpthread -lm)
+bash /root/karez/bench/cloud/build-adapters.sh
 # keys: the clients sample the database host's CPU over ssh
 install -d -m 700 /root/.ssh
 printf 'Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n' > /root/.ssh/config
