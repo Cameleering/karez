@@ -66,6 +66,19 @@ final class Taxi {
 
     // ---- pgJDBC -----------------------------------------------------------------------------------
 
+    /** The checksum of the current row of an R1/R2/S8 result (17 columns). */
+    static long rowSum(ResultSet rs) throws Exception {
+        long s = rs.getLong(1) + rs.getShort(2) + us(rs.getObject(3, LocalDateTime.class)) + us(rs.getObject(4, LocalDateTime.class));
+        short pass = rs.getShort(5); s += rs.wasNull() ? 0 : pass;
+        s += bits(rs.getDouble(6));
+        short rc = rs.getShort(7); s += rs.wasNull() ? 0 : rc;
+        String flag = rs.getString(8); s += flag == null ? 0 : flag.length();
+        s += rs.getInt(9) + rs.getInt(10) + rs.getShort(11) + bits(rs.getDouble(12)) + bits(rs.getDouble(13)) + bits(rs.getDouble(14))
+                + bits(rs.getDouble(15)) + bits(rs.getDouble(16));
+        double cg = rs.getDouble(17); s += rs.wasNull() ? 0 : bits(cg);
+        return s;
+    }
+
     static long foldJdbc(ResultSet rs, String k, long id) throws Exception {
         int n = 0; long sum = 0;
         while (rs.next()) {

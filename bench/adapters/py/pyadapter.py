@@ -359,7 +359,7 @@ def main():
     cfg = parse()
     if cfg["mode"] == "pipelined":
         die(f"{cfg['client']}: unpipelined only")
-    if cfg["scenario"] in ("s4", "s5", "s6"):
+    if cfg["scenario"] in ("s4", "s5", "s6", "s8"):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import bulk
         bulk.run(cfg)

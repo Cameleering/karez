@@ -102,7 +102,7 @@ fn karez_cfg(sh: &Shared) -> karez_pg::Config {
     karez_pg::Config::from_url(&sh.cfg.url).unwrap_or_else(|e| die(&format!("bad url: {e}")))
 }
 
-fn karez_taxi(row: &karez_pg::RowRef<'_>) -> Result<u64, String> {
+pub fn karez_taxi(row: &karez_pg::RowRef<'_>) -> Result<u64, String> {
     let mut s = row.get::<i64>(0).map_err(|x| x.to_string())? as u64;
     s = s.wrapping_add(row.get::<i16>(1).map_err(|x| x.to_string())? as u64);
     s = s.wrapping_add(row.get::<karez_pg::Timestamp>(2).map_err(|x| x.to_string())?.0 as u64);
@@ -434,7 +434,7 @@ fn tp_us(d: time::PrimitiveDateTime) -> u64 {
     (d.assume_utc().unix_timestamp_nanos() / 1000) as i64 as u64
 }
 
-fn tp_taxi(r: &tokio_postgres::Row) -> u64 {
+pub fn tp_taxi(r: &tokio_postgres::Row) -> u64 {
     let mut s = r.get::<_, i64>(0) as u64;
     s = s.wrapping_add(r.get::<_, i16>(1) as u64);
     s = s.wrapping_add(tp_us(r.get(2)));

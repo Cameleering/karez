@@ -23,6 +23,8 @@ pub enum Scenario {
     S4,
     S5,
     S6,
+    /// Bulk scan of the whole NYC taxi table (17 columns, NULLs, timestamps).
+    S8,
     /// NYC taxi data: point select by primary key (17 columns, NULLs, timestamps).
     R1,
     /// 100 consecutive rows by primary key range.
@@ -42,6 +44,7 @@ impl Scenario {
             "s4" => Scenario::S4,
             "s5" => Scenario::S5,
             "s6" => Scenario::S6,
+            "s8" => Scenario::S8,
             "r1" => Scenario::R1,
             "r2" => Scenario::R2,
             "r3" => Scenario::R3,
@@ -60,6 +63,7 @@ impl Scenario {
             Scenario::R2 => TAXI_COLS_SQL_R2,
             Scenario::R3 => "SELECT pu, count(*), max(fare), max(total) FROM taxi_trips WHERE pu = $1 GROUP BY pu",
             Scenario::R4 => TAXI_COLS_SQL_R1,
+            Scenario::S8 => TAXI_SCAN_SQL,
             _ => bulk::S4_SQL,
         }
     }
@@ -116,7 +120,6 @@ impl Scenario {
 const TAXI_COLS: &str = "trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion";
 const TAXI_COLS_SQL_R1: &str = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips WHERE trip_id = $1";
 const TAXI_COLS_SQL_R2: &str = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips WHERE trip_id BETWEEN $1 AND $1 + 99 ORDER BY trip_id";
-#[allow(dead_code)]
 pub const TAXI_SCAN_SQL: &str = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips";
 #[allow(dead_code)]
 const _: &str = TAXI_COLS;

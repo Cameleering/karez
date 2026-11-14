@@ -299,7 +299,7 @@ func main() {
 	if *client != "pgx" {
 		die("unknown client %s (pgx)", *client)
 	}
-	if *scenario == "s4" || *scenario == "s5" || *scenario == "s6" {
+	if *scenario == "s4" || *scenario == "s5" || *scenario == "s6" || *scenario == "s8" {
 		bulk(*url, *scenario, *repeats, *bulkRows)
 	}
 	sh := &shared{

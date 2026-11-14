@@ -99,7 +99,7 @@ def bulk(rows, out):
     out.append("Seconds are the median of the timed passes of one cell. The ratio compares rows/s of a client with "
                "`karez-blocking` (row view) of the same lane and round; the chunk path row is a different access path and "
                "is labelled. CPU-s per million rows is the process CPU over the pass; RSS is the peak of the whole process.\n")
-    for sc in ("s4", "s5", "s6"):
+    for sc in ("s4", "s5", "s6", "s8"):
         grp = [r for r in bulks if str(r.get("scenario", "")).lower() == sc]
         if not grp:
             continue
@@ -122,7 +122,7 @@ def bulk(rows, out):
             lrs = [lr for (cc, lr) in entries if cc == c]
             vals = [entries[(c, lr)]["rps"] / entries[("karez-blocking", lr)]["rps"] for lr in lrs if ("karez-blocking", lr) in entries]
             e = [entries[(c, lr)] for lr in lrs]
-            good = all(len(sums_by_lr[lr]) == 1 for lr in lrs) if sc == "s4" else True
+            good = all(len(sums_by_lr[lr]) == 1 for lr in lrs) if sc in ("s4", "s8") else True
             out.append(f"| {c} | {len(lrs)} | {e[0]['n']} | {fmt(med([x['secs'] for x in e]), 3)} | {fmt(med([x['rps'] for x in e]))} | "
                        f"{ratio_cell(vals)} | {fmt(med([x['cpu'] for x in e]), 2)} | {fmt(med([x['rss'] for x in e]))} | {'ok' if good else 'MISMATCH'} |")
         for r in [r for r in grp if r.get("failed")]:

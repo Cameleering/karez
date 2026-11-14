@@ -100,7 +100,19 @@ final class Bulk {
                     }
                 };
                 version = "pgjdbc " + org.postgresql.util.DriverInfo.DRIVER_VERSION + (tuned ? " (tuned)" : " (defaults)");
+                Pass s8 = () -> {
+                    try (PreparedStatement ps = c.prepareStatement("SELECT " + Taxi.COLS + " FROM taxi_trips")) {
+                        ps.setFetchSize(tuned ? 20000 : 0);      // defaults buffer the whole result: 13M rows will not fit
+                        long rows = 0, sum = 0;
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) { rows++; sum += Taxi.rowSum(rs); }
+                        }
+                        c.commit();
+                        return new long[]{rows, sum};
+                    }
+                };
                 if (sc.equals("s4")) { one = s4; warm = s4; }
+                else if (sc.equals("s8")) { one = s8; warm = () -> new long[]{0, 0}; }
                 else if (sc.equals("s5")) {
                     java.util.function.LongFunction<Pass> mk = n -> () -> {
                         try (java.sql.Statement st = c.createStatement()) { st.execute("TRUNCATE bench_ins"); }

@@ -6,6 +6,7 @@ import asyncio, json, struct, sys, time
 S4_SQL = "SELECT id, a, b, c, d, e, s1, s2, flag, f FROM bench_wide"
 COLS = "id, a, b, c, d, e, s1, s2, flag, f"
 M64 = 2**64 - 1
+TAXI_SCAN = "SELECT trip_id, vendor, pickup, dropoff, passengers, distance, ratecode, flag, pu, do_, payment, fare, extra, tip, tolls, total, congestion FROM taxi_trips"
 
 
 def gen_row(i):
@@ -75,9 +76,19 @@ async def run_asyncpg(cfg):
                                       columns=COLS.split(", "))
         return await c.fetchval("SELECT count(*) FROM bench_ins"), 0
 
-    one = {"s4": s4, "s5": lambda: s5(n_rows), "s6": lambda: s6(n_rows)}[sc]
-    warm = {"s4": s4, "s5": lambda: s5(1000), "s6": lambda: s6(1000)}[sc]
-    await warm()
+    async def s8():
+        from pyadapter import fold_taxi
+        n = s = 0
+        async with c.transaction():
+            async for r in c.cursor(TAXI_SCAN, prefetch=20000):
+                n += 1
+                s += fold_taxi(r)
+        return n, s & M64
+
+    one = {"s4": s4, "s5": lambda: s5(n_rows), "s6": lambda: s6(n_rows), "s8": s8}[sc]
+    warm = {"s4": s4, "s5": lambda: s5(1000), "s6": lambda: s6(1000), "s8": s8}[sc]
+    if sc != "s8":
+        await warm()
     runs = [await timed(one) for _ in range(cfg["repeats"])]
     await c.close()
     import asyncpg as ap
@@ -119,9 +130,22 @@ async def run_psycopg(cfg):
         cur = await c.execute("SELECT count(*) FROM bench_ins")
         return (await cur.fetchone())[0], 0
 
-    one = {"s4": s4, "s5": lambda: s5(n_rows), "s6": lambda: s6(n_rows)}[sc]
-    warm = {"s4": s4, "s5": lambda: s5(1000), "s6": lambda: s6(1000)}[sc]
-    await warm()
+    async def s8():
+        from pyadapter import fold_taxi
+        n = s = 0
+        async with c.transaction():
+            cur = c.cursor(name="taxi_scan", binary=True)
+            cur.itersize = 20000
+            await cur.execute(TAXI_SCAN)
+            async for r in cur:
+                n += 1
+                s += fold_taxi(r)
+        return n, s & M64
+
+    one = {"s4": s4, "s5": lambda: s5(n_rows), "s6": lambda: s6(n_rows), "s8": s8}[sc]
+    warm = {"s4": s4, "s5": lambda: s5(1000), "s6": lambda: s6(1000), "s8": s8}[sc]
+    if sc != "s8":
+        await warm()
     runs = [await timed(one) for _ in range(cfg["repeats"])]
     await c.close()
     return f"psycopg {psycopg.__version__} (binary)", runs

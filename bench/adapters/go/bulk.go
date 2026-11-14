@@ -120,6 +120,43 @@ func bulk(url, scenario string, repeats int, n int64) {
 			}
 			return count(), 0
 		}
+	case "s8":
+		fn = func(int64) (uint64, uint64) {
+			rows, err := conn.Query(ctx, "SELECT "+taxiCols+" FROM taxi_trips")
+			if err != nil {
+				die("query: %v", err)
+			}
+			var n, sum uint64
+			for rows.Next() {
+				var id int64
+				var vendor, payment int16
+				var pickup, dropoff time.Time
+				var passengers, ratecode *int16
+				var distance, fare, extra, tip, tolls, total float64
+				var flag *string
+				var pu, do int32
+				var congestion *float64
+				if err := rows.Scan(&id, &vendor, &pickup, &dropoff, &passengers, &distance, &ratecode, &flag, &pu, &do, &payment,
+					&fare, &extra, &tip, &tolls, &total, &congestion); err != nil {
+					die("scan: %v", err)
+				}
+				sum += uint64(id) + uint64(int64(vendor)) + uint64(pickup.UnixMicro()) + uint64(dropoff.UnixMicro()) + i16(passengers) +
+					math.Float64bits(distance) + i16(ratecode)
+				if flag != nil {
+					sum += uint64(len(*flag))
+				}
+				sum += uint64(int64(pu)) + uint64(int64(do)) + uint64(int64(payment)) + math.Float64bits(fare) + math.Float64bits(extra) +
+					math.Float64bits(tip) + math.Float64bits(tolls) + math.Float64bits(total)
+				if congestion != nil {
+					sum += math.Float64bits(*congestion)
+				}
+				n++
+			}
+			if rows.Err() != nil {
+				die("rows: %v", rows.Err())
+			}
+			return n, sum
+		}
 	default: // s6: binary COPY through CopyFrom, pgx's documented fast path
 		fn = func(rows int64) (uint64, uint64) {
 			if _, err := conn.Exec(ctx, "TRUNCATE bench_ins"); err != nil {
@@ -140,10 +177,12 @@ func bulk(url, scenario string, repeats int, n int64) {
 		}
 	}
 	warm := n
-	if scenario != "s4" {
+	if scenario != "s4" && scenario != "s8" {
 		warm = 1000
 	}
-	fn(warm)
+	if scenario != "s8" {
+		fn(warm)
+	}
 	var runs []pass
 	for k := 0; k < repeats; k++ {
 		c0, t0 := cpuNow(), time.Now()

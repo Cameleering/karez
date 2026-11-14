@@ -116,7 +116,7 @@ public final class Main {
         endNs = (long) ((warmup + duration) * 1e9);
         sql = SQL.get(scenario);
         boolean pipelined = mode.equals("pipelined");
-        if (scenario.equals("s4") || scenario.equals("s5") || scenario.equals("s6")) {
+        if (scenario.equals("s4") || scenario.equals("s5") || scenario.equals("s6") || scenario.equals("s8")) {
             System.out.println(Bulk.run(client, url, scenario, (int) Double.parseDouble(arg.getOrDefault("repeats", "5")),
                     (long) Double.parseDouble(arg.getOrDefault("bulk-rows", "100000"))));
             System.exit(0);

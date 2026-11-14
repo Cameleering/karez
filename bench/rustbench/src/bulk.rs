@@ -142,7 +142,7 @@ pub fn report(cfg: &Cfg, version: &str, passes: &[Pass]) -> String {
 /// Entry point: returns the JSON line, or None if the scenario is not a bulk one.
 pub fn run(cfg: &Cfg) -> Option<String> {
     match cfg.scenario {
-        Scenario::S4 | Scenario::S5 | Scenario::S6 => {}
+        Scenario::S4 | Scenario::S5 | Scenario::S6 | Scenario::S8 => {}
         _ => return None,
     }
     let (version, passes) = match cfg.client.as_str() {

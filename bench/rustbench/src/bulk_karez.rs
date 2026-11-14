@@ -74,6 +74,70 @@ fn scan_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
     Ok((rows, sum))
 }
 
+fn scan_taxi_rows(conn: &mut Connection) -> Result<(u64, u64), String> {
+    let mut cur = conn.query(crate::TAXI_SCAN_SQL, &[]).map_err(|e| e.to_string())?;
+    let (mut rows, mut sum) = (0u64, 0u64);
+    while let Some(r) = cur.next().map_err(|e| e.to_string())? {
+        sum = sum.wrapping_add(crate::clients::karez_taxi(&r)?);
+        rows += 1;
+    }
+    Ok((rows, sum))
+}
+
+/// The chunk path on the real table: whole columns, NULLs through the validity bitmaps.
+fn scan_taxi_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
+    let mut cur = conn.query(crate::TAXI_SCAN_SQL, &[]).map_err(|e| e.to_string())?;
+    let (mut rows, mut sum) = (0u64, 0u64);
+    while let Some(ch) = cur.next_chunk().map_err(|e| e.to_string())? {
+        let n = ch.rows();
+        let col = |i: usize| ch.column(i).map_err(|e| e.to_string());
+        let valid = |c: &karez_pg::Column, r: usize| c.null_count() == 0 || (c.validity()[r / 8] >> (r % 8)) & 1 == 1;
+        let mut s = 0u64;
+        for v in le::<8>(col(0)?.data()).take(n) {
+            s = s.wrapping_add(i64::from_le_bytes(v) as u64);
+        }
+        for i in [1usize, 10] {
+            for v in le::<2>(col(i)?.data()).take(n) {
+                s = s.wrapping_add(i16::from_le_bytes(v) as u64);
+            }
+        }
+        for i in [2usize, 3] {
+            for v in le::<8>(col(i)?.data()).take(n) {
+                s = s.wrapping_add(i64::from_le_bytes(v) as u64);
+            }
+        }
+        for i in [4usize, 6] {
+            let c = col(i)?;
+            for (r, v) in le::<2>(c.data()).take(n).enumerate() {
+                if valid(c, r) {
+                    s = s.wrapping_add(i16::from_le_bytes(v) as u64);
+                }
+            }
+        }
+        for i in [8usize, 9] {
+            for v in le::<4>(col(i)?.data()).take(n) {
+                s = s.wrapping_add(i32::from_le_bytes(v) as u64);
+            }
+        }
+        for i in [5usize, 11, 12, 13, 14, 15] {
+            for v in le::<8>(col(i)?.data()).take(n) {
+                s = s.wrapping_add(u64::from_le_bytes(v));
+            }
+        }
+        let c = col(16)?;
+        for (r, v) in le::<8>(c.data()).take(n).enumerate() {
+            if valid(c, r) {
+                s = s.wrapping_add(u64::from_le_bytes(v));
+            }
+        }
+        let o = col(7)?.offsets();
+        s = s.wrapping_add((o[n] - o[0]) as u64);
+        sum = sum.wrapping_add(s);
+        rows += n as u64;
+    }
+    Ok((rows, sum))
+}
+
 fn insert_batched(conn: &mut Connection, rows: i64) -> Result<(u64, u64), String> {
     let e = |e: karez_pg::Error| e.to_string();
     conn.execute("TRUNCATE bench_ins", &[]).map_err(e)?;
@@ -159,6 +223,7 @@ pub fn run(cfg: &Cfg, chunk: bool) -> (String, Vec<Pass>) {
     // one untimed pass warms the server's cache and the statement cache
     let warm = |conn: &mut Connection| match cfg.scenario {
         Scenario::S4 => if chunk { scan_chunks(conn) } else { scan_rows(conn) },
+        Scenario::S8 => if chunk { scan_taxi_chunks(conn) } else { scan_taxi_rows(conn) },
         Scenario::S5 => insert_batched(conn, 1000),
         _ => copy_in(conn, 1000),
     };
@@ -166,6 +231,7 @@ pub fn run(cfg: &Cfg, chunk: bool) -> (String, Vec<Pass>) {
     for _ in 0..cfg.repeats {
         passes.push(timed(|| match cfg.scenario {
             Scenario::S4 => if chunk { scan_chunks(&mut conn) } else { scan_rows(&mut conn) },
+            Scenario::S8 => if chunk { scan_taxi_chunks(&mut conn) } else { scan_taxi_rows(&mut conn) },
             Scenario::S5 => insert_batched(&mut conn, cfg.bulk_rows),
             _ => copy_in(&mut conn, cfg.bulk_rows),
         }));

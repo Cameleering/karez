@@ -70,6 +70,17 @@ pub fn tokio_pg(cfg: &Cfg) -> (String, Vec<Pass>) {
                     }
                     (acc.rows, acc.sum)
                 }
+                Scenario::S8 => {
+                    let st = client.prepare(crate::TAXI_SCAN_SQL).await.unwrap();
+                    let stream = client.query_raw(&st, std::iter::empty::<&(dyn ToSql + Sync)>()).await.unwrap();
+                    pin_mut!(stream);
+                    let (mut n, mut sum) = (0u64, 0u64);
+                    while let Some(r) = stream.next().await {
+                        sum = sum.wrapping_add(crate::clients::tp_taxi(&r.unwrap()));
+                        n += 1;
+                    }
+                    (n, sum)
+                }
                 Scenario::S5 => {
                     client.batch_execute("TRUNCATE bench_ins; BEGIN").await.unwrap();
                     let mut i = 1;
@@ -148,6 +159,31 @@ pub fn sqlx_(cfg: &Cfg) -> (String, Vec<Pass>) {
                         );
                     }
                     (acc.rows, acc.sum)
+                }
+                Scenario::S8 => {
+                    let mut s = sqlx::query(crate::TAXI_SCAN_SQL).fetch(&pool);
+                    let (mut n, mut sum) = (0u64, 0u64);
+                    while let Some(r) = s.try_next().await.unwrap() {
+                        let us = |i: usize| -> u64 { (r.get::<time::PrimitiveDateTime, _>(i).assume_utc().unix_timestamp_nanos() / 1000) as i64 as u64 };
+                        let mut v = (r.get::<i64, _>(0) as u64)
+                            .wrapping_add(r.get::<i16, _>(1) as u64)
+                            .wrapping_add(us(2))
+                            .wrapping_add(us(3))
+                            .wrapping_add(r.get::<Option<i16>, _>(4).unwrap_or(0) as u64)
+                            .wrapping_add(r.get::<f64, _>(5).to_bits())
+                            .wrapping_add(r.get::<Option<i16>, _>(6).unwrap_or(0) as u64)
+                            .wrapping_add(r.get::<Option<&str>, _>(7).map_or(0, |v| v.len()) as u64)
+                            .wrapping_add(r.get::<i32, _>(8) as u64)
+                            .wrapping_add(r.get::<i32, _>(9) as u64)
+                            .wrapping_add(r.get::<i16, _>(10) as u64);
+                        for i in 11..=15 {
+                            v = v.wrapping_add(r.get::<f64, _>(i).to_bits());
+                        }
+                        v = v.wrapping_add(r.get::<Option<f64>, _>(16).map_or(0, |x| x.to_bits()));
+                        sum = sum.wrapping_add(v);
+                        n += 1;
+                    }
+                    (n, sum)
                 }
                 Scenario::S5 => {
                     let mut tx = pool.begin().await.unwrap();

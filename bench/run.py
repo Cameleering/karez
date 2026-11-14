@@ -444,9 +444,9 @@ def run_bulk_for(a, log, client, bp, tags):
     for sc in spec.get("bulk", []):
         if a.only and a.only not in f"bulk-{sc}":
             continue
-        rows = {"s4": 1_000_000, "s5": bp["s5_rows"], "s6": bp["s6_rows"]}[sc]
+        rows = {"s4": 1_000_000, "s5": bp["s5_rows"], "s6": bp["s6_rows"], "s8": a.taxi_rows}[sc]
         print(f"[{client}] bulk {sc} rows={rows}", flush=True)
-        raw = run_bulk(a, client, sc, bp["repeats"], rows)
+        raw = run_bulk(a, client, sc, min(bp["repeats"], 3) if sc == "s8" else bp["repeats"], rows)
         log.add(raw, phase="bulk", **tags)
         if raw.get("failed"):
             print("    FAILED", str(raw.get("stderr"))[:300], flush=True)
@@ -500,13 +500,13 @@ def cmd_report(a):
         out.append("S4 = scan of 1,000,000 rows x 10 columns; S5 = batch insert; S6 = COPY. Rows per second is the "
                    "headline here; CPU-seconds per million rows and peak RSS show the cost. `checksum` column: every client must "
                    "fold the same S4 checksum, or the row says MISMATCH.\n")
-        for sc in ("s4", "s5", "s6"):
+        for sc in ("s4", "s5", "s6", "s8"):
             grp = [r for r in bulks if r.get("scenario", "").lower() == sc and not r.get("failed")]
             if not grp:
                 continue
             ref = {}
             for r in grp:
-                ref.setdefault((r.get("lane"), r.get("round")), r["runs"][0]["checksum"] if sc == "s4" else 0)
+                ref.setdefault((r.get("lane"), r.get("round")), r["runs"][0]["checksum"] if sc in ("s4", "s8") else 0)
             out.append(f"\n### {sc.upper()}\n")
             out.append("| client | lane/round | rows | median s | rows/s | CPU-s per M rows | peak RSS MB | runs | checksum |")
             out.append("|---|---|---:|---:|---:|---:|---:|---:|---|")
@@ -514,7 +514,7 @@ def cmd_report(a):
                 secs = statistics.median(x["secs"] for x in r["runs"])
                 cpu = statistics.median(x["cpu_s"] for x in r["runs"])
                 n = r["runs"][0]["rows"]
-                ok = all(x["checksum"] == r["runs"][0]["checksum"] for x in r["runs"]) and (sc != "s4" or r["runs"][0]["checksum"] == ref[(r.get("lane"), r.get("round"))])
+                ok = all(x["checksum"] == r["runs"][0]["checksum"] for x in r["runs"]) and (sc not in ("s4", "s8") or r["runs"][0]["checksum"] == ref[(r.get("lane"), r.get("round"))])
                 out.append(f"| {r['client']} ({r['version']}) | {r.get('lane')}/{r.get('round')} | {n} | {secs:.3f} | {n / secs:,.0f} | "
                            f"{cpu / n * 1e6:.2f} | {r['rss_kb'] / 1024:.0f} | {len(r['runs'])} | {'ok' if ok else 'MISMATCH'} |")
         fails = [r for r in rows if r.get("phase") == "bulk" and r.get("failed")]
