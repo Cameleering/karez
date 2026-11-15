@@ -6,3 +6,4 @@ libpq_adapter
 __pycache__/
 results/*
 !results/2026-11-14-lean
+results/**/cells.jsonl
