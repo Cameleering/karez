@@ -12,7 +12,8 @@ Standard library only. Method: docs/design/plan.md section 6 and bench/README.md
 Every cell appends one JSON line (adapter output plus orchestrator measurements) to
 DIR/cells.jsonl. Nothing is overwritten and nothing is averaged away: the report reads the raw lines.
 """
-import argparse, json, os, platform, statistics, subprocess, sys, threading, time
+import argparse, json, os, platform, socket, statistics, subprocess, sys, threading, time
+from threading import Timer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLIENTS = json.load(open(os.path.join(HERE, "clients.json")))
@@ -28,8 +29,12 @@ SCENARIOS = {
     # NYC taxi data (data/load_taxi.py): real rows, NULLs, timestamps
     "r1": dict(sql="taxi point select, 17 columns", bound_ms=3.0),
     "r2": dict(sql="taxi 100-row primary-key range", bound_ms=8.0),
-    "r3": dict(sql="taxi aggregate over one zone", bound_ms=60.0, start_rate=50),
-    "r4": dict(sql="taxi mixed: 80% r1, 15% r2, 5% r3", bound_ms=20.0),
+    # R3 is server-bound: one zone has between a few and ~600k trips, so a few percent of the requests need hundreds of
+    # ms to seconds whatever the client is. Campaign 1 used a 60 ms bound that no client met. The bound is now 2 s and
+    # the search may go down to 1 request per second. Read R3 as a sanity check, not as a client comparison.
+    "r3": dict(sql="taxi aggregate over one zone (server-bound)", bound_ms=2000.0, start_rate=10, min_rate=1),
+    # R4 had a 5% share of R3 that decided its p99 in campaign 1 (every client the same). It is now 80% r1, 20% r2.
+    "r4": dict(sql="taxi mixed: 80% r1, 20% r2", bound_ms=8.0),
 }
 
 
@@ -104,6 +109,15 @@ def run_cell(a, client, scenario, mode, conns, rate, duration, warmup, pool=0, d
         cmd += extra
     t_start = time.monotonic()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # time limit: warm-up + window + 90 s for connecting and shutting down. A cell that hangs is killed and recorded.
+    timed_out = []
+
+    def _kill():
+        timed_out.append(1)
+        p.kill()
+    limit = Timer(warmup + duration + 90, _kill)
+    limit.daemon = True
+    limit.start()
     marks = {}
     err_lines = []
 
@@ -139,10 +153,14 @@ def run_cell(a, client, scenario, mode, conns, rate, duration, warmup, pool=0, d
             ts1 = time.monotonic()
             db1 = stat_busy(db_host) if db_host else None
     p.wait()
+    limit.cancel()
     th.join(timeout=5)
     th2.join(timeout=5)
     out = "".join(out_buf).strip()
     wall = time.monotonic() - t_start
+    if timed_out:
+        return {"failed": True, "timeout": True, "client": client, "scenario": scenario, "mode": mode, "conns": conns,
+                "rate": rate, "returncode": p.returncode, "stderr": "timeout after %.0f s\n" % wall + "\n".join(err_lines[-10:])}
     if p.returncode != 0 or not out:
         return {"failed": True, "client": client, "scenario": scenario, "mode": mode, "conns": conns,
                 "rate": rate, "returncode": p.returncode, "stderr": "\n".join(err_lines[-10:])}
@@ -166,7 +184,7 @@ def run_bulk(a, client, scenario, repeats, rows):
                                       "--bulk-rows", str(rows), "--rt-threads", str(a.rt_threads)]
     t = time.monotonic()
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=int(os.environ.get('BENCH_BULK_TIMEOUT', 1500)))
     except subprocess.TimeoutExpired:
         return {"failed": True, "client": client, "scenario": scenario, "stderr": "timeout"}
     if p.returncode != 0 or not p.stdout.strip():
@@ -220,6 +238,61 @@ def machine_info():
     return info
 
 
+# ---- database health --------------------------------------------------------------------------------
+
+class DbDown(Exception):
+    pass
+
+
+def db_alive(a):
+    """TCP connect to the database port of --url (a dead PostgreSQL refuses it)."""
+    try:
+        hostport = a.url.split("@")[-1].split("/")[0]
+        host, _, port = hostport.partition(":")
+        socket.create_connection((host, int(port or 5432)), timeout=5).close()
+        return True
+    except Exception:
+        return False
+
+
+def ssh_db(a, command, timeout=120):
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                           a.db_host, command], capture_output=True, text=True, timeout=timeout)
+
+
+def warm_taxi(a):
+    """One scan of the taxi table so the first requests of a lane do not hit cold pages."""
+    if a.db_host:
+        try:
+            ssh_db(a, "sudo -u postgres psql -d bench -Atc 'select count(*), sum(fare) from taxi_trips' >/dev/null", 300)
+        except Exception:
+            pass
+
+
+def wait_db(a, log, tags):
+    """Before a configuration the database must accept connections. If not: wait, then restart it once over ssh
+    (the event, with the kernel's last OOM lines, goes into the log), then give up with DbDown."""
+    if db_alive(a):
+        return
+    for _ in range(3):
+        time.sleep(20)
+        if db_alive(a):
+            return
+    info = {}
+    if a.db_host:
+        try:
+            info["dmesg"] = ssh_db(a, "dmesg | grep -i -e 'killed process' -e 'out of memory' | tail -5").stdout[-600:]
+            info["restart"] = ssh_db(a, "systemctl reset-failed postgresql@18-main; systemctl restart postgresql@18-main; echo rc=$?").stdout[-200:]
+        except Exception as e:
+            info["restart_error"] = str(e)
+        time.sleep(30)
+    log.add({"phase": "db-down", "restarted": bool(info), **info}, **tags)
+    print("    DATABASE DOWN; restart attempted:", info, flush=True)
+    if not db_alive(a):
+        raise DbDown("database not reachable")
+    warm_taxi(a)
+
+
 # ---- the SLO search ---------------------------------------------------------------------------------
 
 class Log:
@@ -237,11 +310,13 @@ class Log:
 
 def sweep(a, log, client, scenario, mode, conns, pool=0, dispatch="shared", hint=None, tags=None, tls=False):
     """Highest rate whose p99 stays under the scenario bound: geometric ramp, then bisection with
-    short probes, then `a.repeats` full runs at the chosen rate (stepping down 5% if the median fails).
+    short probes, then `a.repeats` full runs at the chosen rate (stepping down 3% if the median fails).
     Returns the summaries of the final runs and the chosen rate."""
     tags = dict(tags or {})
     bound = SCENARIOS[scenario]["bound_ms"]
     rate = hint or SCENARIOS[scenario].get("start_rate", a.start_rate)
+    min_rate = SCENARIOS[scenario].get("min_rate", 20)
+    wait_db(a, log, tags)
     lo, hi = 0.0, None
 
     def probe(rt):
@@ -267,7 +342,7 @@ def sweep(a, log, client, scenario, mode, conns, pool=0, dispatch="shared", hint
             break
     if lo == 0:
         # even the first rate failed: search downwards
-        while rate > 20 and lo == 0:
+        while rate > min_rate and lo == 0:
             rate /= 2
             s = probe(rate)
             if s.get("failed"):
@@ -279,7 +354,7 @@ def sweep(a, log, client, scenario, mode, conns, pool=0, dispatch="shared", hint
     if hi:
         for _ in range(a.bisect_steps):
             mid = (lo + hi) / 2
-            if hi - lo < 0.04 * lo:
+            if hi - lo < 0.025 * lo:
                 break
             s = probe(mid)
             if passes(s, bound):
@@ -288,7 +363,7 @@ def sweep(a, log, client, scenario, mode, conns, pool=0, dispatch="shared", hint
                 hi = mid
     rate = lo
     # confirm with full runs; step down while the median p99 fails
-    for _ in range(6):
+    for _ in range(8):
         runs = []
         for k in range(a.repeats):
             raw = run_cell(a, client, scenario, mode, conns, rate, a.duration, a.warmup, pool, dispatch, db_host=a.db_host, tls=tls)
@@ -300,8 +375,8 @@ def sweep(a, log, client, scenario, mode, conns, pool=0, dispatch="shared", hint
         print(f"    confirm {rate:>9.0f}/s: median p99 {med_p99:.0f}us, {okc}/{len(runs)} runs inside the bound", flush=True)
         if good and med_p99 <= bound * 1000 and okc >= (len(runs) + 1) // 2:
             return good, rate
-        rate *= 0.95
-        if rate < 20:
+        rate *= 0.97
+        if rate < min_rate:
             break
     return [], 0.0
 
@@ -430,8 +505,11 @@ def cmd_campaign(a):
                        started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), f, indent=1)
     clients = a.clients.split(",") if a.clients else list(CLIENTS)
     summary = []
+    if any(c[0].startswith("r") for c in prof["configs"]):
+        warm_taxi(a)
     for client in clients:
         spec = CLIENTS[client]
+        failed_in_a_row = 0
         for (sc, mode, conns, pool) in prof["configs"]:
             if mode not in spec["modes"]:
                 continue
@@ -445,8 +523,18 @@ def cmd_campaign(a):
             tags = dict(lane=a.lane, round=a.round, profile=a.profile)
             if sc == "s7" and (not a.url_tls or not spec.get("tls", True)):
                 print("  skipped S7: " + ("no --url-tls" if not a.url_tls else "this adapter has no TLS support yet")); continue
-            runs, rate = sweep(a, log, client, "s2" if sc == "s7" else sc, mode, conns, pool, tags=dict(tags, label=sc), tls=(sc == "s7"))
+            try:
+                runs, rate = sweep(a, log, client, "s2" if sc == "s7" else sc, mode, conns, pool, tags=dict(tags, label=sc), tls=(sc == "s7"))
+            except DbDown:
+                log.add({"client": client, "phase": "abort", "reason": "database down and not restartable"}, **tags)
+                print("ABORT: database down", flush=True)
+                sys.exit(3)
             summary.append((client, sc, mode, conns, pool, rate))
+            failed_in_a_row = failed_in_a_row + 1 if not runs else 0
+            if failed_in_a_row >= 3:
+                log.add({"client": client, "phase": "abort-client", "reason": "3 configurations in a row without a result"}, **tags)
+                print(f"  giving up on {client}: 3 configurations in a row without a result", flush=True)
+                break
             log.add({"client": client, "scenario": sc, "mode": mode, "conns": conns, "pool": pool,
                      "slo_rate": rate, "n_final": len(runs)}, phase="result", **tags)
     if prof.get("bulk"):

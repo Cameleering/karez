@@ -43,7 +43,7 @@ final class Taxi {
     /** The concrete query of one request, and its parameter. */
     static Object[] request(String sc, Main.Rng rng) {
         String k = sc;
-        if (sc.equals("r4")) { long v = rng.next(100); k = v <= 80 ? "r1" : v <= 95 ? "r2" : "r3"; }
+        if (sc.equals("r4")) { long v = rng.next(100); k = v <= 80 ? "r1" : v <= 100 ? "r2" : "r3"; }
         long id = switch (k) {
             case "r1" -> rng.next(taxiRows);
             case "r2" -> rng.next(Math.max(1, taxiRows - 99));

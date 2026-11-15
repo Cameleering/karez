@@ -39,6 +39,8 @@ another day does.
 
 ## Fix before booking (local, no cost)
 
+**Done 2026-11-15 and checked in WSL** (items 1 to 6 and 9; the health check and the abort path were exercised against a PostgreSQL 18 container that was stopped; the taxi scenarios were not rerun because the WSL taxi table was removed): R3 bound 2 s with a floor of 1 request/s, R4 now 80% R1 + 20% R2 in all five adapters, a 90 s grace time limit per cell and a 25 min limit per bulk pass, `wait_db` with one restart and the dmesg lines in the log, abort of a client after 3 configurations without a result, finer bisection and 3% step-down, huge pages in `setup-db.sh`, `ctl.sh pull` skipping smoke directories, `campaign.sh` lock file and STOP file, lanes rebalanced. Item 8 was settled by reading the adapters: every client uses `conns` for both workers and pool size, so the 5,000 against 8,000 at one connection was lane noise. Item 7 (pgbench cross-check) and the sqlx S8 slowness (item 2) need a droplet or the taxi table and are still open. R3 stays a server-bound sanity check.
+
 1. **R3 and R4.** R3: search from 5 requests per second and use a bound that a 20 to 40 ms query can meet (60 ms
    was never met because p99 was 1.2 seconds; first find out why: probably cold pages after the restart, so add a
    warm-up pass over the table before the sweep). R4: keep the mix but report p99 per query kind, because the

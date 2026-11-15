@@ -103,7 +103,7 @@ static const char *pick(uint64_t *rng, long *id) {
     uint64_t x = *rng; x ^= x >> 12; x ^= x << 25; x ^= x >> 27; *rng = x;
     uint64_t v = (x * 0x2545F4914F6CDD1Dull) >> 11;
     const char *k = scenario;
-    if (!strcmp(scenario, "r4")) { uint64_t m = v % 100 + 1; k = m <= 80 ? "r1" : m <= 95 ? "r2" : "r3"; x ^= x >> 12; x ^= x << 25; x ^= x >> 27; *rng = x; v = (x * 0x2545F4914F6CDD1Dull) >> 11; }
+    if (!strcmp(scenario, "r4")) { uint64_t m = v % 100 + 1; k = m <= 80 ? "r1" : m <= 100 ? "r2" : "r3"; x ^= x >> 12; x ^= x << 25; x ^= x >> 27; *rng = x; v = (x * 0x2545F4914F6CDD1Dull) >> 11; }
     if (!strcmp(k, "s2")) *id = (long)(v % (uint64_t)rows_n) + 1;
     else if (!strcmp(k, "r1")) *id = (long)(v % (uint64_t)taxi_rows_n) + 1;
     else if (!strcmp(k, "r2")) *id = (long)(v % (uint64_t)(taxi_rows_n > 99 ? taxi_rows_n - 99 : 1)) + 1;

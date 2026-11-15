@@ -31,7 +31,7 @@ pub enum Scenario {
     R2,
     /// Aggregate over one pickup zone.
     R3,
-    /// Mixed workload: 80% R1, 15% R2, 5% R3.
+    /// Mixed workload: 80% R1, 20% R2 (campaign 1 had 5% R3; see run.py).
     R4,
 }
 
@@ -100,7 +100,7 @@ impl Scenario {
         let q = if self == Scenario::R4 {
             match rng.next(100) {
                 1..=80 => Scenario::R1,
-                81..=95 => Scenario::R2,
+                81..=100 => Scenario::R2,
                 _ => Scenario::R3,
             }
         } else {

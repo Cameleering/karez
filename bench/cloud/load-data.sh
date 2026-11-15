@@ -15,7 +15,7 @@ apt-get install -y -qq python3-venv python3-pip >/dev/null
 {
   echo "host: $(hostname)  private ip: $PRIV"
   echo "kernel: $(uname -r)  cpus: $(nproc)  mem_mb: $(free -m | awk '/Mem:/{print $2}')"
-  PGPASSWORD="$PW" psql -h 127.0.0.1 -U bench -d bench -tAc "select name||'='||setting from pg_settings where name in ('max_connections','shared_buffers','jit','synchronous_commit','fsync','wal_level','ssl','password_encryption') order by 1"
+  PGPASSWORD="$PW" psql -h 127.0.0.1 -U bench -d bench -tAc "select name||'='||setting from pg_settings where name in ('max_connections','shared_buffers','jit','synchronous_commit','fsync','wal_level','ssl','password_encryption','huge_pages','huge_pages_status') order by 1"
   PGPASSWORD="$PW" psql -h 127.0.0.1 -U bench -d bench -tAc "select version()"
   PGPASSWORD="$PW" psql -h 127.0.0.1 -U bench -d bench -tAc "select 'taxi_trips rows='||count(*)||' size='||pg_size_pretty(pg_total_relation_size('taxi_trips')) from taxi_trips"
 } > /root/machine-db.txt

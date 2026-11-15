@@ -4,4 +4,5 @@ target-cloud/
 karez-bench-go
 libpq_adapter
 __pycache__/
-bench/results/**/cells.jsonl
+results/*
+!results/2026-11-14-lean

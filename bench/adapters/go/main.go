@@ -55,7 +55,7 @@ func request(s *shared, r *rng) (string, int64) {
 		switch v := r.next(100); {
 		case v <= 80:
 			sc = "r1"
-		case v <= 95:
+		case v <= 100:
 			sc = "r2"
 		default:
 			sc = "r3"

@@ -49,9 +49,14 @@ log "configuration"
 PW="$(openssl rand -hex 16)"
 echo "$PW" > /root/bench-pw
 chmod 600 /root/bench-pw
+# Huge pages for the 2 GB shared buffer. Without them each of up to ~1000 backends needs about 4 MB of page tables for it,
+# which exhausted the 8 GB of the droplet and got PostgreSQL OOM-killed in campaign 1 (see bench/README.md).
+sysctl -w vm.nr_hugepages=1300 > /dev/null
+echo "vm.nr_hugepages=1300" > /etc/sysctl.d/90-bench-hugepages.conf
 cat > $D/conf.d/90-bench.conf <<EOF
 listen_addresses = '127.0.0.1,$PRIV'
 max_connections = 1000
+huge_pages = on
 shared_buffers = 2GB
 effective_cache_size = 6GB
 work_mem = 16MB

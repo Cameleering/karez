@@ -29,7 +29,7 @@ def request(sc, rng, cfg):
     """One request: the concrete query and its parameter."""
     if sc == "r4":
         v = rng.next(100)
-        sc = "r1" if v <= 80 else ("r2" if v <= 95 else "r3")
+        sc = "r1" if v <= 80 else ("r2" if v <= 100 else "r3")
     if sc == "s2":
         return sc, rng.next(cfg["rows"])
     if sc == "r1":

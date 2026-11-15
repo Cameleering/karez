@@ -21,7 +21,7 @@ speed.
 | R1 | **real data**: point select by primary key on `taxi_trips`, 17 columns, NULLs, two timestamps | open loop |
 | R2 | real data: 100 consecutive rows by primary-key range | open loop |
 | R3 | real data: aggregate (`count`, `max`, `max`) over one pickup zone, server-bound | open loop |
-| R4 | real data: mixed workload, 80% R1, 15% R2, 5% R3, per request at random | open loop |
+| R4 | real data: mixed workload, 80% R1 and 20% R2, per request at random (campaign 1 had 5% R3 in the mix) | open loop |
 | S4 | scan of 1,000,000 rows x 10 columns (karez: row view and chunk path) | closed loop, `run.py bulk` |
 | S5 | batch insert of 100,000 rows, prepared, one transaction | closed loop; each client's own best path |
 | S6 | COPY of 10,000,000 rows (text, binary where the client's fast path is binary) | closed loop |
@@ -31,7 +31,7 @@ Per configuration the harness searches the **SLO throughput**: the highest arriv
 p99 latency stays under the scenario's bound (S1, S2, S7: 2 ms; S3: 3 ms; fixed before measuring,
 the same for every client). It then runs `repeats` full-length runs at that rate and reports the
 median p50, p99, p99.9, CPU-seconds per million requests and peak RSS. A configuration whose median
-p99 is over the bound is stepped down 5% until it passes. Nothing is best-of-N.
+p99 is over the bound is stepped down 3% until it passes. Nothing is best-of-N.
 
 ## The real dataset
 
