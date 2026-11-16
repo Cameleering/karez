@@ -183,6 +183,7 @@ def run_bulk(a, client, scenario, repeats, rows):
     cmd = [exe] + spec["cmd"][1:] + ["--client", client, "--url", a.url, "--scenario", scenario, "--repeats", str(repeats),
                                       "--bulk-rows", str(rows), "--rt-threads", str(a.rt_threads)]
     t = time.monotonic()
+    db0 = stat_busy(a.db_host) if getattr(a, "db_host", None) else None
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=int(os.environ.get('BENCH_BULK_TIMEOUT', 1500)))
     except subprocess.TimeoutExpired:
@@ -192,6 +193,11 @@ def run_bulk(a, client, scenario, repeats, rows):
                 "stderr": (p.stderr or "")[-600:]}
     r = json.loads(p.stdout.strip().splitlines()[-1])
     r["orch_wall_s"] = round(time.monotonic() - t, 1)
+    # database host CPU over the whole cell (warm-up pass and timed passes): is the server the limit? (perf-program.md 1)
+    db1 = stat_busy(a.db_host) if db0 else None
+    if db0 and db1:
+        r["db_cpu_busy_frac"] = round((db1[0] - db0[0]) / max(1, db1[1] - db0[1]), 4)
+        r["db_cpu_busy_s"] = round((db1[0] - db0[0]) / os.sysconf("SC_CLK_TCK"), 2)
     return r
 
 

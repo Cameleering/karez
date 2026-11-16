@@ -235,5 +235,29 @@
    "s8"
   ],
   "notes": "S4 through the chunk path (whole columns over the Arrow-layout buffers)"
+ },
+ "karez-blocking-part": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s4"
+  ],
+  "notes": "S4 partitioned over KAREZ_PARTS connections (prototype, no shared snapshot)"
+ },
+ "karez-blocking-mrow": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s5"
+  ],
+  "notes": "S5 with one multi-row INSERT ... VALUES per batch (prototype; KAREZ_MROW_BATCH rows, default 1000)"
  }
 }

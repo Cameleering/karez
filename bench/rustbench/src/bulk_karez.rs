@@ -33,7 +33,17 @@ fn scan_rows(conn: &mut Connection) -> Result<(u64, u64), String> {
 
 /// The chunk path: whole columns at a time, straight over the Arrow-layout buffers.
 fn scan_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
-    let mut cur = conn.query(S4_SQL, &[]).map_err(|e| e.to_string())?;
+    scan_chunks_sql(conn, S4_SQL, &[])
+}
+
+/// The same scan restricted to `id` in (lo, hi]: one partition of a partitioned scan.
+fn scan_chunks_range(conn: &mut Connection, lo: i64, hi: i64) -> Result<(u64, u64), String> {
+    let sql = "SELECT id, a, b, c, d, e, s1, s2, flag, f FROM bench_wide WHERE id > $1 AND id <= $2";
+    scan_chunks_sql(conn, sql, &[Value::i64(lo), Value::i64(hi)])
+}
+
+fn scan_chunks_sql(conn: &mut Connection, sql: &str, params: &[Value<'_>]) -> Result<(u64, u64), String> {
+    let mut cur = conn.query(sql, params).map_err(|e| e.to_string())?;
     let (mut rows, mut sum) = (0u64, 0u64);
     while let Some(ch) = cur.next_chunk().map_err(|e| e.to_string())? {
         let n = ch.rows();
@@ -138,7 +148,64 @@ fn scan_taxi_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
     Ok((rows, sum))
 }
 
+/// Set by the `karez-blocking-mrow` client: S5 with one multi-row `INSERT ... VALUES` per batch (perf-program.md 3.3).
+pub static MULTIROW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn insert_multirow(conn: &mut Connection, rows: i64, batch: i64) -> Result<(u64, u64), String> {
+    let e = |e: karez_pg::Error| e.to_string();
+    conn.execute("TRUNCATE bench_ins", &[]).map_err(e)?;
+    conn.execute("BEGIN", &[]).map_err(e)?;
+    let mut i = 1;
+    let mut sql_cache: Option<(i64, String)> = None;
+    while i <= rows {
+        let end = (i + batch - 1).min(rows);
+        let n = end - i + 1;
+        let gens: Vec<GenRow> = (i..=end).map(gen_row).collect();
+        if sql_cache.as_ref().map(|(k, _)| *k) != Some(n) {
+            let mut sql = String::from("INSERT INTO bench_ins (id, a, b, c, d, e, s1, s2, flag, f) VALUES ");
+            for r in 0..n {
+                if r > 0 {
+                    sql.push(',');
+                }
+                sql.push('(');
+                for c in 1..=10 {
+                    if c > 1 {
+                        sql.push(',');
+                    }
+                    sql.push_str(&format!("${}", r * 10 + c));
+                }
+                sql.push(')');
+            }
+            sql_cache = Some((n, sql));
+        }
+        let mut vals: Vec<Value<'_>> = Vec::with_capacity(gens.len() * 10);
+        for r in &gens {
+            vals.extend([
+                Value::i64(r.id),
+                Value::i32(r.a),
+                Value::i32(r.b),
+                Value::i64(r.c),
+                Value::f64(r.d),
+                Value::f64(r.e),
+                Value::text(&r.s1),
+                Value::text(&r.s2),
+                Value::bool(r.flag),
+                Value::i16(r.f),
+            ]);
+        }
+        conn.execute(&sql_cache.as_ref().unwrap().1, &vals).map_err(e)?;
+        i = end + 1;
+    }
+    conn.execute("COMMIT", &[]).map_err(e)?;
+    let n = count(conn)?;
+    Ok((n, 0))
+}
+
 fn insert_batched(conn: &mut Connection, rows: i64) -> Result<(u64, u64), String> {
+    if MULTIROW.load(std::sync::atomic::Ordering::Relaxed) {
+        let batch = std::env::var("KAREZ_MROW_BATCH").ok().and_then(|v| v.parse().ok()).unwrap_or(1000);
+        return insert_multirow(conn, rows, batch);
+    }
     let e = |e: karez_pg::Error| e.to_string();
     conn.execute("TRUNCATE bench_ins", &[]).map_err(e)?;
     conn.execute("BEGIN", &[]).map_err(e)?;
@@ -237,4 +304,48 @@ pub fn run(cfg: &Cfg, chunk: bool) -> (String, Vec<Pass>) {
         }));
     }
     (format!("karez-pg {}{}", env!("CARGO_PKG_VERSION"), if chunk { " (chunk path)" } else { " (row view)" }), passes)
+}
+
+/// Prototype of a partitioned scan (perf-program.md 3.1): `KAREZ_PARTS` connections (default 4), each scans one id range
+/// through the chunk path on its own thread; the checksums add up. No shared snapshot yet (the table is static here).
+pub fn run_part(cfg: &Cfg) -> (String, Vec<Pass>) {
+    let parts: i64 = std::env::var("KAREZ_PARTS").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    if cfg.scenario != Scenario::S4 {
+        die("karez-blocking-part: only S4 is implemented");
+    }
+    let c = Config::from_url(&cfg.url).unwrap_or_else(|e| die(&format!("bad url: {e}")));
+    let mut conns: Vec<Connection> =
+        (0..parts).map(|_| Connection::connect(&c).unwrap_or_else(|e| die(&format!("connect: {e}")))).collect();
+    let (min, max) = {
+        let mut cur = conns[0].query("SELECT min(id), max(id) FROM bench_wide", &[]).unwrap_or_else(|e| die(&e.to_string()));
+        let r = cur.next().unwrap_or_else(|e| die(&e.to_string())).unwrap_or_else(|| die("no row"));
+        (r.get::<i64>(0).unwrap_or_else(|e| die(&e.to_string())), r.get::<i64>(1).unwrap_or_else(|e| die(&e.to_string())))
+    };
+    let span = max - min + 1;
+    let mut pass = |conns: &mut Vec<Connection>| -> Result<(u64, u64), String> {
+        let res: Vec<Result<(u64, u64), String>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = conns
+                .iter_mut()
+                .enumerate()
+                .map(|(i, conn)| {
+                    let (lo, hi) = (min - 1 + span * i as i64 / parts, min - 1 + span * (i as i64 + 1) / parts);
+                    sc.spawn(move || scan_chunks_range(conn, lo, hi))
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("thread panicked".into()))).collect()
+        });
+        let (mut rows, mut sum) = (0u64, 0u64);
+        for r in res {
+            let (a, b) = r?;
+            rows += a;
+            sum = sum.wrapping_add(b);
+        }
+        Ok((rows, sum))
+    };
+    pass(&mut conns).unwrap_or_else(|e| die(&format!("warm-up: {e}")));
+    let mut passes = Vec::new();
+    for _ in 0..cfg.repeats {
+        passes.push(timed(|| pass(&mut conns)));
+    }
+    (format!("karez-pg {} (chunk path, {parts} partitions)", env!("CARGO_PKG_VERSION")), passes)
 }

@@ -129,3 +129,40 @@ chunk path at least 2x (the plan's number); S5 at least 1.3x the best `INSERT` p
 the floor adapter; OLTP at 64 connections level (server-bound, so a tie is the correct outcome); client CPU per request
 10% or more below the best Rust client. If only the first two hold, karez is a bulk and columnar library with parity on
 OLTP and the standards exports, and the README should say exactly that.
+
+## 6. Results of the first experiments (2026-11-16, WSL)
+
+**Read this first.** These ran on a laptop under WSL: 12 logical CPUs, PostgreSQL 18 in a container, loopback, the client and
+the server sharing the CPUs. They are `[measured here, WSL]` and prove correctness and give ratios inside one machine.
+They are not evidence of speed on real hardware and no number below may be quoted outside this file. Each needs the same
+test on a droplet pair before it counts (section 4, steps a and b). Each pass is the median of 5, same checksum for every
+variant. Data: the 1M-row, 10-column `bench_wide` table; `bench_ins` for S5.
+
+| experiment | result | kill criterion | outcome |
+|---|---|---|---|
+| **S4 on one connection:** row view, chunk path, tokio-postgres | 0.57 s, 0.56 s, 0.56 s per 1M rows. Client CPU: karez 0.27 s (row) and 0.25 s (chunk), tokio-postgres 0.57 s. | the plan's gate asks chunk at least 2x the best Rust row API | **cannot be met on one connection.** The single server backend produces the rows at about 0.55 us each; the chunk path saves client CPU (about half of tokio-postgres), not wall time. |
+| **3.1 partitioned scan** (`karez-blocking-part`, k connections, chunk path, id ranges, same checksum) | k=1: 0.66 s; k=2: 0.39 s (1.7x); k=4: 0.30 s (2.2x); k=8: 0.20 s (3.3x). Against tokio-postgres on one connection (0.56 s): 1.9x at k=4, 2.8x at k=8. | under 1.8x at k=4 | **passes** (2.2x). The bound I derived (2.5x to 3x on 4 database vCPUs) is not yet tested; WSL has 12 CPUs. No shared snapshot in the prototype (the table is static). |
+| **3.3 S5 multi-row insert** (`karez-blocking-mrow`, 1000 rows per statement, 10,000 parameters) | per-row path 0.53 s per 100k rows; multi-row 0.27 s (1.9x); sqlx 0.31 s to 0.33 s; tokio-postgres 1.86 s. Batch 200: 0.41 s, 500: 0.35 s, 3000: 0.30 s, 6000: 0.31 s. | under 1.3x | **passes** (1.9x), and 1.15x to 1.2x ahead of sqlx's multi-row on the same machine. The best batch is 1000 to 3000. `UNNEST` was not tried: karez-pg has no array parameters yet. |
+| **3.2 latency floor** (`bin/floor`, one connection, closed loop, 100k requests, 3 runs) | karez-blocking p50 over the raw pre-encoded floor: S1 0.93, 1.02, 1.04; S2 1.03, 1.01, 1.02. p99 within 6%. | within 3% = nothing to gain; 10% or more = profile | **within 3% (about 2 to 5 us of 150 us).** Single-connection latency work stops here: the client is at the floor, the rest is the server and the network. |
+| **COPY binary versus row messages for S4** (`bin/copyvs`, nothing decoded) | wall 0.60 s for both. Client CPU 0.16 s (COPY) against 0.28 s (rows). All-CPU busy 1.2 s against 1.3 s. 127 MB for 1M rows. | a lower wall time | **killed as a speed lever.** The server's cost per row is the same. It lowers client CPU only; keep it in mind for the Arrow path where the format is already columnar-friendly. |
+
+### What this changes
+
+1. **The plan's S4 gate (2x the best Rust row API) is reachable only with partitioned reads.** On one connection every
+   client is server-bound and karez's win is client CPU (about half of tokio-postgres) and memory. The honest claim that the
+   data supports so far: *with partitioning, 2x to 3x the one-connection scan on one machine class; on a droplet pair this
+   is unmeasured.* A competitor could partition too (ConnectorX does), so the report must show karez's partitioned scan
+   next to their single-connection scan and say that it is a different access path. The comparison that matters for users
+   is "what do I get from the library without writing the partitioning myself".
+2. **Bulk insert has a clear fix:** a multi-row path (and `UNNEST` once arrays exist) is 1.9x the current `execute_many`
+   on this machine. It belongs in the library API (an `insert_batch`), not only in the benchmark.
+3. **Stop work on single-connection latency and on COPY binary for speed.** They cost time and the data says nothing is there.
+
+### Next (needs a droplet pair, about $0.25 per hour, owner's go-ahead for the smaller spend)
+
+- Repeat the table above on one lane (database and client droplets) with `db_cpu_busy_frac` recorded for bulk runs
+  (`run.py` now records it) and k in 2, 4, 8, 16: this tests the 4-vCPU bound and the network limit (iperf first).
+- Add a shared snapshot (`pg_export_snapshot`, `SET TRANSACTION SNAPSHOT`) to the partitioned scan and check the cost.
+- Partitioned S8 on the real taxi table (primary-key ranges on `trip_id`), checksum against the single scan.
+- Move the partitioned scan and the multi-row insert from the benchmark into `karez-pg` as API, with tests.
+- `UNNEST` insert once karez-pg has array parameters.

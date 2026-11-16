@@ -148,6 +148,11 @@ pub fn run(cfg: &Cfg) -> Option<String> {
     let (version, passes) = match cfg.client.as_str() {
         "karez-blocking" => crate::bulk_karez::run(cfg, false),
         "karez-blocking-chunk" => crate::bulk_karez::run(cfg, true),
+        "karez-blocking-mrow" => {
+            crate::bulk_karez::MULTIROW.store(true, std::sync::atomic::Ordering::Relaxed);
+            crate::bulk_karez::run(cfg, false)
+        }
+        "karez-blocking-part" => crate::bulk_karez::run_part(cfg),
         "tokio-postgres" => crate::bulk_async::tokio_pg(cfg),
         "sqlx" | "sqlx-tuned" => crate::bulk_async::sqlx_(cfg),
         other => die(&format!("{other}: no bulk adapter (karez-blocking, karez-blocking-chunk, tokio-postgres, sqlx)")),
