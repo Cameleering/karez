@@ -307,3 +307,52 @@ connection (not met), bulk inserts level with sqlx (not met).** Three honest opt
    per request and per scanned row (a cost saving at scale), zero dependencies, a small binary (not yet measured), and the
    standards parity and exports no Rust client offers (not built). If the owner values those, the speed claim in the README
    stays "level on OLTP, lower CPU, partitioned scans up to the network limit", with nothing stronger.
+
+## 10. The same comparison with no network limit (2026-11-16, WSL, loopback)
+
+The owner asked to test a faster network. A faster two-machine network cannot be had with this DigitalOcean account (section 8:
+`c-8` and larger are restricted; raising the tier is a support ticket only the owner can open). What can be done now is the
+other end of the range: **no network limit at all**. PostgreSQL 18 in a Docker container in WSL (1 GB shared buffers), the
+client on the same machine over loopback, 12 logical CPUs shared by both, the full 13,069,067-row taxi table and the 1M-row S4
+table. `[measured here, WSL]`; summary in `bench/results/2026-11-16-wsl-nonet/summary.txt`. Single-connection clients
+interleaved three times; partitioned runs once each (median of 5 passes for S4, 3 for S8). libpq did not run (shared library
+missing in WSL). The client and the server compete for the CPUs, which hurts the partitioned runs; competitors were not
+partitioned.
+
+| scenario | best single connection (median of 3, range) | karez partitioned | ratio |
+|---|---|---|---|
+| S4, 1M rows | karez chunk 0.625 s (0.584 to 0.671); pgx 0.632 (0.605 to 0.736); sqlx 0.751; tokio-postgres 0.794 (0.656 to 0.812) | k=8: **0.263 s**; k=12: 0.302; k=4: 0.340; k=16: 0.421; k=2: 0.616 | **2.4x** over the best single connection (karez chunk and pgx), 3.0x over tokio-postgres |
+| S8, 13M rows | tokio-postgres 12.95 s (12.75 to 14.61); karez chunk 13.28 (12.91 to 14.62); pgx 16.21 (13.56 to 19.44) | k=12: **3.79 s**; k=8: 4.13; k=16: 4.33; k=4: 6.03; k=2: 10.17 | **3.4x** over the best single connection |
+| client CPU, S8 | karez 5.0 to 5.6 CPU-s; tokio-postgres 11.0 to 12.4; pgx 13.3 to 19.6 | 7.6 to 9.0 | |
+
+**What this shows.** Without the network ceiling the partitioned scan clears the plan's 2x gate: 2.4x on S4 and 3.4x on S8 over
+the best single-connection client, with about half the CPU of tokio-postgres even when partitioned. With the DigitalOcean
+`c-4` network (1.9 Gbit/s) the same code gives 1.16x and 1.28x (section 8). **The result is therefore decided by the
+bandwidth between the client and the database, and by how many cores the database has**: the speed-up is bounded by
+min(k, database cores, bandwidth / (bytes per row x single-connection rate)). On this laptop the bound was about 12 cores; on
+`c-4` it is the 1.9 Gbit/s wire.
+
+**Caveats that matter.**
+
+1. **Competitors can partition too.** ConnectorX does. The honest framing is "karez ships a partitioned, snapshot-consistent
+   scan as one call, and a single-connection client does not". A user who writes the partitioning on top of tokio-postgres
+   would get most of the same speed-up (their CPU use would be about twice as high).
+2. **`k=2` on S8 (10.17 s) is far slower than the model predicts (about 6.6 s).** The range predicate probably makes the planner
+   choose an index scan for a half-range. This is a planner effect of `WHERE trip_id > lo AND trip_id <= hi` and must be
+   handled: use `ctid` ranges or `TABLESAMPLE`-free block ranges (`WHERE ctid >= '(n,0)' AND ctid < '(m,0)'`, PostgreSQL 14+
+   has a TID range scan), and check the plan with `EXPLAIN`.
+3. **Loopback is not a real network and 12 shared CPUs are not a real server.** The WSL number says the code has no hidden
+   ceiling below roughly 3x. It does not say a real 10 Gbit/s link gives 3x. That needs a two-machine run on a faster link.
+4. The 1M-row S4 table stays inside PostgreSQL's cache in both settings, so storage speed is not part of either result.
+
+## 11. Updated state of the decision
+
+The plan's stop rule is **not** simply triggered: the 2x gate is reachable (2.4x to 3.4x with no network limit) and not reachable
+on the one network class available (1.16x to 1.28x). Whether karez's bulk-read claim holds depends on the customer's network and
+database size, which the owner knows better than the benchmark does. To close the question with evidence:
+
+- Ask DigitalOcean to raise the account tier (or use another provider the owner already has) and run one lane on droplets
+  with a faster network (`perf-lane.sh` is ready; about $1). That turns the laptop number into a real one.
+- Meanwhile, three things are worth doing in the code regardless, all local and testable: (a) a `ctid`-range partitioner and
+  an `EXPLAIN` check (finding 2); (b) the partitioned scan as a real API (`scan_partitioned`) with a shared snapshot and a
+  default `k` taken from the database's core count; (c) the multi-row insert as `insert_batch`.
