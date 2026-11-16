@@ -125,6 +125,12 @@ status() {
 case "${1:-status}" in
   up) up ;;
   down) down ;;
+  sizes) # sizes available in the region: slug vcpus memory_gb price_per_hour (no token printed)
+    api GET "/sizes?per_page=200" | py "
+import json,sys
+for z in json.load(sys.stdin)['sizes']:
+    if '$REGION' in z['regions'] and z['available'] and z['vcpus']>=4 and z['price_hourly']<=0.6:
+        print(z['slug'], z['vcpus'], z['memory']//1024, z['price_hourly'])" | sort -k4 -n ;;
   status) status ;;
-  *) echo "usage: $0 up|status|down" >&2; exit 1 ;;
+  *) echo "usage: $0 up|status|sizes|down" >&2; exit 1 ;;
 esac

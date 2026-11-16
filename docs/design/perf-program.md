@@ -249,3 +249,61 @@ not reached on DigitalOcean `c-4` hardware.** Options, in the order I would take
    keeping what was learned (the benchmark harness, the multi-row and partitioned-scan ideas) as contributions.
 3. Do not widen the claim from "lower client CPU, level OLTP, and a partitioned scan that is 1.3x to 1.4x faster here" until
    a measurement says more.
+
+## 8. Repeat on a second droplet pair, interleaved (2026-11-16, 25 minutes, about $0.10)
+
+**Larger droplet classes are not available:** creating a `c-8` failed with "This size is currently restricted, please open a
+ticket to increase your account tier", and the sizes API lists nothing above `c-4` for this account in `blr1`. Raising the
+tier is a request to DigitalOcean that only the owner can make. So the "does a faster network change the result" question
+stays open. What was done instead: a second `c-4` pair (a different physical placement: the one-connection round trip was
+75 to 83 us here against 150 us on the first pair), with the single-connection clients **interleaved three times** (A B C A B C)
+and the partitioned scans repeated. Raw data: `bench/results/2026-11-16-perf3/`. `[measured here]`, one lane, indicative.
+
+The network is the same: iperf3 1.90 Gbit/s (one stream) and 1.86 Gbit/s (four), ping average 0.59 ms.
+
+| scenario | single connection, median of three rounds (range) | partitioned karez, best |
+|---|---|---|
+| S4, 1M rows (127 MB) | karez chunk 0.693 s (0.663 to 0.737); karez row view 0.788 (0.686 to 0.810); pgx 0.657 (0.600 to 0.804); tokio-postgres 0.705 (0.579 to 0.772); libpq 0.744 (0.664 to 0.793); sqlx 0.750 (0.741 to 0.886) | k=4: **0.565 s**; k=2: 0.591; k=8: 0.599; k=16: 0.688; k=32: 1.019 |
+| S8, 13M rows | karez chunk 14.09 s (13.45 to 14.29); pgx 14.22 (13.70 to 14.45); **tokio-postgres 12.35 (12.15 to 12.91)** | k=2: 9.89 s; k=4: 9.72; k=8: 9.72; k=16: 9.66; k=32: 9.65; k=8 with a shared snapshot: 9.68 |
+| S5, 100k inserts | karez per-row 0.726 s (138k/s); sqlx 0.457 s (219k/s) | multi-row 1000: 0.419 s (239k/s) |
+| client CPU, S8 | karez 6.2 to 6.6 CPU-s; tokio-postgres 12.4 to 13.0; pgx 15.5 to 16.2 | partitioned (k=4): 11.3 |
+| one-connection latency | karez/floor p50: S1 1.03, 1.01, 1.03; S2 1.00, 1.05, 0.99 | |
+
+**What this settles**
+
+1. **The "karez is 22% behind pgx" and "row view is 32% slower" readings were noise.** With three interleaved rounds the
+   run-to-run spread of a single client is about +-15% (S4) and +-5% (S8), and karez, pgx, libpq and sqlx overlap on S4.
+   On S8 the best single-connection client is **tokio-postgres, 12% faster than karez** (12.35 s against 14.09 s) with twice
+   the CPU; karez and pgx are level. No code was changed for either claim. A read-ahead thread could still close the 12%
+   on S8; it is a possible gain of about 1.1x, not the 1.2x guessed, and it would break the library's "one thread, no channel"
+   design for the blocking client. Not worth it unless a bigger gain appears.
+2. **The partitioned scan is flat at the network limit:** S8 stays at 9.65 s from k=2 (9.89) up to k=32, which is 2.3 GB in
+   9.65 s = 1.9 Gbit/s, the iperf number. S4 k=4 moves 127 MB in 0.565 s = 1.8 Gbit/s. **The database CPU is not the limit
+   (0.60 to 0.67 busy at S8); the network is.** Against the best single-connection competitor the partitioned scan is
+   **1.16x on S4 (0.565 against pgx 0.657) and 1.28x on S8 (9.65 against tokio-postgres 12.35)**. Against karez's own single
+   connection it is 1.2x and 1.46x.
+3. **The 2x gate (plan section 1.3) is not reached on this network class, and cannot be: even an infinitely fast client
+   cannot finish S8 in less than about 9.6 s here.** On a network without that ceiling the WSL run reached 2.8x over
+   tokio-postgres at k=8 (`[measured here, WSL]`, loopback, 12 CPUs). Whether a real cloud network close to the
+   database (10 Gbit/s or more) reaches 2x is the open question; a competitor could also partition.
+4. **Too many partitions hurt:** S4 k=32 is 1.02 s (database 93% busy, 32 backends on 4 vCPUs). The API default should be
+   about the database's core count, bounded by the measured bandwidth.
+5. **What holds:** the one-connection latency is at the floor (0.99 to 1.05); client CPU is about half of tokio-postgres and
+   a third of pgx on S8; the multi-row insert is 1.7x karez's own per-row path and level with sqlx (1.09x, n=1).
+
+## 9. Where this leaves the decision (owner)
+
+The plan's stop rule said: if S4 is under 2x the best Rust row API, or OLTP is more than 10% behind, the architecture is not
+worth a new crate family. Measured on the hardware available: **OLTP level (met), one-connection latency at the floor (met),
+client CPU about half of the best Rust client (met), bulk reads 1.16x to 1.28x with a partitioned scan and about level on one
+connection (not met), bulk inserts level with sqlx (not met).** Three honest options:
+
+1. **Test a network without the 1.9 Gbit/s ceiling** (ask DigitalOcean to raise the account tier, or use another provider or
+   a single large machine with the database and the client side by side). One lane, under $1. Decides whether the 2x gate is
+   reachable at all. The owner must request the tier or approve another provider; I cannot.
+2. **Apply the stop rule: option C** (a thin standards-shaped API over existing drivers). Keep the harness, the partitioned
+   scan and multi-row insert ideas, and the finding that single-row OLTP cannot be beaten (server-bound).
+3. **Change what "worth it" means.** The measured advantages are real but of another kind than a 2x speed claim: half the CPU
+   per request and per scanned row (a cost saving at scale), zero dependencies, a small binary (not yet measured), and the
+   standards parity and exports no Rust client offers (not built). If the owner values those, the speed claim in the README
+   stays "level on OLTP, lower CPU, partitioned scans up to the network limit", with nothing stronger.
