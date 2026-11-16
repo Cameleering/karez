@@ -226,12 +226,11 @@ claim stands.** The network limit of larger classes is `[unverified]` here; meas
 
 ### Things found that cost nothing to fix and should be fixed regardless
 
-1. **Single-connection S8: karez is 22% behind pgx (16.85 s against 13.85 s)** with the server about 100% busy on one
+1. **Single-connection S8: karez was 22% behind pgx in one run (16.85 s against 13.85 s), not yet confirmed** with the server about 100% busy on one
    backend in both. karez reads and decodes in one thread, so the server stalls while karez decodes; pgx overlaps. A reader
    thread with a small ring of buffers (std only) should bring karez to pgx's level or past it. This is the most solid
    gain in this list; expected 1.2x on S8, to be proven.
-2. **The row view is 32% slower than the chunk path on S4 (1.031 s against 0.781 s)**; the plan's rule is within 15%. The
-   row path decodes field by field through `get`. Find the cost with `perf` and reduce it.
+2. **Correction (2026-11-16, same day): the "row view 32% slower" reading is not supported.** The client CPU of the row view and the chunk path was the same (0.35 s and 0.36 s) and the first cell of a lane is often slow (cold caches, a noisy minute). One run per variant cannot separate that from a real difference. The same doubt applies to "karez is 22% behind pgx on S8". The next droplet run interleaves three rounds of the single-connection clients (A B C A B C) before any code is changed for either.
 3. **Partitioning gets worse beyond the point where the server is saturated** (S4 k=16: 0.80 s, database 92% busy): the
    API should pick k from a measured probe or a default of about the database core count, not a fixed large number.
 4. **A partitioned scan with a `WHERE` range is slower per row than the plain scan** (`part1` 1.01 s against 0.78 s on S4):

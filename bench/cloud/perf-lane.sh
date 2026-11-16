@@ -31,27 +31,26 @@ ssh -o BatchMode=yes "root@$DB" "pkill iperf3; iperf3 -s -D" >/dev/null 2>&1
 ssh -o BatchMode=yes "root@$DB" "pkill iperf3" >/dev/null 2>&1
 
 say "latency floor (trust role 'floor', one connection, closed loop)"
-CL_PRIV="$(hostname -I | tr ' ' '\n' | grep '^10\.' | head -1)"
-ssh -o BatchMode=yes "root@$DB" "sudo -u postgres psql -d bench -q -c \"CREATE ROLE floor LOGIN\" -c \"GRANT SELECT ON ALL TABLES IN SCHEMA public TO floor\"; echo 'host bench floor $CL_PRIV/32 trust' >> /etc/postgresql/18/main/pg_hba.conf; systemctl reload postgresql@18-main" >/dev/null 2>&1
-# a trust line after the scram lines is never reached if an earlier line matches; floor is a different role, so it is
+ssh -o BatchMode=yes "root@$DB" "sudo -u postgres psql -d bench -q -c \"CREATE ROLE floor LOGIN\" -c \"GRANT SELECT ON ALL TABLES IN SCHEMA public TO floor\"; echo 'host bench floor 10.0.0.0/8 trust' >> /etc/postgresql/18/main/pg_hba.conf; systemctl reload postgresql@18-main" >/dev/null 2>&1
 for i in 1 2 3; do ./target/release/floor "postgresql://floor@$DB:5432/bench?sslmode=disable" 100000; done > "$OUT/floor.txt" 2>&1
 
 say "COPY binary versus row messages (S4 table)"
 ssh -o BatchMode=yes "root@$DB" "sudo -u postgres psql -d bench -q -c \"GRANT SELECT ON ALL TABLES IN SCHEMA public TO floor\"" >/dev/null 2>&1
 ./target/release/copyvs "postgresql://bench:$PW@$DB:5432/bench?sslmode=disable" 4 > "$OUT/copyvs.txt" 2>&1
 
-say "S4, 1M rows: one connection (row view, chunk path, tokio-postgres, libpq, pgx) and partitioned (k = 2 4 8 16, snapshot off and on)"
-for c in karez-blocking karez-blocking-chunk tokio-postgres libpq pgx sqlx; do bulk "s4-$c" "$c" s4 5; done
-for k in 1 2 4 8 16; do bulk "s4-part$k" karez-blocking-part s4 5 KAREZ_PARTS=$k KAREZ_SNAPSHOT=0; done
-for k in 4 8; do bulk "s4-part$k-snap" karez-blocking-part s4 5 KAREZ_PARTS=$k KAREZ_SNAPSHOT=1; done
+say "single-connection scans, interleaved three rounds (A B C A B C ...) so a slow minute does not land on one client"
+for r in 1 2 3; do
+  for c in karez-blocking karez-blocking-chunk tokio-postgres pgx sqlx libpq; do bulk "s4-$c-r$r" "$c" s4 3; done
+  for c in karez-blocking-chunk pgx tokio-postgres; do bulk "s8-$c-r$r" "$c" s8 2; done
+done
 
-say "S8, 13M-row taxi table: single connection and partitioned"
-for c in karez-blocking-chunk tokio-postgres pgx libpq; do bulk "s8-$c" "$c" s8 3; done
-for k in 2 4 8 16; do bulk "s8-part$k" karez-blocking-part s8 3 KAREZ_PARTS=$k KAREZ_SNAPSHOT=0; done
-for k in 4 8; do bulk "s8-part$k-snap" karez-blocking-part s8 3 KAREZ_PARTS=$k KAREZ_SNAPSHOT=1; done
+say "partitioned scans: S4 and S8, k = 2 4 8 16 (32 on the larger classes), snapshot off; k=8 with snapshot"
+for k in 2 4 8 16 32; do bulk "s4-part$k" karez-blocking-part s4 5 KAREZ_PARTS=$k KAREZ_SNAPSHOT=0; done
+for k in 2 4 8 16 32; do bulk "s8-part$k" karez-blocking-part s8 3 KAREZ_PARTS=$k KAREZ_SNAPSHOT=0; done
+bulk "s8-part8-snap" karez-blocking-part s8 3 KAREZ_PARTS=8 KAREZ_SNAPSHOT=1
 
-say "S5, 100k rows: per-row, multi-row (batches 500 1000 3000), sqlx, libpq, asyncpg, tokio-postgres"
-for c in karez-blocking sqlx libpq asyncpg tokio-postgres pgx; do bulk "s5-$c" "$c" s5 5; done
-for b in 500 1000 3000; do bulk "s5-mrow$b" karez-blocking-mrow s5 5 KAREZ_MROW_BATCH=$b; done
+say "S5, 100k rows: per-row, multi-row 1000, sqlx"
+for c in karez-blocking sqlx; do bulk "s5-$c" "$c" s5 5; done
+bulk "s5-mrow1000" karez-blocking-mrow s5 5 KAREZ_MROW_BATCH=1000
 
 say "done"
