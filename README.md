@@ -18,14 +18,14 @@ standards, decodes results straight from the wire into **Apache Arrow** columnar
 exported as an **ADBC driver, an ODBC driver and a JDBC driver**, so Python, Java, Go, .NET, R,
 BI tools and query engines can use the same core. It is designed to be **fast, small and safe**.
 
-> **Status: design stage with a first working slice.** A small blocking PostgreSQL client now
-> exists (see [What exists today](#what-exists-today)). It has optional TLS, it is **verified against a
-> real server on PostgreSQL 14.25, 16.15 and 17.12 (versions 13, 15 and 18 were not run)**, and **nothing is
-> yet supports a speed claim**: the only measurements are one reduced benchmark run (one lane per competitor) and a few
-> experiments, summarised in [docs/design/perf-program.md](docs/design/perf-program.md). Everything else on this page is a plan. The first milestone
-> is still a measurement spike that must clear stated numbers before other work starts (see
-> [Design targets](#design-targets-not-measurements)). Every number on this page that is not a
-> published third-party result is a target, not a result.
+> **Status: design stage with a working first slice.** A PostgreSQL client exists in this repository: five crates with no
+> third-party dependencies, optional TLS, a pool, a shared pipelined connection, `COPY`, a partitioned parallel table scan and
+> a multi-row insert (see [What exists today](#what-exists-today)). It is **verified against a real server on PostgreSQL 14.25,
+> 16.15 and 17.12 (versions 13, 15 and 18 were not run)** and the whole test suite passes. It is **not released**: the code is not
+> published, and the crates.io names are reserved with empty placeholders. The speed figures below are first measurements (one
+> lane per competitor), not a finished benchmark; the full test is pending. Everything beyond PostgreSQL (MySQL, SQL Server, SQLite,
+> the ADBC, ODBC and JDBC exports) is a plan. The first milestone is still a go or no-go measurement spike (see
+> [Design targets](#design-targets-and-where-they-stand)).
 
 [Plan](docs/design/plan.md) · [Research](docs/design/research.md) · [Status](docs/STATUS.md) ·
 [Why](#why-another-database-library) · [Planned API](#the-planned-api) · [Targets](#design-targets-not-measurements) ·
@@ -85,24 +85,33 @@ as wide as JDBC, ODBC and Arrow together, and three exports from one C ABI.
 
 ## What exists today
 
-Three library crates and a facade, with zero dependencies and `#![forbid(unsafe_code)]` in each.
-Details, test counts and commands are in [docs/design/m0-spike-results.md](docs/design/m0-spike-results.md).
+Five library crates and a top-level crate, with **no third-party dependencies** and `#![forbid(unsafe_code)]` in each (TLS is an
+optional feature that adds rustls). Details, test counts and commands are in
+[docs/design/m0-spike-results.md](docs/design/m0-spike-results.md); the measurements are in
+[docs/design/perf-program.md](docs/design/perf-program.md).
 
 | crate | what it is |
 |---|---|
 | `karez-chunk` | an Arrow-layout columnar chunk: validity bitmap plus fixed-width data, or offsets plus bytes; a reusable builder; checked typed readers |
 | `karez-proto-pg` | the PostgreSQL 3.0 wire protocol without any I/O: framing with a size limit, the startup, authentication and extended-query messages, binary row decoding into chunks, and SCRAM-SHA-256 with SHA-256, HMAC, PBKDF2 and base64 written in-repo |
-| `karez-pg` | a blocking connection: URL parsing, trust, cleartext and SCRAM authentication behind an allow-list, a per-connection prepared-statement cache, server-side parameter binding only, a streaming cursor (row view and `next_chunk`), transactions with savepoints, errors with SQLSTATE |
-| `karez` | re-exports the above; one runnable example in `crates/karez/examples/orders.rs` |
+| `karez-pg` | a blocking connection: URL parsing, trust, cleartext and SCRAM authentication behind an allow-list, a per-connection prepared-statement cache, server-side parameter binding only, a streaming cursor (row view and `next_chunk`), transactions with savepoints, errors with SQLSTATE, a first-come-first-served pool, batches in one round trip, `COPY` in and out, `LISTEN`/`NOTIFY`, cancellation, **`scan_partitioned`** (one table read on several connections from one snapshot) and **`insert_batch`** (multi-row insert) |
+| `karez-rt` | a shared connection that many threads or futures on any executor can pipeline over, with no async runtime |
+| `karez` | the top-level crate: re-exports the above; one runnable example in `crates/karez/examples/orders.rs` and doc examples for the partitioned scan and `insert_batch` |
+
+The repository also holds the benchmark harness (`bench/`: an open-loop load generator, adapters for 16 PostgreSQL clients, scripts that run
+it on DigitalOcean and delete the machines) and the results.
 
 Limits, stated plainly:
 
-- **PostgreSQL only.** No MySQL, SQL Server or SQLite. A shared connection (`karez-rt`) lets many threads or futures on any executor pipeline over one connection, with no async runtime. Built for the blocking client: a small first-come-first-served connection pool, batches in one round trip (`execute_many`), `COPY` in and out, `LISTEN`/`NOTIFY`, and cancelling a running statement from another thread.
+- **PostgreSQL only.** No MySQL, SQL Server or SQLite yet.
+- **Not published.** The working code is not on crates.io. The names `karez`, `karez-chunk`, `karez-proto-pg`, `karez-pg` and `karez-rt` are
+  reserved there with 0.0.1 placeholder releases that contain no code; they are not the library.
 - **TLS is optional.** With the `tls` feature (rustls) the default `sslmode` is `verify-full`; without it a connection needs an explicit `sslmode=disable`, and the core has no dependencies. It works over the shared `karez-rt` connection too. See [docs/design/tls-decision.md](docs/design/tls-decision.md).
-- **Three server versions tested.** Real-server tests ran on PostgreSQL 14.25, 16.15 and 17.12. Versions 13, 15 and 18 were not run. The 13 to 18 range in the plan is a target, not something tested.
+- **Three server versions tested.** Real-server tests ran on PostgreSQL 14.25, 16.15 and 17.12 (the partitioned scan needs 14 or later). Versions 13, 15 and 18 were not run by the test suite. The 13 to 18 range in the plan is a target, not something tested.
 - **Types.** Native columns: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`, `name`, `bytea`, `uuid`, `date`, `timestamp`, `timestamptz`, `oid` and NULL. `numeric`, `json`, `jsonb`, `interval`, `time`, `timetz`, `inet`, `cidr`, `macaddr`, `bit`, enums and arrays of these are read in binary and delivered as exact text (not as Arrow decimal, interval or list columns). Any other type (for example `money`, ranges, `tsvector`) fails with an error that names the type, or is read as text with `unsupported_types=text`.
 - **Timestamp range.** Values are Unix-epoch microseconds, so PostgreSQL timestamps in roughly its last 30 years of range (after about year 294246) give an error. Dates, `infinity` and `-infinity` are handled.
-- **No performance claims.** There is no benchmark result that supports a claim yet (one reduced run exists, see bench/README.md); see [Design targets](#design-targets-not-measurements).
+- **Speed.** Only first measurements exist ([At a glance](#at-a-glance-first-measurements-the-full-test-is-still-pending)); there is no
+  finished benchmark and no claim that karez is the fastest.
 
 ## What karez will be
 
@@ -114,7 +123,7 @@ Limits, stated plainly:
 | Standards | JDBC 4.3 plus the 4.4 and 4.5 surface, ODBC 3.8 Core and Level 1, ADBC 1.1.0, and a port of the R2DBC test suite for the async API. Parity is declared per standard and per level |
 | Exports | an ADBC driver (one shared library plus a manifest), a JDBC driver for Java 22 and later through the foreign function API, an ODBC driver, Python wheels with DB-API 2.0 and an Arrow stream, and Node bindings |
 | Safety | server-side parameter binding only, verified TLS by default, an allow-list for authentication methods, checked length arithmetic, fuzzed decoders, `forbid(unsafe_code)` outside two crates |
-| Size | no dependencies in the core, per-driver Cargo features, and a stripped PostgreSQL hello-world of at most 600 KB as a design target |
+| Size | no dependencies in the core, per-driver Cargo features, and a stripped PostgreSQL hello-world of at most 600 KB (measured for the PostgreSQL slice: 441 KiB) |
 
 ## The planned API
 
@@ -150,22 +159,23 @@ let mut tx = conn.begin(Isolation::RepeatableRead)?;
 tx.commit()?;
 ```
 
-## Design targets, not measurements
+## Design targets and where they stand
 
-Nothing has been measured. These are the pass marks for Milestone 0, the go or no-go spike, on
-PostgreSQL, with an open-loop benchmark on separate machines that reports pipelined and
-unpipelined numbers separately. The method is in [docs/design/plan.md](docs/design/plan.md#6-benchmark-method).
+These are the pass marks for Milestone 0, the go or no-go spike, on PostgreSQL, with an open-loop benchmark on separate machines that
+reports pipelined and unpipelined numbers separately. The method is in [docs/design/plan.md](docs/design/plan.md#6-benchmark-method). The
+right-hand column is the state on 2026-11-16 from one lane per competitor; the full test is pending
+([plan section 1.3](docs/design/plan.md#13-what-milestone-0-must-show-before-the-build-goes-ahead) has the details).
 
-| scenario | must show to continue |
-|---|---|
-| Point query, unpipelined, 64 connections | within 5% of the fastest Rust client (tokio-postgres, zero-postgres or wtx), and at least 2x tuned pgJDBC |
-| Bulk scan of 1M rows into Arrow | at least 2x the best Rust row API, at least 3x tuned pgJDBC, at most one third of its memory |
-| Size | a stripped PostgreSQL hello-world of at most 600 KB, with zero direct dependencies |
+| scenario | must show to continue | where it stands |
+|---|---|---|
+| Point query, unpipelined, 64 connections | within 5% of the fastest Rust client, and at least 2x tuned pgJDBC | **level** with the best Rust clients (the database host is the limit); about 1.2x pgJDBC, not 2x |
+| One connection, one request at a time | within 5% of the fastest Rust client | **met**: within 7% of a raw-protocol floor and level with the best clients |
+| Bulk scan into Arrow | at least 2x the best Rust row API, at least 3x tuned pgJDBC, at most one third of its memory | **not met on a 1.9 Gbit/s cloud link** (1.1x to 1.3x with the partitioned scan); **met with no network limit** (2.4x to 3.4x); faster-network test pending |
+| Size | a stripped PostgreSQL hello-world of at most 600 KB, with zero direct dependencies | **met**: 441 KiB, zero third-party crates |
 
-On single-row queries the evidence supports parity with the best existing clients, not a large
-margin. The large margin is on the bulk and columnar path, and every claim will name the API
-surface it applies to. If the bulk path misses its mark, the plan falls back to a thin
-standards-shaped API over tokio-postgres.
+On single-row queries the evidence supports parity with the best existing clients, not a large margin. The large margin is on the bulk
+and columnar path, and every claim names the API surface it applies to. If the bulk path misses its mark on the network the owner
+measures next, the plan falls back to a thin standards-shaped API over tokio-postgres.
 
 ## Roadmap
 
@@ -207,17 +217,19 @@ engine, and simoom, the HTTP server engine.
 native drivers for PostgreSQL, MySQL and MariaDB, SQL Server and SQLite, with JDBC, ODBC and ADBC
 parity and exports. It is the Rust counterpart of what JDBC and ODBC are for Java and C.
 
-**Can I use it today?** Only as a spike. A PostgreSQL client exists, with optional TLS, tested
-against a real server on PostgreSQL 14.25, 16.15 and 17.12, and not measured. It is not released and not
-published. The rest is research, the plan and the brand assets.
+**Can I use it today?** Only as a spike, from this repository. A PostgreSQL client exists, with optional TLS, a pool, a shared
+pipelined connection, a partitioned parallel scan and a multi-row insert, tested against a real server on PostgreSQL 14.25, 16.15 and
+17.12, with first measurements. It is not released and its code is not published (the crates.io names hold empty placeholders). The
+rest is research, the plan and the brand assets.
 
 **Is it a fork of tokio-rs/rdbc?** No. It starts fresh with no code or history from rdbc, which
 is cited as prior work. rdbc has been dormant since 2021.
 
-**Will it be faster than JDBC?** The target is at least twice tuned pgJDBC on point queries and
-at least three times on bulk scans, but nothing is measured yet. Existing Rust clients such as
-tokio-postgres already beat JDBC on point queries, so the aim there is parity with the fastest
-Rust client. The larger gain is expected on bulk reads into Arrow.
+**Is it faster than JDBC?** On first measurements, about 1.2x tuned pgJDBC on point queries at 64 connections (the target was 2x; the
+database server is the limit there) and about 1.7x pgJDBC with default settings on a 1-million-row scan; with the partitioned scan the
+bulk-read gain over the best single-connection Rust client is 1.1x to 1.3x on a 1.9 Gbit/s cloud link and up to 3.4x with no network
+limit. These are one-lane figures and the full test is pending. Existing Rust clients such as tokio-postgres already beat JDBC on point
+queries, so the aim there is parity with the fastest Rust client; the larger gain is on bulk reads into Arrow.
 
 **Why not just use sqlx, tokio-postgres or diesel?** They are good libraries. karez targets a
 different shape: one standards-shaped API across several databases, a columnar result path,
@@ -252,7 +264,7 @@ percent slower than the fastest synchronous one on single queries.
 ## Contributing, security and citing
 
 Ideas, corrections to the research, and benchmark methodology reviews are welcome now; the
-first code is the PostgreSQL spike described above. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md)
+PostgreSQL spike described above is the code to review. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md)
 and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). To cite karez, use [CITATION.cff](CITATION.cff).
 
 ## License and credits

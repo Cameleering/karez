@@ -1,11 +1,11 @@
 # M0 spike: what was built, what was tested
 
-_2026-11-13. Branch `claude/m0-spike-1bacb7`, local, not pushed, not merged._
+_2026-11-13, updated 2026-11-16. Branch `claude/m0-spike-1bacb7`, pushed with a draft pull request (Cameleering/karez#4), not merged. This note describes the build as of 2026-11-13; later additions (`scan_partitioned`, `insert_batch`, the benchmark harness and its measurements) are in [perf-program.md](perf-program.md) and [../STATUS.md](../STATUS.md)._
 
 **Scope in one line:** a PostgreSQL client with optional TLS (feature `tls`, rustls), **verified against a real server
-on PostgreSQL 14.25, 16.15 and 17.12; versions 13, 15 and 18 were not run.** There are **no benchmarks and no
-performance claims** in this note. Speed is measured later with the method in
-[plan.md](plan.md) section 6, on separate machines.
+on PostgreSQL 14.25, 16.15 and 17.12; versions 13, 15 and 18 were not run.** This note has **no benchmarks and no
+performance claims**; the first measurements (one lane per competitor, method of
+[plan.md](plan.md) section 6, on separate machines) are in [perf-program.md](perf-program.md).
 
 ## What was built
 
@@ -158,7 +158,7 @@ exists, and none may be quoted from this table. The plan's benchmark method (ope
 - **COPY** takes the statement as written (COPY has no bound parameters), so build its SQL only from trusted text; the data is never part of the SQL.
 - **Pool.** Connections are not tested before they are handed out; a dead idle connection fails on first use and is then replaced.
 - **Not built:** the leader optimisation and a `Connection` rebuilt on the engine (see karez-rt.md section 13), a pool of shared connections, portals with partial fetch (the cursor streams from the socket, so memory stays bounded), metadata chunks, MySQL, SQL Server, SQLite, the C ABI and every export. No fuzz targets (the split and garbage tests are ordinary tests; `cargo-fuzz` is a dependency), no Miri (there is no `unsafe`), no `cargo-deny` (there are no dependencies), no size report, no differential test against libpq (the rendered types are compared with the server's own text instead).
-- **Not measured:** speed, memory and binary size. The plan's Milestone 0 gate (plan section 1.3) is therefore still open.
+- **Measured later (2026-11-14 to 2026-11-16):** speed, memory and binary size; see [perf-program.md](perf-program.md) and the gate table in plan section 1.3. The faster-network test that decides the bulk-read gate is still pending.
 
 ## Final run (2026-11-13)
 
