@@ -185,7 +185,8 @@ def run_bulk(a, client, scenario, repeats, rows):
     t = time.monotonic()
     db0 = stat_busy(a.db_host) if getattr(a, "db_host", None) else None
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=int(os.environ.get('BENCH_BULK_TIMEOUT', 1500)))
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=int(os.environ.get('BENCH_BULK_TIMEOUT', 1500)),
+                           env=dict(os.environ, **spec.get('env', {})))
     except subprocess.TimeoutExpired:
         return {"failed": True, "client": client, "scenario": scenario, "stderr": "timeout"}
     if p.returncode != 0 or not p.stdout.strip():
@@ -493,6 +494,18 @@ PROFILES = {
                           ("r3", "unpipelined", 8, 0),
                           ("r4", "unpipelined", 64, 0)],
                  bulk=dict(repeats=3, s5_rows=100000, s6_rows=3_000_000)),
+    # lean2: campaign 2 (two rounds, clients rotated across lanes). As lean, with s2 at 8 connections back in, the
+    # R4 mix without the aggregate, and no R3 (server-bound, tells the clients apart not at all; see CAMPAIGN2-PLAN.md).
+    "lean2": dict(repeats=3, duration=10, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
+                  configs=[("s1", "unpipelined", 64, 0),
+                           ("s2", "unpipelined", 1, 0), ("s2", "unpipelined", 8, 0), ("s2", "unpipelined", 64, 0),
+                           ("s2", "unpipelined", 512, 0),
+                           ("s7", "unpipelined", 64, 0),
+                           ("r1", "unpipelined", 64, 0), ("r1", "unpipelined", 512, 0),
+                           ("r1", "pipelined", 8, 0),
+                           ("r2", "unpipelined", 64, 0),
+                           ("r4", "unpipelined", 64, 0)],
+                  bulk=dict(repeats=3, s5_rows=100000, s6_rows=3_000_000)),
     # repeat (rounds 2 and 3): what is measured again on the other droplets
     "repeat": dict(repeats=5, duration=12, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
                    configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 64, 0),

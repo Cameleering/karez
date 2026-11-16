@@ -247,7 +247,11 @@
    "s4",
    "s8"
   ],
-  "notes": "S4 and S8 partitioned over KAREZ_PARTS connections; KAREZ_SNAPSHOT=1 shares one snapshot (prototype)"
+  "notes": "S4 and S8 through the library scan_partitioned, 8 partitions, one shared snapshot",
+  "env": {
+   "KAREZ_API": "1",
+   "KAREZ_PARTS": "8"
+  }
  },
  "karez-blocking-mrow": {
   "cmd": [
@@ -259,6 +263,6 @@
   "bulk": [
    "s5"
   ],
-  "notes": "S5 with one multi-row INSERT ... VALUES per batch (prototype; KAREZ_MROW_BATCH rows, default 1000)"
+  "notes": "S5 through the library Connection::insert_batch (1,000 rows per statement)"
  }
 }

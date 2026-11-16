@@ -14,7 +14,7 @@ mkdir -p "$OUT"
 cp /root/machine-cl.txt "$OUT/machine-cl.txt" 2>/dev/null
 ssh -o BatchMode=yes "root@$DB" cat /root/machine-db.txt > "$OUT/machine-db.txt" 2>/dev/null
 echo "$(date -u +%FT%TZ) lane $LANE round $ROUND profile $PROFILE clients $CLIENTS"
-if [ "$PROFILE" = full ] || [ "$PROFILE" = smoke ]; then
+if [ "$PROFILE" = full ] || [ "$PROFILE" = smoke ] || [ "$PROFILE" = lean2 ]; then
   # every client must produce the same checksum on the same request sequence (see run.py verify)
   python3 run.py verify --clients "$CLIENTS" --root-cert /root/ca.crt > "$OUT/verify.txt" 2>&1
   echo "verify: rc=$? (see verify.txt)"

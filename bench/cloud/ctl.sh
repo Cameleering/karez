@@ -49,7 +49,7 @@ rssh() { # rssh NAME cmd...
 rscp() { scp "${SSH_OPTS[@]}" "$@"; }
 
 # the client groups; karez runs in every lane and round
-KAREZ="karez-blocking,karez-shared,karez-blocking-chunk"
+KAREZ="karez-blocking,karez-shared,karez-blocking-chunk,karez-blocking-part,karez-blocking-mrow"
 GROUPS_=("libpq,tokio-postgres,pgjdbc,asyncpg" "deadpool-postgres,pgx,vertx-pg-client,psycopg3,sqlx-tuned" "sqlx,pgjdbc-tuned,r2dbc-postgresql,zero-postgres")
 
 pack() {
