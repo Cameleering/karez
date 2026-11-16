@@ -1979,3 +1979,335 @@ mod tls {
         Ok(())
     }
 }
+
+// ---- partitioned scans and multi-row inserts -----------------------------------------------------
+
+fn scan_config(addr: &str) -> Config {
+    Config::from_url(&url(addr, "karez_scram", Some(SCRAM_PW), "karez", "")).expect("url")
+}
+
+/// A real (not temporary) table, because other connections must see it. Dropped by the guard.
+struct Table<'a> {
+    conn: &'a mut Connection,
+    name: String,
+}
+
+impl<'a> Table<'a> {
+    fn create(conn: &'a mut Connection, name: &str, ddl: &str) -> Result<Table<'a>, Error> {
+        let name = tag(name);
+        conn.execute(&format!("DROP TABLE IF EXISTS {name}"), &[])?;
+        conn.execute(&format!("CREATE TABLE {name} ({ddl})"), &[])?;
+        Ok(Table { conn, name })
+    }
+}
+
+impl Drop for Table<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .conn
+            .execute(&format!("DROP TABLE IF EXISTS {}", self.name), &[]);
+    }
+}
+
+fn sum_i64_column(chunk: &Chunk, col: usize) -> Result<i64, Error> {
+    let c = chunk.column(col)?;
+    Ok(c.data()
+        .chunks_exact(8)
+        .take(chunk.rows())
+        .map(|b| i64::from_le_bytes(b.try_into().unwrap()))
+        .sum())
+}
+
+#[test]
+fn insert_batch_inserts_in_statements_and_is_atomic() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = Table::create(
+        &mut c,
+        "batch",
+        "id int8 PRIMARY KEY, n int4, s text, f float8",
+    )?;
+    let name = t.name.clone();
+    let conn = &mut *t.conn;
+
+    // 2,345 rows: three statements of 1,000, 1,000 and 345 rows; a NULL in every seventh row.
+    let texts: Vec<String> = (0..2345).map(|i| format!("row {i}")).collect();
+    let rows: Vec<[Value<'_>; 4]> = (0..2345i64)
+        .map(|i| {
+            [
+                Value::I64(i),
+                if i % 7 == 0 {
+                    Value::Null
+                } else {
+                    Value::I32(i as i32 * 2)
+                },
+                Value::Text(&texts[i as usize]),
+                Value::F64(i as f64 / 4.0),
+            ]
+        })
+        .collect();
+    let refs: Vec<&[Value<'_>]> = rows.iter().map(|r| &r[..]).collect();
+    let n = conn.insert_batch(&name, &["id", "n", "s", "f"], &refs)?;
+    assert_eq!(n, 2345);
+    assert_eq!(conn.tx_status(), TxStatus::Idle);
+    assert_eq!(
+        one_i64(conn, &format!("SELECT count(*)::int8 FROM {name}"), &[])?,
+        2345
+    );
+    assert_eq!(
+        one_i64(
+            conn,
+            &format!("SELECT count(*)::int8 FROM {name} WHERE n IS NULL"),
+            &[]
+        )?,
+        335
+    );
+    assert_eq!(
+        one_i64(
+            conn,
+            &format!("SELECT sum(length(s))::int8 FROM {name}"),
+            &[]
+        )?,
+        texts.iter().map(|s| s.len() as i64).sum::<i64>()
+    );
+
+    // An error inside the batch rolls the whole batch back when the call opened the transaction.
+    let dup = [
+        [
+            Value::I64(100_000),
+            Value::I32(1),
+            Value::Text("x"),
+            Value::F64(0.0),
+        ],
+        [
+            Value::I64(5),
+            Value::I32(1),
+            Value::Text("dup"),
+            Value::F64(0.0),
+        ],
+    ];
+    let dup_refs: Vec<&[Value<'_>]> = dup.iter().map(|r| &r[..]).collect();
+    expect_sqlstate(
+        conn.insert_batch(&name, &["id", "n", "s", "f"], &dup_refs),
+        "23505",
+    );
+    assert_eq!(conn.tx_status(), TxStatus::Idle);
+    assert_eq!(
+        one_i64(
+            conn,
+            &format!("SELECT count(*)::int8 FROM {name} WHERE id = 100000"),
+            &[]
+        )?,
+        0
+    );
+
+    // Inside the caller's transaction it joins it: a rollback by the caller removes the rows.
+    conn.execute("BEGIN", &[])?;
+    let one = [
+        Value::I64(900_000),
+        Value::Null,
+        Value::Text("t"),
+        Value::F64(1.0),
+    ];
+    assert_eq!(
+        conn.insert_batch(&name, &["id", "n", "s", "f"], &[&one[..]])?,
+        1
+    );
+    assert_eq!(conn.tx_status(), TxStatus::InTransaction);
+    conn.execute("ROLLBACK", &[])?;
+    assert_eq!(
+        one_i64(
+            conn,
+            &format!("SELECT count(*)::int8 FROM {name} WHERE id = 900000"),
+            &[]
+        )?,
+        0
+    );
+
+    // Usage errors and the empty batch.
+    let short = [Value::I64(1)];
+    assert!(conn
+        .insert_batch(&name, &["id", "n"], &[&short[..]])
+        .is_err());
+    assert!(conn.insert_batch(&name, &[], &[]).is_err());
+    assert_eq!(conn.insert_batch(&name, &["id"], &[])?, 0);
+    Ok(())
+}
+
+#[test]
+fn scan_partitioned_reads_every_row_once_for_any_partition_count() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = Table::create(
+        &mut c,
+        "scan",
+        "id int8 PRIMARY KEY, v int8 NOT NULL, s text",
+    )?;
+    let name = t.name.clone();
+    t.conn.execute(
+        &format!(
+            "INSERT INTO {name} SELECT g, g * 3, 'row ' || g FROM generate_series(1, 300000) g"
+        ),
+        &[],
+    )?;
+    t.conn.execute(&format!("ANALYZE {name}"), &[])?;
+    let (count, sum_id, sum_v) = {
+        let mut cur = t.conn.query(
+            &format!("SELECT count(*)::int8, sum(id)::int8, sum(v)::int8 FROM {name}"),
+            &[],
+        )?;
+        let r = cur.next()?.unwrap();
+        (r.get::<i64>(0)?, r.get::<i64>(1)?, r.get::<i64>(2)?)
+    };
+    assert_eq!(count, 300_000);
+    let cfg = scan_config(&addr);
+    let cols = ["id", "v", "s"];
+    for snapshot in [true, false] {
+        for k in [1usize, 2, 3, 5, 8] {
+            let parts = karez_pg::scan_partitioned(
+                &cfg,
+                &karez_pg::Scan::new(&name, &cols)
+                    .partitions(k)
+                    .snapshot(snapshot),
+                |_| (0i64, 0i64, 0i64),
+                |st, ch| {
+                    st.0 += ch.rows() as i64;
+                    st.1 += sum_i64_column(ch, 0)?;
+                    st.2 += sum_i64_column(ch, 1)?;
+                    Ok(())
+                },
+            )?;
+            assert!(parts.len() <= k && !parts.is_empty());
+            let tot = parts
+                .iter()
+                .fold((0, 0, 0), |a, p| (a.0 + p.0, a.1 + p.1, a.2 + p.2));
+            assert_eq!(tot, (count, sum_id, sum_v), "k {k} snapshot {snapshot}");
+            if k >= 3 {
+                assert!(
+                    parts.iter().all(|p| p.0 > 0),
+                    "every partition read rows (k {k})"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn scan_partitioned_sees_one_snapshot_while_the_table_changes() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = Table::create(&mut c, "snap", "id int8 PRIMARY KEY, v int8 NOT NULL")?;
+    let name = t.name.clone();
+    t.conn.execute(
+        &format!("INSERT INTO {name} SELECT g, g FROM generate_series(1, 200000) g"),
+        &[],
+    )?;
+    let cfg = scan_config(&addr);
+    let changed = std::sync::atomic::AtomicBool::new(false);
+    let cols = ["id", "v"];
+    let parts = karez_pg::scan_partitioned(
+        &cfg,
+        &karez_pg::Scan::new(&name, &cols).partitions(4),
+        |_| 0i64,
+        |n, ch| {
+            *n += ch.rows() as i64;
+            // after the first chunk of any partition, another connection adds rows and deletes some
+            if !changed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let mut o = Connection::connect(&cfg)?;
+                o.execute(
+                    &format!(
+                        "INSERT INTO {name} SELECT g, g FROM generate_series(200001, 260000) g"
+                    ),
+                    &[],
+                )?;
+                o.execute(&format!("DELETE FROM {name} WHERE id <= 50000"), &[])?;
+            }
+            Ok(())
+        },
+    )?;
+    assert_eq!(
+        parts.iter().sum::<i64>(),
+        200_000,
+        "the scan sees the table as it was when it started"
+    );
+    assert_eq!(
+        one_i64(t.conn, &format!("SELECT count(*)::int8 FROM {name}"), &[])?,
+        210_000
+    );
+    Ok(())
+}
+
+#[test]
+fn scan_partitioned_empty_table_errors_and_usage() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = Table::create(&mut c, "scanedge", "id int8 PRIMARY KEY, v int8")?;
+    let name = t.name.clone();
+    let cfg = scan_config(&addr);
+    let cols = ["id", "v"];
+    // an empty table has no heap blocks: one connection, no rows, no error
+    let parts = karez_pg::scan_partitioned(
+        &cfg,
+        &karez_pg::Scan::new(&name, &cols).partitions(4),
+        |_| 0usize,
+        |n, ch| {
+            *n += ch.rows();
+            Ok(())
+        },
+    )?;
+    assert_eq!(parts, vec![0]);
+    t.conn.execute(
+        &format!("INSERT INTO {name} SELECT g, g FROM generate_series(1, 100000) g"),
+        &[],
+    )?;
+    // a missing table and a missing column come back as the server's error, not as a partition echo
+    expect_sqlstate(
+        karez_pg::scan_partitioned(
+            &cfg,
+            &karez_pg::Scan::new("karez_no_such_table", &cols).partitions(3),
+            |_| (),
+            |_, _| Ok(()),
+        ),
+        "42P01",
+    );
+    expect_sqlstate(
+        karez_pg::scan_partitioned(
+            &cfg,
+            &karez_pg::Scan::new(&name, &["id", "nope"]).partitions(3),
+            |_| (),
+            |_, _| Ok(()),
+        ),
+        "42703",
+    );
+    // an error from the callback stops the scan and is returned
+    let r = karez_pg::scan_partitioned(
+        &cfg,
+        &karez_pg::Scan::new(&name, &cols).partitions(3),
+        |_| (),
+        |_, _| Err(Error::Usage("stop")),
+    );
+    assert!(matches!(r, Err(Error::Usage("stop"))), "{r:?}");
+    // no columns, and an unusable table name
+    let none: [&str; 0] = [];
+    assert!(karez_pg::scan_partitioned(
+        &cfg,
+        &karez_pg::Scan::new(&name, &none),
+        |_| (),
+        |_, _| Ok(())
+    )
+    .is_err());
+    assert!(karez_pg::scan_partitioned(
+        &cfg,
+        &karez_pg::Scan::new("a.b.c", &cols),
+        |_| (),
+        |_, _| Ok(())
+    )
+    .is_err());
+    // the connection that created the table is still usable
+    assert_eq!(
+        one_i64(t.conn, &format!("SELECT count(*)::int8 FROM {name}"), &[])?,
+        100_000
+    );
+    Ok(())
+}

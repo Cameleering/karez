@@ -36,42 +36,49 @@ fn scan_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
     scan_chunks_sql(conn, S4_SQL, &[])
 }
 
+/// The per-chunk fold of S4 (all ten columns), shared by the single-connection and the API paths.
+pub fn s4_fold(ch: &karez_pg::Chunk) -> Result<u64, String> {
+    let n = ch.rows();
+    let col = |i: usize| ch.column(i).map_err(|e| e.to_string());
+    let mut s = 0u64;
+    for i in [0usize, 3] {
+        for v in le::<8>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(i64::from_le_bytes(v) as u64);
+        }
+    }
+    for i in [1usize, 2] {
+        for v in le::<4>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(i32::from_le_bytes(v) as u64);
+        }
+    }
+    for i in [4usize, 5] {
+        for v in le::<8>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(u64::from_le_bytes(v));
+        }
+    }
+    for v in le::<2>(col(9)?.data()).take(n) {
+        s = s.wrapping_add(i16::from_le_bytes(v) as u64);
+    }
+    for i in [6usize, 7] {
+        let o = col(i)?.offsets();
+        s = s.wrapping_add((o[n] - o[0]) as u64);
+    }
+    let bits = col(8)?.data();
+    let full = n / 8;
+    let mut t = bits[..full].iter().map(|b| b.count_ones() as u64).sum::<u64>();
+    if n % 8 != 0 {
+        t += (bits[full] & ((1u8 << (n % 8)) - 1)).count_ones() as u64;
+    }
+    s = s.wrapping_add(t);
+    Ok(s)
+}
+
 fn scan_chunks_sql(conn: &mut Connection, sql: &str, params: &[Value<'_>]) -> Result<(u64, u64), String> {
     let mut cur = conn.query(sql, params).map_err(|e| e.to_string())?;
     let (mut rows, mut sum) = (0u64, 0u64);
     while let Some(ch) = cur.next_chunk().map_err(|e| e.to_string())? {
         let n = ch.rows();
-        let col = |i: usize| ch.column(i).map_err(|e| e.to_string());
-        let mut s = 0u64;
-        for i in [0usize, 3] {
-            for v in le::<8>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(i64::from_le_bytes(v) as u64);
-            }
-        }
-        for i in [1usize, 2] {
-            for v in le::<4>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(i32::from_le_bytes(v) as u64);
-            }
-        }
-        for i in [4usize, 5] {
-            for v in le::<8>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(u64::from_le_bytes(v));
-            }
-        }
-        for v in le::<2>(col(9)?.data()).take(n) {
-            s = s.wrapping_add(i16::from_le_bytes(v) as u64);
-        }
-        for i in [6usize, 7] {
-            let o = col(i)?.offsets();
-            s = s.wrapping_add((o[n] - o[0]) as u64);
-        }
-        let bits = col(8)?.data();
-        let full = n / 8;
-        let mut t = bits[..full].iter().map(|b| b.count_ones() as u64).sum::<u64>();
-        if n % 8 != 0 {
-            t += (bits[full] & ((1u8 << (n % 8)) - 1)).count_ones() as u64;
-        }
-        s = s.wrapping_add(t);
+        let s = s4_fold(ch)?;
         sum = sum.wrapping_add(s);
         rows += n as u64;
     }
@@ -93,53 +100,60 @@ fn scan_taxi_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
     scan_taxi_chunks_sql(conn, crate::TAXI_SCAN_SQL, &[])
 }
 
+/// The per-chunk fold of S8 (17 columns, NULLs through the validity bitmaps).
+pub fn taxi_fold(ch: &karez_pg::Chunk) -> Result<u64, String> {
+    let n = ch.rows();
+    let col = |i: usize| ch.column(i).map_err(|e| e.to_string());
+    let valid = |c: &karez_pg::Column, r: usize| c.null_count() == 0 || (c.validity()[r / 8] >> (r % 8)) & 1 == 1;
+    let mut s = 0u64;
+    for v in le::<8>(col(0)?.data()).take(n) {
+        s = s.wrapping_add(i64::from_le_bytes(v) as u64);
+    }
+    for i in [1usize, 10] {
+        for v in le::<2>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(i16::from_le_bytes(v) as u64);
+        }
+    }
+    for i in [2usize, 3] {
+        for v in le::<8>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(i64::from_le_bytes(v) as u64);
+        }
+    }
+    for i in [4usize, 6] {
+        let c = col(i)?;
+        for (r, v) in le::<2>(c.data()).take(n).enumerate() {
+            if valid(c, r) {
+                s = s.wrapping_add(i16::from_le_bytes(v) as u64);
+            }
+        }
+    }
+    for i in [8usize, 9] {
+        for v in le::<4>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(i32::from_le_bytes(v) as u64);
+        }
+    }
+    for i in [5usize, 11, 12, 13, 14, 15] {
+        for v in le::<8>(col(i)?.data()).take(n) {
+            s = s.wrapping_add(u64::from_le_bytes(v));
+        }
+    }
+    let c = col(16)?;
+    for (r, v) in le::<8>(c.data()).take(n).enumerate() {
+        if valid(c, r) {
+            s = s.wrapping_add(u64::from_le_bytes(v));
+        }
+    }
+    let o = col(7)?.offsets();
+    s = s.wrapping_add((o[n] - o[0]) as u64);
+    Ok(s)
+}
+
 fn scan_taxi_chunks_sql(conn: &mut Connection, sql: &str, params: &[Value<'_>]) -> Result<(u64, u64), String> {
     let mut cur = conn.query(sql, params).map_err(|e| e.to_string())?;
     let (mut rows, mut sum) = (0u64, 0u64);
     while let Some(ch) = cur.next_chunk().map_err(|e| e.to_string())? {
         let n = ch.rows();
-        let col = |i: usize| ch.column(i).map_err(|e| e.to_string());
-        let valid = |c: &karez_pg::Column, r: usize| c.null_count() == 0 || (c.validity()[r / 8] >> (r % 8)) & 1 == 1;
-        let mut s = 0u64;
-        for v in le::<8>(col(0)?.data()).take(n) {
-            s = s.wrapping_add(i64::from_le_bytes(v) as u64);
-        }
-        for i in [1usize, 10] {
-            for v in le::<2>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(i16::from_le_bytes(v) as u64);
-            }
-        }
-        for i in [2usize, 3] {
-            for v in le::<8>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(i64::from_le_bytes(v) as u64);
-            }
-        }
-        for i in [4usize, 6] {
-            let c = col(i)?;
-            for (r, v) in le::<2>(c.data()).take(n).enumerate() {
-                if valid(c, r) {
-                    s = s.wrapping_add(i16::from_le_bytes(v) as u64);
-                }
-            }
-        }
-        for i in [8usize, 9] {
-            for v in le::<4>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(i32::from_le_bytes(v) as u64);
-            }
-        }
-        for i in [5usize, 11, 12, 13, 14, 15] {
-            for v in le::<8>(col(i)?.data()).take(n) {
-                s = s.wrapping_add(u64::from_le_bytes(v));
-            }
-        }
-        let c = col(16)?;
-        for (r, v) in le::<8>(c.data()).take(n).enumerate() {
-            if valid(c, r) {
-                s = s.wrapping_add(u64::from_le_bytes(v));
-            }
-        }
-        let o = col(7)?.offsets();
-        s = s.wrapping_add((o[n] - o[0]) as u64);
+        let s = taxi_fold(ch)?;
         sum = sum.wrapping_add(s);
         rows += n as u64;
     }
@@ -317,6 +331,9 @@ pub fn run_part(cfg: &Cfg) -> (String, Vec<Pass>) {
     };
     let (key, table) = if taxi { ("trip_id", "taxi_trips") } else { ("id", "bench_wide") };
     let c = Config::from_url(&cfg.url).unwrap_or_else(|e| die(&format!("bad url: {e}")));
+    if std::env::var("KAREZ_API").map(|v| v == "1").unwrap_or(false) {
+        return run_part_api(cfg, &c, parts, snapshot, taxi);
+    }
     let mut conns: Vec<Connection> =
         (0..parts).map(|_| Connection::connect(&c).unwrap_or_else(|e| die(&format!("connect: {e}")))).collect();
     let (min, max) = {
@@ -379,4 +396,36 @@ pub fn run_part(cfg: &Cfg) -> (String, Vec<Pass>) {
         passes.push(timed(|| pass(&mut conns)));
     }
     (format!("karez-pg {} (chunk path, {parts} partitions{})", env!("CARGO_PKG_VERSION"), if snapshot { ", shared snapshot" } else { "" }), passes)
+}
+
+/// The same scan through the library's `scan_partitioned` (ctid ranges, shared snapshot by default).
+fn run_part_api(cfg: &Cfg, c: &Config, parts: i64, snapshot: bool, taxi: bool) -> (String, Vec<Pass>) {
+    let s4_cols = ["id", "a", "b", "c", "d", "e", "s1", "s2", "flag", "f"];
+    let taxi_cols = [
+        "trip_id", "vendor", "pickup", "dropoff", "passengers", "distance", "ratecode", "flag", "pu", "do_", "payment", "fare",
+        "extra", "tip", "tolls", "total", "congestion",
+    ];
+    let (table, cols): (&str, &[&str]) = if taxi { ("taxi_trips", &taxi_cols) } else { ("bench_wide", &s4_cols) };
+    let pass = || -> Result<(u64, u64), String> {
+        let scan = karez_pg::Scan::new(table, cols).partitions(parts as usize).snapshot(snapshot);
+        let states = karez_pg::scan_partitioned(
+            c,
+            &scan,
+            |_| (0u64, 0u64),
+            |st, ch| {
+                let s = if taxi { taxi_fold(ch) } else { s4_fold(ch) }.map_err(karez_pg::Error::Value)?;
+                st.0 += ch.rows() as u64;
+                st.1 = st.1.wrapping_add(s);
+                Ok(())
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(states.iter().fold((0, 0), |a, s| (a.0 + s.0, a.1.wrapping_add(s.1))))
+    };
+    pass().unwrap_or_else(|e| die(&format!("warm-up: {e}")));
+    let mut passes = Vec::new();
+    for _ in 0..cfg.repeats {
+        passes.push(timed(pass));
+    }
+    (format!("karez-pg {} (scan_partitioned, {parts} partitions{})", env!("CARGO_PKG_VERSION"), if snapshot { ", snapshot" } else { "" }), passes)
 }

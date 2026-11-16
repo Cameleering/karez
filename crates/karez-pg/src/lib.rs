@@ -3,7 +3,11 @@
 //! * One thread drives the socket; there is no worker and no channel. `TCP_NODELAY` is set and
 //!   every request (Bind, Execute, Sync) goes out in a single `write`.
 //! * Statements are prepared per connection and cached by SQL text and parameter types.
-//! * All user data is bound server-side ([`Value`]); SQL text is never assembled from values.
+//! * All user data is bound server-side ([`Value`]); SQL text is never assembled from values. (Identifiers are
+//!   quoted; the one other string in SQL text is the server-generated snapshot id of a partitioned scan, checked
+//!   to be hex digits and dashes before use.)
+//! * [`scan_partitioned`] reads a large table on several connections from one snapshot; [`Connection::insert_batch`]
+//!   inserts many rows with multi-row statements. Both are measured in `docs/design/perf-program.md`.
 //! * Results are binary and land in an Arrow-layout [`Chunk`]. Read them as rows with
 //!   [`Cursor::next`] or as whole chunks with [`Cursor::next_chunk`].
 //! * Passwords are redacted from `Debug` output and never logged.
@@ -13,10 +17,12 @@
 
 #![forbid(unsafe_code)]
 
+mod batch;
 mod config;
 mod conn;
 mod error;
 mod pool;
+mod scan;
 #[cfg(feature = "tls")]
 mod tls;
 mod transport;
@@ -31,4 +37,5 @@ pub use karez_proto_pg::{ErrorFields, TxStatus, Value};
 pub use pool::{Pool, PooledConnection};
 #[cfg(feature = "tls")]
 pub use rustls::ClientConnection as TlsConnection;
+pub use scan::{default_partitions, scan_partitioned, Scan};
 pub use tx::{Isolation, Savepoint, Transaction};

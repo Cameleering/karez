@@ -356,3 +356,30 @@ database size, which the owner knows better than the benchmark does. To close th
 - Meanwhile, three things are worth doing in the code regardless, all local and testable: (a) a `ctid`-range partitioner and
   an `EXPLAIN` check (finding 2); (b) the partitioned scan as a real API (`scan_partitioned`) with a shared snapshot and a
   default `k` taken from the database's core count; (c) the multi-row insert as `insert_batch`.
+
+## 12. The two features are in the library (2026-11-16)
+
+- **`karez_pg::scan_partitioned(&Config, &Scan, init, on_chunk)`** (`crates/karez-pg/src/scan.rs`): splits an ordinary table into
+  ranges of heap blocks (`ctid >= '(a,0)' AND ctid < '(b,0)'`, bound as parameters, PostgreSQL 14+), reads each range on its own
+  connection and thread, and by default makes all of them read one snapshot (`pg_export_snapshot`, `SET TRANSACTION SNAPSHOT`).
+  Per-partition state, chunks delivered to a callback, first error stops the others. Default partitions: the client's CPUs, at
+  most 8. A table with no heap blocks is read on one connection.
+- **`Connection::insert_batch(table, columns, rows)`** (`crates/karez-pg/src/batch.rs`): multi-row `INSERT ... VALUES`, up to 1,000
+  rows and 65,535 parameters per statement, atomic (own transaction when none is open).
+- **Invariant kept:** user data is bound server-side. Identifiers are quoted. The one string put into SQL text is the
+  server-generated snapshot id (`SET TRANSACTION SNAPSHOT` takes only a literal), checked to be hex digits and dashes.
+- **Tests:** 7 unit tests (block ranges cover the table exactly once, snapshot-id check, identifier quoting, statement text,
+  parameter limit) and 4 real-server tests (`insert_batch` atomicity and rollback, every row read once for k in 1, 2, 3, 5, 8 with
+  and without snapshot, a snapshot that holds while another connection inserts and deletes, empty table, missing table and
+  column, callback error, usage errors). They pass on PostgreSQL 14, 16 and 17; the whole `karez-pg` suite (46 integration tests)
+  passes on 16; `cargo fmt` and `cargo clippy` are clean. The MSRV (1.85) toolchain was not installed in WSL, so it was **not**
+  rechecked for the new code.
+- **Through the bench adapter** (`KAREZ_API=1`, WSL, 12 shared CPUs, `[measured here, WSL]`, noisy: the same configuration varied
+  by up to 40% between runs): the checksums of S4 and S8 are identical to the single-connection scan for every k. S4 k=8: 0.26 to
+  0.39 s; S8 k=4 / 8 / 12: 9.1 / 5.4 / 5.2 s against 13.3 s on one connection. The shared snapshot showed no consistent cost
+  (S4 k=8: 0.31 to 0.34 s with it, 0.36 to 0.39 s without, in one back-to-back pair).
+- **Open:** (1) S8 with k=2 is no faster than one connection (12.3 to 15.8 s), also with ctid ranges, so my earlier planner
+  explanation (an index scan for a half-range) is **not** confirmed; the cause is unknown (possibly parallel query on the plain
+  scan, possibly WSL). The default of 8 or the client's CPU count avoids it. (2) Each call opens its connections; with SCRAM that
+  is a few milliseconds each, which is noticeable on small tables. A pool-taking variant is the obvious next step. (3) The
+  droplet numbers of sections 7 and 8 came from the prototype (id ranges); the API (ctid ranges) has not been run on a droplet.
