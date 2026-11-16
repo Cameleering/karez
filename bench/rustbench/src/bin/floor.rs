@@ -53,6 +53,7 @@ fn main() {
     let url = a.get(1).expect("url");
     let n: usize = a.get(2).and_then(|v| v.parse().ok()).unwrap_or(100_000);
     let hostport = url.split('@').nth(1).unwrap().split('/').next().unwrap();
+    let user = url.split("://").nth(1).unwrap().split('@').next().unwrap().split(':').next().unwrap().to_string();
     let cases: [(&str, &str, bool); 2] = [
         ("S1 SELECT 1", "SELECT 1", false),
         ("S2 point select, 10 columns", "SELECT id, k1, k2, flag, score, name, note, ref, tag, big FROM bench_item WHERE id = $1", true),
@@ -63,7 +64,7 @@ fn main() {
         s.set_nodelay(true).unwrap();
         let mut start = Vec::new();
         start.extend_from_slice(&196608u32.to_be_bytes());
-        start.extend_from_slice(b"user\0bench\0database\0bench\0\0");
+        start.extend_from_slice(format!("user\0{user}\0database\0bench\0\0").as_bytes());
         let mut startup = (start.len() as u32 + 4).to_be_bytes().to_vec();
         startup.extend_from_slice(&start);
         s.write_all(&startup).unwrap();

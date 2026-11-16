@@ -244,9 +244,10 @@
   "pool": false,
   "family": "rust",
   "bulk": [
-   "s4"
+   "s4",
+   "s8"
   ],
-  "notes": "S4 partitioned over KAREZ_PARTS connections (prototype, no shared snapshot)"
+  "notes": "S4 and S8 partitioned over KAREZ_PARTS connections; KAREZ_SNAPSHOT=1 shares one snapshot (prototype)"
  },
  "karez-blocking-mrow": {
   "cmd": [

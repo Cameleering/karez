@@ -36,12 +36,6 @@ fn scan_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
     scan_chunks_sql(conn, S4_SQL, &[])
 }
 
-/// The same scan restricted to `id` in (lo, hi]: one partition of a partitioned scan.
-fn scan_chunks_range(conn: &mut Connection, lo: i64, hi: i64) -> Result<(u64, u64), String> {
-    let sql = "SELECT id, a, b, c, d, e, s1, s2, flag, f FROM bench_wide WHERE id > $1 AND id <= $2";
-    scan_chunks_sql(conn, sql, &[Value::i64(lo), Value::i64(hi)])
-}
-
 fn scan_chunks_sql(conn: &mut Connection, sql: &str, params: &[Value<'_>]) -> Result<(u64, u64), String> {
     let mut cur = conn.query(sql, params).map_err(|e| e.to_string())?;
     let (mut rows, mut sum) = (0u64, 0u64);
@@ -96,7 +90,11 @@ fn scan_taxi_rows(conn: &mut Connection) -> Result<(u64, u64), String> {
 
 /// The chunk path on the real table: whole columns, NULLs through the validity bitmaps.
 fn scan_taxi_chunks(conn: &mut Connection) -> Result<(u64, u64), String> {
-    let mut cur = conn.query(crate::TAXI_SCAN_SQL, &[]).map_err(|e| e.to_string())?;
+    scan_taxi_chunks_sql(conn, crate::TAXI_SCAN_SQL, &[])
+}
+
+fn scan_taxi_chunks_sql(conn: &mut Connection, sql: &str, params: &[Value<'_>]) -> Result<(u64, u64), String> {
+    let mut cur = conn.query(sql, params).map_err(|e| e.to_string())?;
     let (mut rows, mut sum) = (0u64, 0u64);
     while let Some(ch) = cur.next_chunk().map_err(|e| e.to_string())? {
         let n = ch.rows();
@@ -306,34 +304,67 @@ pub fn run(cfg: &Cfg, chunk: bool) -> (String, Vec<Pass>) {
     (format!("karez-pg {}{}", env!("CARGO_PKG_VERSION"), if chunk { " (chunk path)" } else { " (row view)" }), passes)
 }
 
-/// Prototype of a partitioned scan (perf-program.md 3.1): `KAREZ_PARTS` connections (default 4), each scans one id range
-/// through the chunk path on its own thread; the checksums add up. No shared snapshot yet (the table is static here).
+/// Prototype of a partitioned scan (perf-program.md 3.1): `KAREZ_PARTS` connections (default 4), each scans one key range
+/// through the chunk path on its own thread; the checksums add up. S4 (`bench_wide.id`) and S8 (`taxi_trips.trip_id`).
+/// `KAREZ_SNAPSHOT=1`: all partitions read one snapshot (`pg_export_snapshot` / `SET TRANSACTION SNAPSHOT`), inside the timing.
 pub fn run_part(cfg: &Cfg) -> (String, Vec<Pass>) {
     let parts: i64 = std::env::var("KAREZ_PARTS").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
-    if cfg.scenario != Scenario::S4 {
-        die("karez-blocking-part: only S4 is implemented");
-    }
+    let snapshot = std::env::var("KAREZ_SNAPSHOT").map(|v| v == "1").unwrap_or(false);
+    let taxi = match cfg.scenario {
+        Scenario::S4 => false,
+        Scenario::S8 => true,
+        _ => die("karez-blocking-part: only S4 and S8 are implemented"),
+    };
+    let (key, table) = if taxi { ("trip_id", "taxi_trips") } else { ("id", "bench_wide") };
     let c = Config::from_url(&cfg.url).unwrap_or_else(|e| die(&format!("bad url: {e}")));
     let mut conns: Vec<Connection> =
         (0..parts).map(|_| Connection::connect(&c).unwrap_or_else(|e| die(&format!("connect: {e}")))).collect();
     let (min, max) = {
-        let mut cur = conns[0].query("SELECT min(id), max(id) FROM bench_wide", &[]).unwrap_or_else(|e| die(&e.to_string()));
+        let mut cur =
+            conns[0].query(&format!("SELECT min({key}), max({key}) FROM {table}"), &[]).unwrap_or_else(|e| die(&e.to_string()));
         let r = cur.next().unwrap_or_else(|e| die(&e.to_string())).unwrap_or_else(|| die("no row"));
         (r.get::<i64>(0).unwrap_or_else(|e| die(&e.to_string())), r.get::<i64>(1).unwrap_or_else(|e| die(&e.to_string())))
     };
     let span = max - min + 1;
-    let mut pass = |conns: &mut Vec<Connection>| -> Result<(u64, u64), String> {
+    let sql = if taxi {
+        format!("{} WHERE {key} > $1 AND {key} <= $2", crate::TAXI_SCAN_SQL)
+    } else {
+        format!("SELECT id, a, b, c, d, e, s1, s2, flag, f FROM bench_wide WHERE {key} > $1 AND {key} <= $2")
+    };
+    let pass = |conns: &mut Vec<Connection>| -> Result<(u64, u64), String> {
+        let e = |e: karez_pg::Error| e.to_string();
+        if snapshot {
+            conns[0].execute("BEGIN ISOLATION LEVEL REPEATABLE READ", &[]).map_err(e)?;
+            let snap = {
+                let mut cur = conns[0].query("SELECT pg_export_snapshot()", &[]).map_err(e)?;
+                let r = cur.next().map_err(e)?.ok_or("no snapshot row")?;
+                r.get::<&str>(0).map_err(|x| x.to_string())?.to_string()
+            };
+            for conn in conns.iter_mut().skip(1) {
+                conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ", &[]).map_err(e)?;
+                conn.execute(&format!("SET TRANSACTION SNAPSHOT '{snap}'"), &[]).map_err(e)?;
+            }
+        }
         let res: Vec<Result<(u64, u64), String>> = std::thread::scope(|sc| {
             let hs: Vec<_> = conns
                 .iter_mut()
                 .enumerate()
                 .map(|(i, conn)| {
                     let (lo, hi) = (min - 1 + span * i as i64 / parts, min - 1 + span * (i as i64 + 1) / parts);
-                    sc.spawn(move || scan_chunks_range(conn, lo, hi))
+                    let sql = &sql;
+                    sc.spawn(move || {
+                        let p = [Value::i64(lo), Value::i64(hi)];
+                        if taxi { scan_taxi_chunks_sql(conn, sql, &p) } else { scan_chunks_sql(conn, sql, &p) }
+                    })
                 })
                 .collect();
             hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("thread panicked".into()))).collect()
         });
+        if snapshot {
+            for conn in conns.iter_mut() {
+                conn.execute("COMMIT", &[]).map_err(e)?;
+            }
+        }
         let (mut rows, mut sum) = (0u64, 0u64);
         for r in res {
             let (a, b) = r?;
@@ -347,5 +378,5 @@ pub fn run_part(cfg: &Cfg) -> (String, Vec<Pass>) {
     for _ in 0..cfg.repeats {
         passes.push(timed(|| pass(&mut conns)));
     }
-    (format!("karez-pg {} (chunk path, {parts} partitions)", env!("CARGO_PKG_VERSION")), passes)
+    (format!("karez-pg {} (chunk path, {parts} partitions{})", env!("CARGO_PKG_VERSION"), if snapshot { ", shared snapshot" } else { "" }), passes)
 }

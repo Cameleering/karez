@@ -29,6 +29,10 @@ OUT="$ROOT/bench/results/$(date -u +%F)-$CAMPAIGN"
 KEY="$STATE/karez-bench-key"
 DO_TOKEN_FILE="${DO_TOKEN_FILE:-C:\\Users\\SudheeshPM\\Documents\\do.config.txt}"
 export DO_TOKEN_FILE
+# LANES="1" runs one lane only (two droplets: karez-bench-l1-db and karez-bench-l1-cl); default is all three
+LANES="${LANES:-1 2 3}"
+DO_NAMES=""; for _l in $LANES; do DO_NAMES="$DO_NAMES karez-bench-l$_l-db karez-bench-l$_l-cl"; done
+export DO_NAMES="${DO_NAMES# }"
 mkdir -p "$STATE"
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile="$STATE/known_hosts" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30)
 
@@ -66,7 +70,7 @@ case "${1:-status}" in
       for _ in $(seq 60); do rssh "$name" true 2>/dev/null </dev/null && break; sleep 5; done
     done 3< "$STATE/droplets.txt"
     # private IPs of the db hosts go to every node
-    for l in 1 2 3; do echo "$(ip_of karez-bench-l$l-db private)"; done > "$STATE/db-private-ips.txt"
+    for l in $LANES; do echo "$(ip_of karez-bench-l$l-db private)"; done > "$STATE/db-private-ips.txt"
     mkdir -p "$STATE/logs"
     pids=()
     while read -r name pub priv status _ <&3; do
@@ -91,7 +95,7 @@ case "${1:-status}" in
       rscp "$tarball" "root@$pub:/root/karez-tree.tar.gz" >/dev/null &&
       rssh "$name" "tar xzf /root/karez-tree.tar.gz -C /root/karez && find /root/karez/bench -type f \( -name '*.sh' -o -name '*.env' -o -name '*.py' -o -name '*.json' \) -exec sed -i 's/\r\$//' {} +" || echo "ship to $name failed" >&2
     done 3< "$STATE/droplets.txt"
-    for l in 1 2 3; do
+    for l in $LANES; do
       ( rssh "karez-bench-l$l-cl" "bash /root/karez/bench/cloud/build-adapters.sh" > "$STATE/logs/build-l$l.log" 2>&1 || echo "build on lane $l failed (see logs/build-l$l.log)" >&2 ) &
     done
     wait
@@ -99,7 +103,7 @@ case "${1:-status}" in
     ;;
   link)
     # copy the client's trust root (the db's throwaway CA) to its client
-    for l in 1 2 3; do
+    for l in $LANES; do
       rscp "root@$(ip_of karez-bench-l$l-db):/root/ca.crt" "$STATE/ca-l$l.crt" >/dev/null &&
       rscp "$STATE/ca-l$l.crt" "root@$(ip_of karez-bench-l$l-cl):/root/ca.crt" >/dev/null
       rssh "karez-bench-l$l-db" "cat /root/taxi_rows" | rssh "karez-bench-l$l-cl" "cat > /root/taxi_rows"
@@ -117,13 +121,13 @@ case "${1:-status}" in
       f="$STATE/taxi/yellow_$m.parquet"
       [ -s "$f" ] || curl -sSL -o "$f" "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_$m.parquet"
     done
-    for l in 1 2 3; do
+    for l in $LANES; do
       rssh "karez-bench-l$l-db" "mkdir -p /tmp/taxi" && rscp "$STATE"/taxi/yellow_*.parquet "root@$(ip_of karez-bench-l$l-db):/tmp/taxi/" > /dev/null &&
         echo "lane $l: data staged"
     done
     ;;
   load-data)
-    for l in 1 2 3; do
+    for l in $LANES; do
       pw="$(rssh "karez-bench-l$l-db" "cat /root/bench-pw")"
       priv="$(ip_of karez-bench-l$l-db private)"
       ( rssh "karez-bench-l$l-db" "bash /root/karez/bench/cloud/load-data.sh $pw $priv" > "$STATE/logs/load-l$l.log" 2>&1 && echo "lane $l: data loaded" || echo "lane $l: load FAILED (logs/load-l$l.log)" ) &
@@ -134,14 +138,14 @@ case "${1:-status}" in
     bash "$CLOUD/droplets.sh" status 2>&1
     bash "$CLOUD/safety-net.sh" status 2>&1 | tail -4
     if [ -f "$STATE/droplets.txt" ]; then
-      for l in 1 2 3; do
+      for l in $LANES; do
         echo "lane $l:"; rssh "karez-bench-l$l-cl" "systemctl is-active karez-campaign 2>&1; ls /root/out 2>/dev/null | tail -3; tail -n 2 /root/campaign.log 2>/dev/null" 2>&1 | sed 's/^/  /'
       done
     fi
     ;;
   run)
     round="${2:?round}"; profile="${3:?profile (full|repeat|quick|smoke)}"
-    for l in 1 2 3; do
+    for l in $LANES; do
       g=$(( (l - 1 + round - 1) % 3 ))      # lane l runs group (l + round) mod 3
       clients="$KAREZ,${GROUPS_[$g]}"
       dbp="$(ip_of karez-bench-l$l-db private)"
@@ -156,7 +160,7 @@ case "${1:-status}" in
     ;;
   pull)
     mkdir -p "$OUT"
-    for l in 1 2 3; do
+    for l in $LANES; do
       n="karez-bench-l$l-cl"
       [ -n "$(ip_of $n)" ] || continue
       mkdir -p "$OUT/lane$l"
