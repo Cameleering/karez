@@ -401,11 +401,35 @@ database size, which the owner knows better than the benchmark does. To close th
 **What this shows.** The API reproduces the prototype: S4 and S8 stop improving at k=4 because the 1.9 Gbit/s link is full (S8 9.6 s
 is 2.3 GB at 1.9 Gbit/s), and a shared snapshot costs nothing measurable (S8 k=8: 9.65 s with it, 9.60 s without). The partitioned
 scan is 1.12x (S4) and 1.23x (S8) over the best single-connection client on this network class. `insert_batch` is 1.75x karez's own per-row path and
-level with sqlx. k=2 on S8 is again no better than one connection (11.98 s against 12.0 s for tokio-postgres): it reproduces on
-a third pair and in WSL, so it is real and unexplained (my planner hypothesis was wrong); the default `k` avoids it.
+level with sqlx. k=2 on S8 is again no better than one connection (11.98 s against 12.0 s for tokio-postgres): it was seen on a third pair and in WSL; section 14 investigates it and finds no systematic problem.
 
 **State against the criteria of section 5**, unchanged by this run: OLTP level, latency at the floor, client CPU about half on
 one connection (S8: karez 7.0 to 7.7 CPU-s, tokio-postgres 14.0 to 14.7, pgx 18.7 to 19.3; the partitioned scan uses 11 to 18 CPU-s because
 more connections do more work in total), bulk reads 1.1x to 1.25x on this network and 2.4x to 3.4x with no network limit, bulk
 inserts level with sqlx. The deciding measurement is still a network faster than 1.9 Gbit/s, which needs the DigitalOcean tier
 raised (section 9, option 1).
+
+## 14. The k=2 question (2026-11-16)
+
+Question: why did two partitions give no gain over one connection on S8 in some runs? The checks, in the order done:
+
+1. **Plans (PostgreSQL 18, WSL).** The plain scan is a `Seq Scan`; each half by `ctid` is a `Tid Range Scan` (cost about half of the
+   whole), with the TID condition applied. No index scan, so the first hypothesis (a half-range turning into an index scan) is
+   **wrong**. `max_parallel_workers_per_gather` is 2, but neither query uses a parallel plan: `parallel_tuple_cost` (0.1) keeps a
+   `SELECT` of 13M rows serial. So one connection is one backend, and the second hypothesis (the plain scan is already parallel) is
+   also **wrong**.
+2. **The cache state decides the WSL numbers.** The same plain scan took 24.3 s cold and 6.5 s warm in `EXPLAIN ANALYZE` (the table is
+   1.8 GB, `shared_buffers` 512 MB, WSL has 5.9 GB of RAM): every earlier WSL run that moved by tens of percent between repeats was
+   mixing cold and warm pages.
+3. **A controlled probe** (`bench/rustbench/src/bin/partprobe.rs`; warmed cache; whole table, each half alone, both halves at once, quarters;
+   three rounds; `[measured here, WSL]`): whole table on one connection 15.8 to 16.0 s; each half alone 7.9 to 9.6 s; **both halves on
+   two connections 10.1 to 11.1 s (1.5x to 1.6x)**; quarters on four connections 5.6 to 6.2 s (2.6x to 2.9x). Scaling from one to two to
+   four connections is close to proportional; the second connection costs about 10% over the ideal.
+4. **On droplets the wall explains the rest.** One connection already moves 2.3 GB in about 12 s = 1.5 Gbit/s, and the link carries
+   1.9 Gbit/s (9.65 s for 2.3 GB). The most two connections can gain there is 12 / 9.65 = 1.24x. The k=2 results on droplets were:
+   9.89 s (second pair, prototype), 11.3 s (first pair, prototype) and 11.98 s (third pair, API), against single connections of
+   12 to 14 s: gains from 1.0x to 1.4x, around the possible 1.24x and inside the run-to-run spread (about 15%).
+
+**Conclusion: there is no k=2 defect.** The "anomaly" was cold-cache noise in WSL and a ceiling of 1.24x on the droplets. I withdraw
+the claim that it is real and unexplained. It is still sensible that the default partition count is the client's CPU count capped
+at 8: on the 1.9 Gbit/s link a second connection adds little, and from four on the link is full.
