@@ -1,0 +1,13 @@
+# 1 stream, 10 s
+[  5]   0.00-10.00  sec  2.21 GBytes  1.90 Gbits/sec  29196             sender
+[  5]   0.00-10.00  sec  2.21 GBytes  1.90 Gbits/sec                  receiver
+
+iperf Done.
+# 4 streams, 10 s
+[SUM]   0.00-10.00  sec  2.16 GBytes  1.85 Gbits/sec  48001             sender
+[SUM]   0.00-10.00  sec  2.16 GBytes  1.85 Gbits/sec                  receiver
+
+iperf Done.
+# rtt
+20 packets transmitted, 20 received, 0% packet loss, time 19446ms
+rtt min/avg/max/mdev = 0.389/0.597/1.313/0.185 ms

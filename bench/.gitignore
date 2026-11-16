@@ -7,3 +7,4 @@ __pycache__/
 results/*
 !results/2026-11-14-lean
 results/**/cells.jsonl
+!results/2026-11-16-perf1

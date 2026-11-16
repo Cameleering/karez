@@ -166,3 +166,87 @@ variant. Data: the 1M-row, 10-column `bench_wide` table; `bench_ins` for S5.
 - Partitioned S8 on the real taxi table (primary-key ranges on `trip_id`), checksum against the single scan.
 - Move the partitioned scan and the multi-row insert from the benchmark into `karez-pg` as API, with tests.
 - `UNNEST` insert once karez-pg has array parameters.
+
+## 7. Results on a droplet pair (2026-11-16, one lane, 24 minutes)
+
+`[measured here]` on DigitalOcean `c-4` in `blr1` (4 vCPU, 8 GB, Intel Xeon Platinum 8280), PostgreSQL 18.7 with huge
+pages, private network, one database droplet and one client droplet. Raw data: `bench/results/2026-11-16-perf1/` (gzipped
+cells). One lane, one run per variant, median of 5 timed passes (S8: 3), the same checksum for every variant of a
+scenario. **Indicative, not a ranking**: n=1 and one lane. The droplets were deleted at 02:30Z (24 minutes, about $0.10).
+
+**The network is the limit for bulk reads on this machine class.** `iperf3` between the two droplets: 1.90 Gbit/s with one
+stream and 1.85 Gbit/s with four (about 237 MB/s), round trip 0.6 ms average (ping). The S4 result is 127 MB on the wire,
+so no client can finish S4 in less than about 0.54 s here.
+
+| scenario | variant | seconds | rows/s | client CPU s | database CPU busy |
+|---|---|---:|---:|---:|---:|
+| S4 (1M rows, 10 columns, 127 MB) | karez row view | 1.031 | 970k | 0.35 | 0.24 |
+| | karez chunk path | 0.781 | 1.28M | 0.36 | 0.24 |
+| | sqlx | 0.756 | 1.32M | 0.81 | 0.21 |
+| | pgx | 0.788 | 1.27M | 0.72 | 0.24 |
+| | tokio-postgres | 0.814 | 1.23M | 0.66 | 0.24 |
+| | libpq | 0.929 | 1.08M | 0.54 | 0.21 |
+| | karez partitioned, k=2 | 0.727 | 1.38M | 0.53 | 0.46 |
+| | karez partitioned, k=4 | **0.574** | 1.74M | 0.73 | 0.71 |
+| | karez partitioned, k=8 | 0.581 | 1.72M | 0.63 | 0.88 |
+| | karez partitioned, k=16 | 0.796 | 1.26M | 0.59 | 0.92 |
+| | k=4 and k=8 with one shared snapshot | 0.560 and 0.602 | | | |
+| S8 (13M rows, 17 columns, NULLs) | karez chunk path, one connection | 16.85 | 776k | 6.4 | 0.27 |
+| | pgx | **13.85** | 943k | 15.5 | 0.25 |
+| | tokio-postgres | 17.24 | 758k | 12.0 | 0.26 |
+| | libpq | 26.4 | 494k | 16.2 | 0.19 (6.5 GB RSS) |
+| | karez partitioned, k=2 / 4 / 8 / 16 | 11.3 / 10.1 / 9.7 / 9.6 | 1.15M / 1.29M / 1.35M / 1.36M | 7.5 / 12.6 / 14.2 / 14.8 | 0.46 / 0.73 / 0.81 / 0.82 |
+| | k=4 and k=8 with one shared snapshot | 9.97 and 9.63 | | | |
+| S5 (100k inserts) | karez per-row `execute_many` | 0.817 | 122k | 0.12 | 0.21 |
+| | karez multi-row, 500 / 1000 / 3000 per statement | 0.504 / 0.449 / 0.445 | 198k / 223k / 225k | 0.07 to 0.10 | 0.17 to 0.19 |
+| | sqlx (multi-row) | 0.480 | 208k | 0.11 | 0.16 |
+| | asyncpg, libpq, pgx, tokio-postgres | 0.70, 0.75, 1.04, 1.71 | 143k, 133k, 97k, 59k | | |
+
+Latency floor (one connection, 100k requests, 3 runs, trust role): karez-blocking p50 over the raw floor was
+0.88, 0.93, 0.91 for S1 and 1.03, 0.92, 1.07 for S2. **At the floor.** COPY binary: 0.89 to 1.14 s against 0.85 to 1.06 s
+for row messages, client CPU half (0.16 s against 0.35 s): no wall-clock gain.
+
+### Reading the results against the criteria of section 5
+
+| criterion | result on this machine | verdict |
+|---|---|---|
+| S4 and S8 at least 2x the best competitor | S4: partitioned 0.574 s against sqlx 0.756 s = **1.32x**; chunk path on one connection 0.97x of sqlx. S8: partitioned 9.6 s against pgx 13.85 s = **1.43x**; karez on one connection is **22% slower than pgx**. | **not met**, and the network (1.9 Gbit/s) is near the wall: S4 k=4 already moves 127 MB in 0.57 s = 1.77 Gbit/s |
+| S5 at least 1.3x the best `INSERT` path | multi-row 223k against sqlx 208k = **1.07x**; 1.82x our own per-row path | **not met** (level with sqlx) |
+| S2 at one connection within 5% of the floor | 0.88 to 1.07 | **met** |
+| OLTP at 64 connections level | campaign 1: level with the best, server-bound | **met** |
+| client CPU per request 10% lower than the best Rust client | S1 at 64 connections: karez 23.5 against tokio-postgres 27.4 (campaign 1) = 14% lower; bulk S8 single connection: 6.4 CPU-s against 12.0 (tokio-postgres) | **met** |
+
+**The plan's stop rule (section 1.3: S4 under 2x the best Rust row API, or OLTP more than 10% behind) is triggered for
+S4 on this hardware.** I do not draw the final conclusion from it because: (1) it is one lane and n=1 per competitor;
+(2) the network class caps the result, and a competitor could not exceed 0.54 s either. The WSL run, where there is no
+network limit, reached 3.3x at k=8 against one connection. The question the data leaves open is whether the 2x gate is
+physically reachable on any hardware the owner cares about, or only on a faster network than DigitalOcean's `c-4`. **That
+needs one measurement on a larger droplet class (a faster network), about $0.50, and it decides whether the bulk path
+claim stands.** The network limit of larger classes is `[unverified]` here; measure it with iperf3 first.
+
+### Things found that cost nothing to fix and should be fixed regardless
+
+1. **Single-connection S8: karez is 22% behind pgx (16.85 s against 13.85 s)** with the server about 100% busy on one
+   backend in both. karez reads and decodes in one thread, so the server stalls while karez decodes; pgx overlaps. A reader
+   thread with a small ring of buffers (std only) should bring karez to pgx's level or past it. This is the most solid
+   gain in this list; expected 1.2x on S8, to be proven.
+2. **The row view is 32% slower than the chunk path on S4 (1.031 s against 0.781 s)**; the plan's rule is within 15%. The
+   row path decodes field by field through `get`. Find the cost with `perf` and reduce it.
+3. **Partitioning gets worse beyond the point where the server is saturated** (S4 k=16: 0.80 s, database 92% busy): the
+   API should pick k from a measured probe or a default of about the database core count, not a fixed large number.
+4. **A partitioned scan with a `WHERE` range is slower per row than the plain scan** (`part1` 1.01 s against 0.78 s on S4):
+   range predicates on a sequential scan cost the server per-row work. Prefer `ctid` ranges or a table sample; test.
+5. **The multi-row insert is a library feature, not a benchmark trick**: 1.8x our own `execute_many`. It only equals sqlx.
+   The remaining gain is `COPY` (S6) for loads and `UNNEST` with array parameters.
+
+### Decision needed from the owner
+
+The honest state: **OLTP parity is reached, client CPU is clearly lower, and the bulk-read margin the plan needs (2x) is
+not reached on DigitalOcean `c-4` hardware.** Options, in the order I would take them:
+
+1. Fix items 1 and 2 above (cheap, local, testable in WSL for correctness), then measure again on a **larger droplet class**
+   with iperf3 first, one lane, about $0.50. This decides whether the 2x gate is reachable at all.
+2. If it is not reached there either, follow the plan's stop rule: option C (thin standards-shaped API over existing drivers),
+   keeping what was learned (the benchmark harness, the multi-row and partitioned-scan ideas) as contributions.
+3. Do not widen the claim from "lower client CPU, level OLTP, and a partitioned scan that is 1.3x to 1.4x faster here" until
+   a measurement says more.
