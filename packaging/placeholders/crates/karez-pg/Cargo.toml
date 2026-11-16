@@ -1,0 +1,10 @@
+[package]
+name = "karez-pg"
+version = "0.0.1"
+edition = "2021"
+description = "Placeholder reserving the name: the blocking PostgreSQL client crate of karez, a planned Rust database connectivity library. No code yet."
+license = "Apache-2.0"
+readme = "README.md"
+publish = true
+
+[workspace]

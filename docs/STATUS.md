@@ -45,7 +45,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - **Replay:** only commands never written to a dead connection move to a new one; a written command is never resent automatically.
 - **Slow streams:** a stream leases its connection; other commands wait in a bounded queue. No automatic second connection.
 - **Audit:** plan and fund an external audit before 1.0 of the core, the protocol crates and the ODBC FFI crate; not of `cameleer-tls` for now. (The owner funds it; nothing was spent.)
-- **Names:** reserve `karez` and `karez-*` on crates.io, PyPI and npm now, as minimal placeholders. The owner does this; I do not create accounts or publish.
+- **Names:** reserve `karez` and `karez-*` on crates.io, PyPI and npm now, as minimal placeholders. **crates.io done 2026-11-16** (`karez`, `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, version 0.0.1, no code; the owner told me to publish them with the existing cargo login). **npm and PyPI not done**: there is no login on this machine (`npm whoami` fails, no PyPI token); the packages are built and checked in `packaging/placeholders/`, and need the owner to log in. Planned names beyond these five (`karez-odbc`, `karez-adbc`, `karez-jdbc`, ...) are not reserved: crates.io forbids squatting, so reserve each when it has code.
 - **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
 
 ## Next steps
