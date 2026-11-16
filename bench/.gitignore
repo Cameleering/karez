@@ -10,3 +10,4 @@ results/**/cells.jsonl
 !results/2026-11-16-perf1
 !results/2026-11-16-perf3
 !results/2026-11-16-wsl-nonet
+!results/2026-11-16-perf4

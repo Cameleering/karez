@@ -383,3 +383,29 @@ database size, which the owner knows better than the benchmark does. To close th
   scan, possibly WSL). The default of 8 or the client's CPU count avoids it. (2) Each call opens its connections; with SCRAM that
   is a few milliseconds each, which is noticeable on small tables. A pool-taking variant is the obvious next step. (3) The
   droplet numbers of sections 7 and 8 came from the prototype (id ranges); the API (ctid ranges) has not been run on a droplet.
+
+## 13. The library API on a droplet pair (2026-11-16, 23 minutes, about $0.10)
+
+`[measured here]`, DigitalOcean `c-4` pair in `blr1` (a third pair), PostgreSQL 18.7, one lane, indicative. Raw data:
+`bench/results/2026-11-16-perf4/`. This run used the library's `scan_partitioned` (ctid ranges, shared snapshot) and
+`insert_batch`, not the prototype. Every S4 and S8 result has the same checksum as the single-connection scan. iperf3: 1.90 Gbit/s
+(one stream), 1.85 (four), round trip 0.56 ms: the same network as before.
+
+| scenario | single connection (two interleaved rounds) | `scan_partitioned` | best ratio |
+|---|---|---|---|
+| S4, 1M rows | karez chunk 0.588 / 0.616 s; tokio-postgres 0.595 / 0.608; pgx 0.648 / 0.684; sqlx 0.841 / 0.876 | k=2: 0.535 s; k=4: 0.541; k=8: 0.530 (no snapshot: 0.554); k=16: 0.548 | **1.12x** over tokio-postgres |
+| S8, 13M rows | tokio-postgres 12.04 / 11.79 s; karez chunk 13.96 / 12.03; pgx 16.48 / 17.06 | k=2: 11.98 s; k=4: 9.61; k=8: 9.65 and 9.69 (no snapshot: 9.60); k=16: 9.74 | **1.23x** over tokio-postgres |
+| S5, 100k inserts | karez per-row 0.744 / 0.753 s (133k to 134k rows/s); sqlx 0.449 / 0.472 (212k to 223k) | `insert_batch`: 0.438 / 0.426 s (228k to 235k) | **1.75x** over karez per-row; **1.05x to 1.08x** over sqlx |
+| latency floor | karez/floor p50: S1 0.97, 1.02, 1.03; S2 1.02, 1.04, 1.05 | | at the floor |
+
+**What this shows.** The API reproduces the prototype: S4 and S8 stop improving at k=4 because the 1.9 Gbit/s link is full (S8 9.6 s
+is 2.3 GB at 1.9 Gbit/s), and a shared snapshot costs nothing measurable (S8 k=8: 9.65 s with it, 9.60 s without). The partitioned
+scan is 1.12x (S4) and 1.23x (S8) over the best single-connection client on this network class. `insert_batch` is 1.75x karez's own per-row path and
+level with sqlx. k=2 on S8 is again no better than one connection (11.98 s against 12.0 s for tokio-postgres): it reproduces on
+a third pair and in WSL, so it is real and unexplained (my planner hypothesis was wrong); the default `k` avoids it.
+
+**State against the criteria of section 5**, unchanged by this run: OLTP level, latency at the floor, client CPU about half on
+one connection (S8: karez 7.0 to 7.7 CPU-s, tokio-postgres 14.0 to 14.7, pgx 18.7 to 19.3; the partitioned scan uses 11 to 18 CPU-s because
+more connections do more work in total), bulk reads 1.1x to 1.25x on this network and 2.4x to 3.4x with no network limit, bulk
+inserts level with sqlx. The deciding measurement is still a network faster than 1.9 Gbit/s, which needs the DigitalOcean tier
+raised (section 9, option 1).
