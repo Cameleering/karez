@@ -1,0 +1,15 @@
+host: karez-bench-l3-cl  kernel: 6.8.0-147-generic  cpus: 4  mem_mb: 7941
+cpu:  Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+go version go1.27.4 linux/amd64
+openjdk version "21.0.13.0.3" 2026-10-24
+[1mApache Maven 3.8.7[m
+Python 3.12.3
+asyncpg           0.32.0
+psycopg           3.3.9
+psycopg-binary    3.3.9
+psycopg-pool      3.3.3
+uvloop            0.23.0
+psql (PostgreSQL) 18.7 (Ubuntu 18.7-1.pgdg24.04+2)
+pgbench (PostgreSQL) 18.7 (Ubuntu 18.7-1.pgdg24.04+2)

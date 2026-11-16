@@ -4,7 +4,7 @@ The harness that measures karez against the PostgreSQL clients listed in
 [plan.md section 6.3](../docs/design/plan.md). It follows the plan's method (section 6) and the
 campaign design of the simoom project ([bench/cloud](cloud) is adapted from simoom's scripts).
 
-**Status (2026-11-14): built and tested in WSL; one reduced campaign has run on DigitalOcean** (the section "Campaign log" at the end says what it covers and what it does not). The numbers
+**Status (2026-11-16): built and tested in WSL; a reduced campaign (2026-11-14) and a two-round campaign (2026-11-16) have run on DigitalOcean** (the section "Campaign log" at the end says what it covers and what it does not). The numbers
 anyone may quote come from the campaign on DigitalOcean, not from WSL. The WSL runs only prove that
 every adapter works. They share one CPU between the client and the database and say nothing about
 speed.
@@ -240,3 +240,22 @@ small margin. These are single-lane figures and not a ranking; no speed claim fo
 
 
 The raw cells are stored gzipped (`cells.jsonl.gz`); gunzip them next to the file to rerun `python bench/report.py bench/results/2026-11-14-lean`.
+
+
+### 2026-11-16, campaign 2
+
+Results: `bench/results/2026-11-16-campaign2/` (gzipped raw cells, `REPORT.md`, campaign logs). Setup as in campaign 1 (three lanes of two
+`c-4` droplets, `blr1`, PostgreSQL 18.7 with huge pages on) plus the harness fixes of 2026-11-16. A smoke round (07:40Z) and then two
+rounds of the profile `lean2` (08:14Z to 16:15Z), 14 clients with the karez variants in every lane and the other clients rotated across
+lanes. Six droplets lived about 8.6 hours and were deleted by `campaign.sh` (the safety net was disarmed). `[measured here, 2026-11-16]`.
+
+What it supports: the karez rows have n=6 and every other row n=2 (two lane-rounds), ratios are per lane and round and shown with their
+range, all bulk checksums match, no database restart, no lane aborted, no `MISMATCH`. The numbers and their reading are in
+[docs/design/perf-program.md](../docs/design/perf-program.md) section 17. In short: level with the best clients on point queries (about 1.2x
+tuned pgJDBC at 64 connections); level on single-connection bulk reads; the partitioned scan 1.3x (1M rows) and 1.5x (13M rows) the best
+other client on a 1.9 Gbit/s link; `insert_batch` ahead of every other client; the shared pipelined connection behind the blocking client.
+
+Limits: default pgjdbc ran out of memory on S8 in both rounds (it buffers the result; a result, not a harness fault); competitors have n=2,
+so the ranges are wide; the S8 rate of the partitioned scan is the same in all lanes, which points at the link, not proven here; the
+pgbench cross-check was not rerun on droplets; diesel, rusqlite and wtx are not in the client set; no TLS runs; one profile only.
+Rerun the report with `gunzip` of each `cells.jsonl.gz` and `python bench/report.py bench/results/2026-11-16-campaign2`.

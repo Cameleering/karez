@@ -464,5 +464,67 @@ at 8: on the 1.9 Gbit/s link a second connection adds little, and from four on t
 | MSRV, pool variant | done earlier today (section 15) |
 
 **Still open** (none blocks the rest): the faster two-machine network test (parked by the owner); the pgbench check and the pool-saving
-number on a droplet; diesel and rusqlite hello-world sizes; a full campaign 2 (needs the owner's go-ahead); crate-name reservation and the
+number on a droplet; diesel and rusqlite hello-world sizes; a full campaign 2 (**run later the same day, section 17**); crate-name reservation and the
 audit budget (owner decisions); pushing the branch (not done: nothing is pushed unless the owner asks).
+
+## 17. Campaign 2: three lanes, two rounds, 14 clients (2026-11-16)
+
+Raw data and `REPORT.md`: `bench/results/2026-11-16-campaign2/` (gzipped cells). Layout, method and what it does not cover are in
+[bench/README.md](../../bench/README.md) "Campaign log". Setup: three lanes of two DigitalOcean `c-4` droplets in `blr1` (one database,
+one client; PostgreSQL 18.7, huge pages on), a smoke round and then two rounds of the profile `lean2`, 07:40Z to 16:16Z, six droplets, deleted
+by the campaign script (safety net disarmed). The karez rows have n=6 (three lanes, two rounds); every other client has n=2 (clients were
+rotated across lanes). Ratios are computed only between rows of the same lane and round, and the figure is their median
+(`bench/report.py`). All checksums match, no `MISMATCH`, no database restart, no lane aborted. `[measured here, 2026-11-16]`.
+
+**Point queries (open loop, 64 connections, p99 bound 2 ms), ratio to `karez-blocking`:**
+
+| client | S1 (one tiny column) | S2 (10-column row) |
+|---|---:|---:|
+| tokio-postgres | 1.00 (0.92 to 1.08) | 0.97 |
+| libpq | 1.00 (0.92 to 1.08) | 0.88 |
+| pgx | 0.93 | 0.96 |
+| deadpool-postgres | 0.93 | 0.97 |
+| pgjdbc-tuned | 0.82 | 0.90 |
+| pgjdbc | 0.79 | 0.84 |
+| sqlx-tuned / sqlx | 0.55 / 0.36 | 0.69 / 0.46 |
+| asyncpg / psycopg3 | 0.20 / 0.06 | 0.23 / 0.08 |
+
+karez-blocking reached 94,560 requests per second on S1 and 59,170 on S2. It is **level with the best Rust and C clients** (every difference
+inside one search step) and **about 1.2x tuned pgJDBC** on S1 and 1.1x on S2. The plan's mark of 2x tuned pgJDBC is **not met** (the
+database host is the limit, as in section 5). At one connection (S2) the rates are 0.81 to 1.03 of karez-blocking: level. In the 80/20 mix R4
+karez is level with tokio-postgres (1.00); in R2 it is level (1.00).
+
+**The shared pipelined connection (`karez-shared`, `karez-rt`) is behind the blocking client** on unpipelined work: 0.92 of it on R1 at
+64 connections, 0.81 on S1, and it uses about twice the CPU per request (69 against 33 CPU-s per million requests on R1). With pipelining
+(R1, 8 connections) karez-shared reached 60,070 against 64,980 for tokio-postgres (n=2 pairs, 0.93 of it), 7% behind, inside the plan's
+10% stop rule and outside its 5% mark. This is consistent with the simoom note (second-hand, unchecked) that a pump thread only helps from two
+requests in flight. Nothing here tunes it yet.
+
+**Bulk reads, closed loop:**
+
+| scenario | other single-connection clients, as a ratio to `karez-blocking` | `scan_partitioned` (8 connections) vs `karez-blocking` | `scan_partitioned` vs best other client in its lane and round | vs tuned pgJDBC (from the medians) |
+|---|---|---|---|---|
+| S4, 1M rows | tokio-postgres 0.95, pgx 1.06, sqlx 1.00: level | 1.31x (1.17 to 1.68) | 1.09x to 1.61x, median 1.32x | about 1.7x; defaults about 3.1x |
+| S8, 13.07M rows (2.1 GB) | tokio-postgres 0.95, pgx 0.79, **sqlx 1.16 (1.05 to 1.26): sqlx is ahead of karez-blocking** | 1.44x (1.23 to 1.85) | 1.42x to 1.67x, median 1.49x | about 1.7x; default pgjdbc ran out of memory in both rounds |
+
+On S8 the partitioned scan reads 1.34 to 1.36 million rows per second in all six lane-rounds (median 9.67 s for the table, against 13.9 s for one
+connection), and the database host is 56 to 63% busy during it. A rate that does not move across lanes while the database is not
+saturated points at the link (iperf3 measured 1.90 Gbit/s on a pair of these droplets, section 8), not at the client. That reading is likely and
+not proven here (no iperf run in the campaign). The best other client in each lane-round varied (tokio-postgres, pgx or sqlx), so "best
+other" is a different client per row. asyncpg and psycopg3 take 115 to 131 s for S8 (0.10 to 0.11 of karez-blocking). CPU per million rows on
+S8: karez-blocking 0.70 CPU-s, tokio-postgres 1.08, sqlx 1.13, pgx 1.39, libpq 1.38; peak RSS 5 MB for karez-blocking and 7 MB for the
+partitioned scan, against 6.5 GB for libpq and 3.8 GB for tuned pgJDBC.
+
+**Inserts (S5, 100,000 rows):** `insert_batch` (`karez-blocking-mrow`) reached 251,080 rows per second, 1.82x karez's own per-row path (1.73 to
+1.87) and ahead of every other client in the same lane and round, by 1.07x to 2.4x; sqlx (242,545, 1.71x) is the closest. tokio-postgres row
+by row is 0.46 of karez-blocking. **COPY (S6, 3M rows):** karez-blocking, sqlx (0.96) and tokio-postgres (0.93) are level; pgx and pgjdbc-tuned
+are about 0.8.
+
+**What this changes in the gate (plan section 1.3):** nothing is cleared that was open, and one number moved. The S4 mark (2x the best Rust
+row API) is **still not met on a 1.9 Gbit/s link**: 1.3x on the 1M-row scan and 1.5x on the 13M-row scan, up from the earlier one-lane 1.1x to 1.3x
+(the earlier figures compared against one client on one lane and are replaced by these). It remains met only with no network limit
+(section 10). The OLTP marks stand as they were: parity with the best clients met, 2x tuned pgJDBC not met. The pending item is the same:
+a faster two-machine network (parked by the owner on 2026-11-16).
+
+**Not covered:** the pgbench cross-check on droplets; diesel, rusqlite and wtx (not in the client set); a third round (budget); confidence intervals
+(n=2 for competitors, so ranges are shown instead); the TLS path (all runs plain).

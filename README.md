@@ -36,23 +36,26 @@ BI tools and query engines can use the same core. It is designed to be **fast, s
 ## At a glance: first measurements (the full test is still pending)
 
 Measured on the PostgreSQL client in this repository, on 13 million rows of public NYC taxi data and a 1-million-row table. Every
-figure is `[measured here]`, from one lane per competitor (one database droplet and one client droplet, DigitalOcean `c-4`, 2026-11-14
-to 2026-11-16) or from a laptop; the sources and the losses are in [docs/design/perf-program.md](docs/design/perf-program.md).
+figure is `[measured here]`, from a two-round campaign on three pairs of DigitalOcean `c-4` droplets (2026-11-16; karez n=6, each competitor n=2,
+ratios between rows of the same lane and round) or from a laptop; the sources, the ranges and the losses are in
+[docs/design/perf-program.md](docs/design/perf-program.md) section 17.
 
 - **Up to 3.4x faster bulk reads** with the partitioned scan (`scan_partitioned`: one table read on several connections from one
   snapshot) than the best single-connection client, **when the network is not the limit** (13M rows, database and client on one machine,
   12 shared CPUs: 3.4x; 1M rows: 2.4x).
-- **On a real cloud link the gain is smaller: 1.1x to 1.3x** (1.23x to 1.28x on the 13M-row scan, 1.12x on the 1M-row scan), because the 1.9 Gbit/s
-  link between two DigitalOcean `c-4` droplets is full. A faster two-machine network is the deciding test and has **not been run yet**.
+- **On a real cloud link the gain is smaller: 1.5x on the 13M-row scan (1.42x to 1.67x) and 1.3x on the 1M-row scan (1.09x to 1.61x)** over the best
+  other client in the same lane and round, about 1.7x tuned pgJDBC. The scan reads the same 1.35 million rows per second in every lane, which points at
+  the 1.9 Gbit/s link between two DigitalOcean `c-4` droplets as the limit. A faster two-machine network is the deciding test and has **not been run yet**.
 - **About half the client CPU** of tokio-postgres on a large scan (6 to 7.7 CPU-seconds against 12 to 14 for 13M rows).
-- **Level with the best Rust clients on single-row queries**, which are limited by the database server, not by the client; one-connection
-  latency is within 7% of a raw-protocol floor.
-- **Inserts:** the multi-row `insert_batch` is 1.75x karez's own per-row path and level with sqlx.
+- **Level with the best Rust and C clients on single-row queries** (64 connections, 94,560 requests per second on the simplest query), about 1.2x
+  tuned pgJDBC; the database server is the limit, not the client. One-connection latency is within 7% of a raw-protocol floor. The shared pipelined
+  connection (`karez-rt`) is about 8% behind the blocking client and tokio-postgres on this work.
+- **Inserts:** the multi-row `insert_batch` is 1.8x karez's own per-row path and ahead of every other client measured (sqlx is the closest).
 - **Small:** a stripped blocking hello-world is 441 KiB with no third-party crates (tokio-postgres: 824 KiB and 68 crates; sqlx: 1,060 KiB
   and 147 crates).
 
-**Pending:** the faster-network test, a complete multi-round campaign against every competitor (round results will replace the
-one-lane figures above), and diesel and rusqlite comparisons. These are first measurements and will change. Where karez is level or behind,
+**Pending:** the faster-network test, a third round and confidence intervals (competitors have two runs each), and diesel, rusqlite and wtx
+comparisons. These are first measurements and will change. Where karez is level or behind,
 the tables say so.
 
 ## Why another database library
@@ -163,14 +166,14 @@ tx.commit()?;
 
 These are the pass marks for Milestone 0, the go or no-go spike, on PostgreSQL, with an open-loop benchmark on separate machines that
 reports pipelined and unpipelined numbers separately. The method is in [docs/design/plan.md](docs/design/plan.md#6-benchmark-method). The
-right-hand column is the state on 2026-11-16 from one lane per competitor; the full test is pending
+right-hand column is the state on 2026-11-16 from a two-round, three-lane campaign (karez n=6, competitors n=2); the full test is pending
 ([plan section 1.3](docs/design/plan.md#13-what-milestone-0-must-show-before-the-build-goes-ahead) has the details).
 
 | scenario | must show to continue | where it stands |
 |---|---|---|
-| Point query, unpipelined, 64 connections | within 5% of the fastest Rust client, and at least 2x tuned pgJDBC | **level** with the best Rust clients (the database host is the limit); about 1.2x pgJDBC, not 2x |
+| Point query, unpipelined, 64 connections | within 5% of the fastest Rust client, and at least 2x tuned pgJDBC | **level** with the best Rust and C clients (the database host is the limit); about 1.2x tuned pgJDBC, not 2x |
 | One connection, one request at a time | within 5% of the fastest Rust client | **met**: within 7% of a raw-protocol floor and level with the best clients |
-| Bulk scan into Arrow | at least 2x the best Rust row API, at least 3x tuned pgJDBC, at most one third of its memory | **not met on a 1.9 Gbit/s cloud link** (1.1x to 1.3x with the partitioned scan); **met with no network limit** (2.4x to 3.4x); faster-network test pending |
+| Bulk scan into Arrow | at least 2x the best Rust row API, at least 3x tuned pgJDBC, at most one third of its memory | **not met on a 1.9 Gbit/s cloud link** (1.3x to 1.5x the best other client with the partitioned scan, about 1.7x tuned pgJDBC); **met with no network limit** (2.4x to 3.4x); faster-network test pending |
 | Size | a stripped PostgreSQL hello-world of at most 600 KB, with zero direct dependencies | **met**: 441 KiB, zero third-party crates |
 
 On single-row queries the evidence supports parity with the best existing clients, not a large margin. The large margin is on the bulk
@@ -226,9 +229,10 @@ rest is research, the plan and the brand assets.
 is cited as prior work. rdbc has been dormant since 2021.
 
 **Is it faster than JDBC?** On first measurements, about 1.2x tuned pgJDBC on point queries at 64 connections (the target was 2x; the
-database server is the limit there) and about 1.7x pgJDBC with default settings on a 1-million-row scan; with the partitioned scan the
-bulk-read gain over the best single-connection Rust client is 1.1x to 1.3x on a 1.9 Gbit/s cloud link and up to 3.4x with no network
-limit. These are one-lane figures and the full test is pending. Existing Rust clients such as tokio-postgres already beat JDBC on point
+database server is the limit there) and, on a 1-million-row scan, about 1.3x tuned pgJDBC and 2.4x default pgJDBC on one connection; with the
+partitioned scan about 1.7x tuned pgJDBC, and 1.3x to 1.5x the best other Rust client, on a 1.9 Gbit/s cloud link, and up to 3.4x with no
+network limit. Default pgJDBC ran out of memory on the 13-million-row scan. These come from a two-round campaign (competitors n=2) and the
+full test is pending. Existing Rust clients such as tokio-postgres already beat JDBC on point
 queries, so the aim there is parity with the fastest Rust client; the larger gain is on bulk reads into Arrow.
 
 **Why not just use sqlx, tokio-postgres or diesel?** They are good libraries. karez targets a
