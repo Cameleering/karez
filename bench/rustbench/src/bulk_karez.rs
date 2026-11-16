@@ -163,53 +163,41 @@ fn scan_taxi_chunks_sql(conn: &mut Connection, sql: &str, params: &[Value<'_>]) 
 /// Set by the `karez-blocking-mrow` client: S5 with one multi-row `INSERT ... VALUES` per batch (perf-program.md 3.3).
 pub static MULTIROW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn insert_multirow(conn: &mut Connection, rows: i64, batch: i64) -> Result<(u64, u64), String> {
+fn insert_multirow(conn: &mut Connection, rows: i64, _batch: i64) -> Result<(u64, u64), String> {
+    // the library's `Connection::insert_batch` (1,000 rows per statement, atomic)
     let e = |e: karez_pg::Error| e.to_string();
     conn.execute("TRUNCATE bench_ins", &[]).map_err(e)?;
-    conn.execute("BEGIN", &[]).map_err(e)?;
+    let cols = ["id", "a", "b", "c", "d", "e", "s1", "s2", "flag", "f"];
     let mut i = 1;
-    let mut sql_cache: Option<(i64, String)> = None;
+    let mut inserted = 0u64;
     while i <= rows {
-        let end = (i + batch - 1).min(rows);
-        let n = end - i + 1;
+        let end = (i + 9_999).min(rows);
         let gens: Vec<GenRow> = (i..=end).map(gen_row).collect();
-        if sql_cache.as_ref().map(|(k, _)| *k) != Some(n) {
-            let mut sql = String::from("INSERT INTO bench_ins (id, a, b, c, d, e, s1, s2, flag, f) VALUES ");
-            for r in 0..n {
-                if r > 0 {
-                    sql.push(',');
-                }
-                sql.push('(');
-                for c in 1..=10 {
-                    if c > 1 {
-                        sql.push(',');
-                    }
-                    sql.push_str(&format!("${}", r * 10 + c));
-                }
-                sql.push(')');
-            }
-            sql_cache = Some((n, sql));
-        }
-        let mut vals: Vec<Value<'_>> = Vec::with_capacity(gens.len() * 10);
-        for r in &gens {
-            vals.extend([
-                Value::i64(r.id),
-                Value::i32(r.a),
-                Value::i32(r.b),
-                Value::i64(r.c),
-                Value::f64(r.d),
-                Value::f64(r.e),
-                Value::text(&r.s1),
-                Value::text(&r.s2),
-                Value::bool(r.flag),
-                Value::i16(r.f),
-            ]);
-        }
-        conn.execute(&sql_cache.as_ref().unwrap().1, &vals).map_err(e)?;
+        let vals: Vec<[Value<'_>; 10]> = gens
+            .iter()
+            .map(|r| {
+                [
+                    Value::i64(r.id),
+                    Value::i32(r.a),
+                    Value::i32(r.b),
+                    Value::i64(r.c),
+                    Value::f64(r.d),
+                    Value::f64(r.e),
+                    Value::text(&r.s1),
+                    Value::text(&r.s2),
+                    Value::bool(r.flag),
+                    Value::i16(r.f),
+                ]
+            })
+            .collect();
+        let refs: Vec<&[Value<'_>]> = vals.iter().map(|v| &v[..]).collect();
+        inserted += conn.insert_batch("bench_ins", &cols, &refs).map_err(e)?;
         i = end + 1;
     }
-    conn.execute("COMMIT", &[]).map_err(e)?;
     let n = count(conn)?;
+    if n != inserted {
+        return Err(format!("inserted {inserted}, counted {n}"));
+    }
     Ok((n, 0))
 }
 
