@@ -88,6 +88,11 @@ impl Pool {
         self.get_inner(Some(Instant::now() + timeout))
     }
 
+    /// The most connections this pool will open.
+    pub fn max_size(&self) -> usize {
+        self.shared.max
+    }
+
     /// Connections that currently exist (idle or in use).
     pub fn size(&self) -> usize {
         self.shared.lock().total

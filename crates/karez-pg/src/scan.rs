@@ -15,10 +15,12 @@
 use crate::config::Config;
 use crate::conn::{quote_ident, Connection};
 use crate::error::{Error, Result};
+use crate::pool::{Pool, PooledConnection};
 use karez_chunk::Chunk;
 use karez_proto_pg::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Barrier;
+use std::time::Duration;
 
 /// What to scan and how.
 #[derive(Debug, Clone)]
@@ -153,6 +155,26 @@ fn run_partition<S>(
     Ok(())
 }
 
+/// A connection on loan: an owned one or one from a pool. Private: it only lets the scan code treat both alike.
+trait Lease: Send {
+    fn conn(&mut self) -> &mut Connection;
+}
+
+impl Lease for Connection {
+    fn conn(&mut self) -> &mut Connection {
+        self
+    }
+}
+
+impl Lease for PooledConnection {
+    fn conn(&mut self) -> &mut Connection {
+        self
+    }
+}
+
+/// How long a partition waits for a pooled connection before the scan fails.
+const POOL_WAIT: Duration = Duration::from_secs(30);
+
 /// Scan a table on several connections at once.
 ///
 /// For each partition `p`, `init(p)` creates its state, and `on_chunk(&mut state, &chunk)` is called on that
@@ -189,6 +211,48 @@ where
     I: Fn(usize) -> S + Sync,
     F: Fn(&mut S, &Chunk) -> Result<()> + Sync,
 {
+    scan_core(&|| Connection::connect(cfg), None, scan, init, on_chunk)
+}
+
+/// Like [`scan_partitioned`], but takes its connections from `pool` instead of opening new ones, and puts them back.
+///
+/// With a warm pool (connections already open) a scan costs no connection set-up, which matters for tables that
+/// take a few milliseconds to read. The number of partitions is at most `pool.max_size()` (a scan needs that many
+/// connections at once). If other threads hold the pool's connections and one is not free within 30 seconds, the
+/// scan fails with an error instead of waiting forever. A connection that fails is discarded by the pool as usual.
+pub fn scan_partitioned_pool<S, I, F>(
+    pool: &Pool,
+    scan: &Scan<'_>,
+    init: I,
+    on_chunk: F,
+) -> Result<Vec<S>>
+where
+    S: Send,
+    I: Fn(usize) -> S + Sync,
+    F: Fn(&mut S, &Chunk) -> Result<()> + Sync,
+{
+    scan_core(
+        &|| pool.get_timeout(POOL_WAIT),
+        Some(pool.max_size()),
+        scan,
+        init,
+        on_chunk,
+    )
+}
+
+fn scan_core<C, S, I, F>(
+    connect: &(dyn Fn() -> Result<C> + Sync),
+    max_partitions: Option<usize>,
+    scan: &Scan<'_>,
+    init: I,
+    on_chunk: F,
+) -> Result<Vec<S>>
+where
+    C: Lease,
+    S: Send,
+    I: Fn(usize) -> S + Sync,
+    F: Fn(&mut S, &Chunk) -> Result<()> + Sync,
+{
     let prefix = select_prefix(scan)?;
     let table_text = quoted_table(scan.table)?;
     let want = if scan.partitions == 0 {
@@ -196,11 +260,13 @@ where
     } else {
         scan.partitions
     };
+    let want = max_partitions.map_or(want, |m| want.min(m)).max(1);
 
     // The leader reads the size, exports the snapshot and scans partition 0.
-    let mut leader = Connection::connect(cfg)?;
+    let mut leader = connect()?;
     if want > 1 {
         let ver = leader
+            .conn()
             .server_param("server_version")
             .and_then(|v| v.split('.').next().and_then(|m| m.parse::<u32>().ok()))
             .unwrap_or(0);
@@ -212,7 +278,7 @@ where
     }
     let blocks = if want > 1 {
         one_i64(
-            &mut leader,
+            leader.conn(),
             "SELECT (pg_relation_size($1::text::regclass) / current_setting('block_size')::int8)::int8",
             &[Value::Text(&table_text)],
         )?
@@ -228,15 +294,17 @@ where
 
     if n == 1 {
         let mut st = init(0);
-        run_partition(&mut leader, &prefix, None, &mut st, &on_chunk, &abort)?;
+        run_partition(leader.conn(), &prefix, None, &mut st, &on_chunk, &abort)?;
         return Ok(vec![st]);
     }
 
     let mut snapshot_id: Option<String> = None;
     if scan.snapshot {
-        leader.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", &[])?;
+        leader
+            .conn()
+            .execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", &[])?;
         let id = {
-            let mut cur = leader.query("SELECT pg_export_snapshot()", &[])?;
+            let mut cur = leader.conn().query("SELECT pg_export_snapshot()", &[])?;
             let row = cur.next()?.ok_or(Error::Usage("no snapshot returned"))?;
             let s = row.get::<&str>(0)?.to_string();
             cur.close()?;
@@ -258,11 +326,13 @@ where
         let handles: Vec<_> = (1..n)
             .map(|p| {
                 sc.spawn(move || -> Result<S> {
-                    let setup = (|| -> Result<Connection> {
-                        let mut c = Connection::connect(cfg)?;
+                    let setup = (|| -> Result<C> {
+                        let mut c = connect()?;
                         if let Some(id) = snapshot_id {
-                            c.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", &[])?;
-                            c.execute(&format!("SET TRANSACTION SNAPSHOT '{id}'"), &[])?;
+                            c.conn()
+                                .execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", &[])?;
+                            c.conn()
+                                .execute(&format!("SET TRANSACTION SNAPSHOT '{id}'"), &[])?;
                         }
                         Ok(c)
                     })();
@@ -273,7 +343,7 @@ where
                     let mut c = setup?;
                     let mut st = init(p);
                     run_partition(
-                        &mut c,
+                        c.conn(),
                         prefix,
                         Some(block_range(blocks, n, p)),
                         &mut st,
@@ -282,7 +352,7 @@ where
                     )
                     .inspect_err(|_| abort.store(true, Ordering::Relaxed))?;
                     if snapshot_id.is_some() {
-                        c.execute("COMMIT", &[])?;
+                        c.conn().execute("COMMIT", &[])?;
                     }
                     Ok(st)
                 })
@@ -295,7 +365,7 @@ where
             Err(Error::Usage("another partition failed to start"))
         } else {
             run_partition(
-                &mut leader,
+                leader.conn(),
                 prefix,
                 Some(block_range(blocks, n, 0)),
                 &mut st,
@@ -317,7 +387,7 @@ where
     });
 
     if snapshot_id.is_some() {
-        leader.execute("COMMIT", &[])?;
+        leader.conn().execute("COMMIT", &[])?;
     }
     // The first real error wins over the "another partition failed" echoes.
     let mut states = Vec::with_capacity(n);

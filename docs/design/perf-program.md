@@ -433,3 +433,20 @@ Question: why did two partitions give no gain over one connection on S8 in some 
 **Conclusion: there is no k=2 defect.** The "anomaly" was cold-cache noise in WSL and a ceiling of 1.24x on the droplets. I withdraw
 the claim that it is real and unexplained. It is still sensible that the default partition count is the client's CPU count capped
 at 8: on the 1.9 Gbit/s link a second connection adds little, and from four on the link is full.
+
+## 15. Pool variant and MSRV recheck (2026-11-16)
+
+- **`scan_partitioned_pool(&Pool, &Scan, init, on_chunk)`** takes its connections from a `Pool` and gives them back, so a warm pool costs no
+  connection set-up per scan. The partition count is capped at `pool.max_size()` (a scan needs that many connections at once); a
+  connection that is not free within 30 seconds fails the scan with an error, not a deadlock. The scan code treats an owned and a
+  pooled connection alike through a private trait; `Pool::max_size()` is new. A connection that fails is discarded by the pool as
+  before; one left inside the snapshot transaction is rolled back by the pool's drop.
+- **Test** (`scan_partitioned_pool_reuses_connections_and_leaves_them_clean`, real server): 8 partitions asked for on a pool of 4 reads
+  every row once with 4; the pool stays at 4 connections over three scans (with and without snapshot) and all are idle afterwards; a missing
+  table (42P01) and a missing column (42703) return the connections, which are not in a transaction; a pool of one scans on its one
+  connection. It passes on PostgreSQL 14, 16 and 17.
+- **MSRV 1.85 rechecked.** Rust 1.85.0 installed in WSL (`rustup toolchain install 1.85.0 --profile minimal`): `cargo +1.85.0 build` of the three core
+  crates, the whole `karez-chunk`, `karez-proto-pg` and `karez-pg` test suites against PostgreSQL 16 (47 integration tests among them) and
+  `cargo +1.85.0 check --workspace --all-targets` all pass. `cargo fmt` and `cargo clippy` (on the current stable) are clean.
+- **Not measured:** the saving from the pool on a droplet. In WSL a SCRAM connection takes a few milliseconds, so it only shows on
+  tables that scan in tens of milliseconds; the number belongs in the next droplet run, not here.

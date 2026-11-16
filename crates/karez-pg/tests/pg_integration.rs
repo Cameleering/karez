@@ -2311,3 +2311,97 @@ fn scan_partitioned_empty_table_errors_and_usage() -> R {
     );
     Ok(())
 }
+
+#[test]
+fn scan_partitioned_pool_reuses_connections_and_leaves_them_clean() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let t = Table::create(&mut c, "poolscan", "id int8 PRIMARY KEY, v int8 NOT NULL")?;
+    let name = t.name.clone();
+    t.conn.execute(
+        &format!("INSERT INTO {name} SELECT g, g * 2 FROM generate_series(1, 250000) g"),
+        &[],
+    )?;
+    let (count, sum_v) = {
+        let mut cur = t.conn.query(
+            &format!("SELECT count(*)::int8, sum(v)::int8 FROM {name}"),
+            &[],
+        )?;
+        let r = cur.next()?.unwrap();
+        (r.get::<i64>(0)?, r.get::<i64>(1)?)
+    };
+    let pool = karez_pg::Pool::new(scan_config(&addr), 4)?;
+    let cols = ["id", "v"];
+    let fold = |scan: &karez_pg::Scan<'_>| -> Result<(i64, i64, usize), Error> {
+        let parts = karez_pg::scan_partitioned_pool(
+            &pool,
+            scan,
+            |_| (0i64, 0i64),
+            |st, ch| {
+                st.0 += ch.rows() as i64;
+                st.1 += sum_i64_column(ch, 1)?;
+                Ok(())
+            },
+        )?;
+        Ok((
+            parts.iter().map(|p| p.0).sum(),
+            parts.iter().map(|p| p.1).sum(),
+            parts.len(),
+        ))
+    };
+    // 8 partitions asked for, the pool holds 4: the scan uses 4 and still reads every row once
+    let (n, s, parts) = fold(&karez_pg::Scan::new(&name, &cols).partitions(8))?;
+    assert_eq!((n, s), (count, sum_v));
+    assert_eq!(parts, 4);
+    assert_eq!(pool.size(), 4);
+    assert_eq!(pool.idle(), 4, "every connection went back");
+    // a second and a third scan open nothing new, with and without the snapshot
+    let (n, s, _) = fold(&karez_pg::Scan::new(&name, &cols).partitions(3))?;
+    assert_eq!((n, s), (count, sum_v));
+    let (n, s, _) = fold(
+        &karez_pg::Scan::new(&name, &cols)
+            .partitions(4)
+            .snapshot(false),
+    )?;
+    assert_eq!((n, s), (count, sum_v));
+    assert_eq!(pool.size(), 4, "the pool did not grow");
+    assert_eq!(pool.idle(), 4);
+    // a failing scan returns the connections too, and they are usable and not inside a transaction
+    expect_sqlstate(
+        karez_pg::scan_partitioned_pool(
+            &pool,
+            &karez_pg::Scan::new("karez_no_such_table", &cols).partitions(4),
+            |_| (),
+            |_, _| Ok(()),
+        ),
+        "42P01",
+    );
+    expect_sqlstate(
+        karez_pg::scan_partitioned_pool(
+            &pool,
+            &karez_pg::Scan::new(&name, &["id", "nope"]).partitions(4),
+            |_| (),
+            |_, _| Ok(()),
+        ),
+        "42703",
+    );
+    assert_eq!(pool.idle(), pool.size(), "no connection stayed checked out");
+    for _ in 0..pool.size() {
+        let mut one = pool.get()?;
+        assert_eq!(one.tx_status(), TxStatus::Idle);
+        assert_eq!(one_i64(&mut one, "SELECT 1::int8", &[])?, 1);
+    }
+    // a pool of one connection scans on that connection
+    let small = karez_pg::Pool::new(scan_config(&addr), 1)?;
+    let parts = karez_pg::scan_partitioned_pool(
+        &small,
+        &karez_pg::Scan::new(&name, &cols).partitions(4),
+        |_| 0i64,
+        |n, ch| {
+            *n += ch.rows() as i64;
+            Ok(())
+        },
+    )?;
+    assert_eq!(parts, vec![count]);
+    Ok(())
+}

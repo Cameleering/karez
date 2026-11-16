@@ -37,5 +37,5 @@ pub use karez_proto_pg::{ErrorFields, TxStatus, Value};
 pub use pool::{Pool, PooledConnection};
 #[cfg(feature = "tls")]
 pub use rustls::ClientConnection as TlsConnection;
-pub use scan::{default_partitions, scan_partitioned, Scan};
+pub use scan::{default_partitions, scan_partitioned, scan_partitioned_pool, Scan};
 pub use tx::{Isolation, Savepoint, Transaction};
