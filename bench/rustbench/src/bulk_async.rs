@@ -142,7 +142,8 @@ pub fn sqlx_(cfg: &Cfg) -> (String, Vec<Pass>) {
             let t = std::time::Instant::now();
             let (n, sum): (u64, u64) = match cfg.scenario {
                 Scenario::S4 => {
-                    let mut s = sqlx::query(S4_SQL).fetch(&pool);
+                    let mut conn = pool.acquire().await.unwrap();
+                    let mut s = sqlx::query(S4_SQL).fetch(&mut *conn);
                     let mut acc = Acc::default();
                     while let Some(r) = s.try_next().await.unwrap() {
                         acc.add(
@@ -161,7 +162,10 @@ pub fn sqlx_(cfg: &Cfg) -> (String, Vec<Pass>) {
                     (acc.rows, acc.sum)
                 }
                 Scenario::S8 => {
-                    let mut s = sqlx::query(crate::TAXI_SCAN_SQL).fetch(&pool);
+                    // One acquired connection: fetching through the pool made sqlx hold about 6 GB of the 2.3 GB result
+                    // (perf-program.md, the sqlx S8 question); a single connection streams.
+                    let mut conn = pool.acquire().await.unwrap();
+                    let mut s = sqlx::query(crate::TAXI_SCAN_SQL).fetch(&mut *conn);
                     let (mut n, mut sum) = (0u64, 0u64);
                     while let Some(r) = s.try_next().await.unwrap() {
                         let us = |i: usize| -> u64 { (r.get::<time::PrimitiveDateTime, _>(i).assume_utc().unix_timestamp_nanos() / 1000) as i64 as u64 };

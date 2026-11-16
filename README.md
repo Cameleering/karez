@@ -21,7 +21,8 @@ BI tools and query engines can use the same core. It is designed to be **fast, s
 > **Status: design stage with a first working slice.** A small blocking PostgreSQL client now
 > exists (see [What exists today](#what-exists-today)). It has optional TLS, it is **verified against a
 > real server on PostgreSQL 14.25, 16.15 and 17.12 (versions 13, 15 and 18 were not run)**, and **nothing is
-> measured**: there are no benchmarks. Everything else on this page is a plan. The first milestone
+> yet supports a speed claim**: the only measurements are one reduced benchmark run (one lane per competitor) and a few
+> experiments, summarised in [docs/design/perf-program.md](docs/design/perf-program.md). Everything else on this page is a plan. The first milestone
 > is still a measurement spike that must clear stated numbers before other work starts (see
 > [Design targets](#design-targets-not-measurements)). Every number on this page that is not a
 > published third-party result is a target, not a result.

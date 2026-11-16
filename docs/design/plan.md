@@ -113,6 +113,26 @@ architecture is not worth a new crate family. Do option C instead: a thin standa
 over tokio-postgres, contributing the chunk decoder to it. Everything else in this plan is
 conditional on this gate.
 
+**Where the gate stands (2026-11-16; one lane per competitor, so indicative; details and sources in
+[perf-program.md](perf-program.md)):**
+
+| row of the gate | measured | state |
+|---|---|---|
+| S1/S2 one connection, within 5% of the fastest Rust client | karez-blocking at 0.88 to 1.07 of a raw pre-encoded floor (three droplet pairs); level with tokio-postgres, pgx, deadpool in the open-loop runs | **met** |
+| S2 at 64 connections, within 5% of the fastest; at least 2x tuned pgJDBC | within one search step of the best (the database host is 85% busy, server-bound); about 1.2x pgJDBC, **not 2x** | parity met; the 2x over pgJDBC **not met** (server-bound) |
+| S4 chunk path at least 2x the best Rust row API | 1.0x on one connection; with `scan_partitioned` 1.1x to 1.25x on DigitalOcean `c-4` (1.9 Gbit/s link, the limit) and 2.4x (S4) to 3.4x (S8) with no network limit (WSL, loopback) | **not met on the available network; met without a network limit.** A faster two-machine network is the deciding test and is parked by the owner |
+| S4 row view within 15% of the chunk path | CPU equal (0.35 s against 0.36 s); wall difference was noise | met (CPU) |
+| client CPU | about half of tokio-postgres on S8 (6 to 7.7 CPU-s against 12 to 14), 14% below on S1 | met, not a gate row |
+| size, dependencies | zero third-party dependencies (the tree is `karez`, `karez-pg`, `karez-chunk`, `karez-proto-pg`); stripped blocking hello-world **441 KiB** (LTO, `opt-level="s"`, `panic="abort"`) or **483 KiB** (`opt-level=3`), against 282 and 296 KiB for an empty `println!` binary; tokio-postgres hello-world 824 and 940 KiB (68 crates in its tree), sqlx 1,060 KiB (147 crates, `opt-level="s"` only) | **met** (at most 600 KB); diesel and rusqlite hello-worlds not measured |
+
+The stop rule is therefore **neither triggered nor cleared**: the owner decided on 2026-11-16 to go ahead with the current numbers
+and to park the faster-network test. Until that test is run, every speed claim in public text must stay at "level on OLTP, about
+half the client CPU, partitioned scans up to the network limit".
+
+**Decisions taken after this plan was written (owner):** ODBC is in 1.0 (2026-11-13; needs a separate FFI crate with `unsafe`, to be
+covered by the audit, and adds months to M4/M7); TLS is an opt-in `rustls` feature; `karez-rt` is a std-only async layer; replay of
+commands only when never written; slow streams lease their connection. See [../STATUS.md](../STATUS.md).
+
 ## 2. Architecture
 
 ### 2.1 Layers

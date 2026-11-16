@@ -450,3 +450,19 @@ at 8: on the 1.9 Gbit/s link a second connection adds little, and from four on t
   `cargo +1.85.0 check --workspace --all-targets` all pass. `cargo fmt` and `cargo clippy` (on the current stable) are clean.
 - **Not measured:** the saving from the pool on a droplet. In WSL a SCRAM connection takes a few milliseconds, so it only shows on
   tables that scan in tens of milliseconds; the number belongs in the next droplet run, not here.
+
+## 16. Closing the open items (2026-11-16, owner: go ahead with the current numbers, park the faster network)
+
+| item | result |
+|---|---|
+| top-level `karez` crate | already re-exports everything of `karez-pg` (`pub use karez_pg::*`); added doc examples for `scan_partitioned` and `insert_batch` (compile-checked doctests, pass on stable and on 1.85.0) |
+| `execute_many` deadlock fix on Linux | the mock-server test `execute_many_does_not_deadlock_when_the_server_stops_reading` passes on Linux (WSL), six runs in a row, and the other seven mock-server tests pass |
+| sqlx S8 slowness | **explained**: the adapter fetched through the pool, and sqlx held about 5.9 GB for a 2.3 GB result (23.6 s per pass in WSL); on one acquired connection it streams in 5 MB, 17.5 to 19.1 s, same checksum. Adapter fixed (S4 and S8). The 2026-11-14 campaign's sqlx S8 never finished for that reason (an 8 GB droplet paging) |
+| pgbench cross-check | run in WSL: pgbench shows a steady 50 to 70 us (about 20%) higher p50 than the libpq adapter at low load, for S1 and S2 alike and for any pgbench thread count; p99 within about 25%; at 8,000 per second the shared WSL CPUs make both useless. The adapter does not inflate latency; the offset is pgbench's own overhead (probably, not proven) and cancels between clients. `crosscheck.py` got `--scenario`, `--jobs` and a warm-up drop. Droplet rerun parked with the faster-network test |
+| binary size and dependencies (plan 1.3 row) | **met**: 441 KiB (size-optimised) / 483 KiB (`opt-level=3`) against the 600 KB gate; zero third-party crates; tokio-postgres 824 / 940 KiB with 68 crates, sqlx 1,060 KiB with 147 crates |
+| plan, README, STATUS | updated to the measured state: plan section 1.3 has the gate table (stop rule neither triggered nor cleared), the README status no longer says "nothing is measured", STATUS records the owner's decision |
+| MSRV, pool variant | done earlier today (section 15) |
+
+**Still open** (none blocks the rest): the faster two-machine network test (parked by the owner); the pgbench check and the pool-saving
+number on a droplet; diesel and rusqlite hello-world sizes; a full campaign 2 (needs the owner's go-ahead); crate-name reservation and the
+audit budget (owner decisions); pushing the branch (not done: nothing is pushed unless the owner asks).

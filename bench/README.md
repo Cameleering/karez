@@ -121,7 +121,7 @@ has no taxi adapter: its tuple decoder stops at 12 columns) (2026-11-14, `[measu
 - Competitors from plan 6.3 without an adapter: wtx, diesel (and diesel-async), ConnectorX, MySQL,
   SQL Server and SQLite clients (karez has no driver for them yet), vertx pipelining variants beyond
   the one above, a GraalVM native build of the JVM clients.
-- Rust size and dependency floor of tokio-postgres, sqlx, diesel and rusqlite hello-worlds (M0 item).
+- Rust size and dependency floor of diesel and rusqlite hello-worlds (M0 item). tokio-postgres, sqlx and karez were measured on 2026-11-16 (docs/design/plan.md section 1.3).
 - Allocations per row, bytes on the wire, `perf stat`.
 - A JVM warm-up of 60 s and 300 s runs (shortened for the budget, see above).
 - `deadpool-postgres` and `zero-postgres` over TLS.
@@ -211,8 +211,11 @@ What happened, in order:
 What the lean round does not cover or cannot support:
 
 - Lane 3 was still in its bulk phase when the time limit hit: S8 is missing for sqlx, sqlx-tuned, pgjdbc-tuned and
-  r2dbc-postgresql; pgjdbc (defaults) failed S8 as expected (it buffers the whole result). Why the sqlx S8 pass took more
-  than an hour is not understood.
+  r2dbc-postgresql; pgjdbc (defaults) failed S8 as expected (it buffers the whole result). **The sqlx S8 slowness is explained (2026-11-16):** the
+  adapter fetched through the pool (`fetch(&pool)`), and sqlx then held about 5.9 GB of the 2.3 GB result in memory (23.6 s per pass in
+  WSL); on an 8 GB client droplet that means paging. Fetching on one acquired connection streams it with 5 MB of memory in 17.5 to
+  19.1 s with the same checksum. The adapter now acquires a connection for S4 and S8; the campaign numbers of 2026-11-14 predate that
+  and sqlx's S4 row is unaffected in kind (127 MB fits in memory), but its memory column was high.
 - R3 (aggregate over 13M rows) met no p99 bound for any client, and R4 (mix with 5% aggregates) is dominated by that
   query. Neither tells the clients apart.
 - Many rows are at the same rate (for example 46,930 or 32,000 per second): the search moves in steps and the database
@@ -220,7 +223,13 @@ What the lean round does not cover or cannot support:
 - One run per client per lane is noisy at one connection: tokio-postgres and deadpool-postgres share a driver and gave
   5,000 and 8,000 per second in S2 at one connection on different lanes. Read the per-lane ratio column and treat n=1 as
   indicative only.
-- The pgbench cross-check (`crosscheck.py`) was not run on the droplets.
+- The pgbench cross-check (`crosscheck.py`) was not run on the droplets. It was run in WSL on 2026-11-16 (S1 and S2, 8 connections,
+  warm-up dropped from the pgbench log, pgbench `-j` 2, 4 and 8): at low load (1,000 to 2,000 requests per second) **pgbench reports a p50
+  of 300 to 345 us against 255 to 265 us for the libpq adapter, a steady offset of 50 to 70 us (about 20%)**, the same for S1
+  (one tiny column) and S2 (ten columns, so not the text-against-binary format) and independent of pgbench's thread count. p99 agrees
+  within about 25% (S1: 520 to 550 against 395 to 465 us). At 8,000 per second both tools show spikes on the shared WSL CPUs and the
+  comparison is not usable. So the adapter does not inflate latency; the offset is probably pgbench's own event loop and timing (not
+  proven). It is a constant that cancels when clients are compared on the same harness. Rerun on a droplet pair when the next run happens.
 - No client other than the karez rows ran twice, so no confidence interval exists.
 
 Reading the tables in `REPORT.md` as they are: karez-blocking is level with the best clients in S1/S2/R1/R2 at 64 and 512

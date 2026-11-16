@@ -1,12 +1,12 @@
 # karez status
 
-_Updated 2026-11-14. Read this first, then [plan.md](design/plan.md)._
+_Updated 2026-11-16. Read this first, then [plan.md](design/plan.md)._
 
 ## State
 
 karez is in the **design stage with a first working slice** on the branch `claude/m0-spike-1bacb7`
 (local, not pushed, not merged): a PostgreSQL client with optional TLS. It has no release and
-**one reduced measurement** (one lane per competitor, 2026-11-14; it supports no speed claim). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
+**a few small measurements** (one reduced campaign on 2026-11-14 and one-lane experiments on 2026-11-16; none supports a speed claim). The owner decided on 2026-11-16 to go ahead with the current numbers and to **park the faster-network test** that would settle the plan's 2x bulk-read gate ([design/perf-program.md](design/perf-program.md) sections 9 to 15). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
 versions 13, 15 and 18 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
 tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-results.md).
 
@@ -17,7 +17,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 | Name and identity | decided 2026-11-09: **karez**, in the Cameleer family; Apache-2.0; a fresh repository with no rdbc history |
 | Brand | K mark, icon set generator and assets are built; the logo and social preview are Gemini drafts that need small fixes ([brand/gemini-prompts.md](brand/gemini-prompts.md)) |
 | Repo metadata | About line and 20 topics set; README, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, `context7.json`, `CITATION.cff` and community files written |
-| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); 76 tests that run without a server and 57 that need one (138 and 62 with `tls`, the latter counting tests on tokio); blocking client with pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches, plus a shared pipelined connection with futures (`karez-rt`); optional TLS (`tls` feature); `scan_partitioned` and `scan_partitioned_pool` (a table read on several connections from one snapshot, ctid ranges, PostgreSQL 14+; the pool variant reuses connections) and `Connection::insert_batch` (multi-row insert), added 2026-11-16 with 7 unit tests and 5 real-server tests (pass on PostgreSQL 14, 16 and 17; the whole suite and a workspace check also pass on Rust 1.85.0, rechecked 2026-11-16); benchmark harness in `bench/` (built and tested in WSL; one reduced campaign ran on DigitalOcean on 2026-11-14, one lane per competitor, see [bench/README.md](../bench/README.md) "Campaign log"; no speed claim follows from it) |
+| Code | M0 spike, PostgreSQL only: `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, `karez` (zero dependencies, no `unsafe`; MSRV 1.85 tested); the whole workspace test run passes on 2026-11-16 against PostgreSQL 16 (47 real-server tests in `karez-pg`, 50 with `tls`; the 2026-11-13 counts of 76 and 57 are out of date); blocking client with pool, `COPY`, `LISTEN`/`NOTIFY`, cancel and batches, plus a shared pipelined connection with futures (`karez-rt`); optional TLS (`tls` feature); `scan_partitioned` and `scan_partitioned_pool` (a table read on several connections from one snapshot, ctid ranges, PostgreSQL 14+; the pool variant reuses connections) and `Connection::insert_batch` (multi-row insert), added 2026-11-16 with 7 unit tests and 5 real-server tests (pass on PostgreSQL 14, 16 and 17; the whole suite and a workspace check also pass on Rust 1.85.0, rechecked 2026-11-16); benchmark harness in `bench/` (built and tested in WSL; one reduced campaign ran on DigitalOcean on 2026-11-14, one lane per competitor, see [bench/README.md](../bench/README.md) "Campaign log"; no speed claim follows from it) |
 
 ## Decisions already made
 
@@ -32,7 +32,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 
 ## Open decisions (plan section 11)
 
-1. Go or no-go on Milestone 0. The functional spike exists; the measurement part of the gate (plan section 1.3) has not been started, so there is nothing to decide on yet.
+1. Go or no-go on Milestone 0. The owner chose on 2026-11-16 to continue with the current numbers (gate state in plan section 1.3: OLTP and latency met, bulk-read 2x met only without a network limit, size open); the faster-network test is parked, not cancelled.
 2. ~~Whether the ODBC driver is in 1.0 or deferred.~~ **Decided 2026-11-13 by the owner: ODBC is in 1.0.** It needs a separate FFI crate with `unsafe` (the core stays `forbid(unsafe_code)`), which the pre-1.0 audit must cover, and it adds months to the schedule; plan.md still needs updating.
 3. ~~Whether to fund an audit of `cameleer-tls`.~~ Decided: not now (see below).
 4. The budget for the external audit before 1.0: scope decided, the amount is the owner's.
