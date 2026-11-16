@@ -572,6 +572,7 @@ obligations on karez.
 | An ODBC driver in Rust has no precedent; driver managers are quirky | medium | medium | start from ClickHouse ODBC's C++ surface as a map; test with Microsoft ODBC Test and unixODBC early in M7 |
 | Oracle thin protocol is undocumented and the legal position unclear | medium | low | out of 1.0; decide with counsel; the OCI path via the ODBC bridge works meanwhile |
 | Chunk model adds latency to one-row OLTP results | low | medium | builder reuse, no allocation on reset, measured in M0 S1/S2 unpipelined |
+| No paid external audit (owner, 2026-11-16) | certain | high for the ODBC FFI crate (`unsafe`, loaded by BI tools) | mitigation: fuzzing to the M8 target, `cargo audit` and `cargo deny` in CI, two-person review of every `unsafe` block, a written safety argument per block, public review before 1.0; revisit if the ODBC driver gets real users |
 | Size budget blown by TLS | medium | low | rustls is measured in M0; cameleer-tls as the std-only fallback once audited and given a hardware AES path |
 | Weekly API limits and process restarts interrupt agent-driven work (as happened during this research) | certain | low | notes are written to the repository as they are produced; milestones are small and committed often |
 

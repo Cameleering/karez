@@ -33,6 +33,28 @@ BI tools and query engines can use the same core. It is designed to be **fast, s
 
 ---
 
+## At a glance: first measurements (the full test is still pending)
+
+Measured on the PostgreSQL client in this repository, on 13 million rows of public NYC taxi data and a 1-million-row table. Every
+figure is `[measured here]`, from one lane per competitor (one database droplet and one client droplet, DigitalOcean `c-4`, 2026-11-14
+to 2026-11-16) or from a laptop; the sources and the losses are in [docs/design/perf-program.md](docs/design/perf-program.md).
+
+- **Up to 3.4x faster bulk reads** with the partitioned scan (`scan_partitioned`: one table read on several connections from one
+  snapshot) than the best single-connection client, **when the network is not the limit** (13M rows, database and client on one machine,
+  12 shared CPUs: 3.4x; 1M rows: 2.4x).
+- **On a real cloud link the gain is smaller: 1.1x to 1.3x** (1.23x to 1.28x on the 13M-row scan, 1.12x on the 1M-row scan), because the 1.9 Gbit/s
+  link between two DigitalOcean `c-4` droplets is full. A faster two-machine network is the deciding test and has **not been run yet**.
+- **About half the client CPU** of tokio-postgres on a large scan (6 to 7.7 CPU-seconds against 12 to 14 for 13M rows).
+- **Level with the best Rust clients on single-row queries**, which are limited by the database server, not by the client; one-connection
+  latency is within 7% of a raw-protocol floor.
+- **Inserts:** the multi-row `insert_batch` is 1.75x karez's own per-row path and level with sqlx.
+- **Small:** a stripped blocking hello-world is 441 KiB with no third-party crates (tokio-postgres: 824 KiB and 68 crates; sqlx: 1,060 KiB
+  and 147 crates).
+
+**Pending:** the faster-network test, a complete multi-round campaign against every competitor (round results will replace the
+one-lane figures above), and diesel and rusqlite comparisons. These are first measurements and will change. Where karez is level or behind,
+the tables say so.
+
 ## Why another database library
 
 Rust has good database crates, and each makes a trade-off that karez is designed to avoid.

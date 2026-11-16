@@ -23,9 +23,10 @@ The repository holds the research, the build plan and the brand assets.
 1. **Evidence tags.** Every number is tagged `[measured here]`, `[vendor]`, `[third party]` or
    `[paper]`, with a URL and a `[checked YYYY-MM-DD]` date. Numbers from different machines are
    never put in one ranking. Do not add an untagged number.
-2. **No unmeasured claims in public text.** Do not write "fastest", "10x faster" or similar in
-   the README, in images, or in the About line until a benchmark that follows the plan's
-   method supports it.
+2. **No unmeasured claims in public text.** Do not write "fastest", "10x faster" or similar unless a
+   benchmark that follows the plan's method supports it. Owner's decision of 2026-11-16: the README and the About line may lead with
+   the strongest *measured* figure, but only with its conditions in the same sentence (hardware, network, data size), the figure
+   from the realistic network next to it, and a note that the full test is pending. Never a bare ratio, never "fastest".
 3. **Hard rules from the plan** (section 1.2): server-side parameter binding only (never inline a
    literal into SQL), binary protocols by default, verified TLS by default, sans-io protocol
    crates with `#![forbid(unsafe_code)]`, no dependency in the core or the protocol crates, and

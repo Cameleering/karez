@@ -32,10 +32,10 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 
 ## Open decisions (plan section 11)
 
-1. Go or no-go on Milestone 0. The owner chose on 2026-11-16 to continue with the current numbers (gate state in plan section 1.3: OLTP and latency met, bulk-read 2x met only without a network limit, size open); the faster-network test is parked, not cancelled.
+1. Go or no-go on Milestone 0. The owner chose on 2026-11-16 to continue with the current numbers (gate state in plan section 1.3: OLTP and latency met, bulk-read 2x met only without a network limit, size open); the faster-network test is parked (owner, 2026-11-16: "park this to be done"; the recommended route is a DigitalOcean tier request or a faster machine pair), not cancelled.
 2. ~~Whether the ODBC driver is in 1.0 or deferred.~~ **Decided 2026-11-13 by the owner: ODBC is in 1.0.** It needs a separate FFI crate with `unsafe` (the core stays `forbid(unsafe_code)`), which the pre-1.0 audit must cover, and it adds months to the schedule; plan.md still needs updating.
 3. ~~Whether to fund an audit of `cameleer-tls`.~~ Decided: not now (see below).
-4. The budget for the external audit before 1.0: scope decided, the amount is the owner's.
+4. ~~The budget for the external audit before 1.0.~~ Decided 2026-11-16: no paid audit (see Decisions).
 5. ~~Reserving the names.~~ Decided: now. The owner does it.
 
 ## Decisions of 2026-11-13 (owner)
@@ -44,7 +44,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - **Async (`karez-rt`):** a small design with no async runtime (std-only I/O threads and channels over the sans-io crates), informed by what the simoom project learnt. The simoom session answered: thread per connection with sans-io crates suits a database client, and a pump thread only helps from two requests in flight (see [research/simoom-io-learnings.md](research/simoom-io-learnings.md), second-hand and unchecked). The design is in [design/karez-rt.md](design/karez-rt.md); steps 0 to 4 are built (section 13 of it lists the gaps), step 5 (benchmarks) is not.
 - **Replay:** only commands never written to a dead connection move to a new one; a written command is never resent automatically.
 - **Slow streams:** a stream leases its connection; other commands wait in a bounded queue. No automatic second connection.
-- **Audit:** plan and fund an external audit before 1.0 of the core, the protocol crates and the ODBC FFI crate; not of `cameleer-tls` for now. (The owner funds it; nothing was spent.)
+- **Audit:** ~~plan and fund an external audit before 1.0~~ **Changed 2026-11-16 by the owner: no paid audit.** Assurance comes from tests, fuzzing (30 CPU-days without a new crash, plan M8), `cargo audit`, `cargo deny`, review of every `unsafe` block in the ODBC FFI crate and public review. This is a lower assurance than a paid audit for an ODBC driver that BI tools would load; the risk is recorded in plan section 9.
 - **Names:** reserve `karez` and `karez-*` on crates.io, PyPI and npm now, as minimal placeholders. **crates.io done 2026-11-16** (`karez`, `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, version 0.0.1, no code; the owner told me to publish them with the existing cargo login). **npm and PyPI not done**: there is no login on this machine (`npm whoami` fails, no PyPI token); the packages are built and checked in `packaging/placeholders/`, and need the owner to log in. Planned names beyond these five (`karez-odbc`, `karez-adbc`, `karez-jdbc`, ...) are not reserved: crates.io forbids squatting, so reserve each when it has code.
 - **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
 
@@ -66,5 +66,6 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - [ ] Acquire the two primary texts the research could not read (JDBC 4.3 chapter 6, ISO
       9075-3:2023) before freezing the parity checklist.
 - [ ] Resolve the unverified items in research.md section 13 before quoting them outside the repo.
+- [x] README headline: strongest measured figure with its conditions and the pending-test note (owner decision 2026-11-16).
 - [ ] Make the repository public with the M1 PostgreSQL driver and the published benchmark
       results, so the first public claim can be rerun.

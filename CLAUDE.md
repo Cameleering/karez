@@ -23,7 +23,8 @@ at feature parity with the standards, with every claim measured honestly.
 1. **Do not commit or push unless the owner asks.** The default branch is `main`: branch first.
 2. **Evidence first.** Tag every number, cite its source and check date, and never rank numbers
    from different machines together. Do not claim "fastest" or any speed-up until a benchmark
-   following the plan's method supports it.
+   following the plan's method supports it. Exception (owner, 2026-11-16): a headline may use the strongest measured figure if its
+   conditions and the realistic-network figure are in the same place and the full test is stated as pending (see AGENTS.md).
 3. **Follow the plan.** The hard rules are in [docs/design/plan.md](docs/design/plan.md) section
    1.2. If the evidence contradicts the plan, say so and propose a change to the plan; do not
    quietly drift from it.
