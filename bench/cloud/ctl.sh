@@ -155,6 +155,10 @@ case "${1:-status}" in
         bash /root/karez/bench/cloud/lane-run.sh $l $round $profile $dbp '$clients'" || echo "lane $l failed to start" >&2
     done
     ;;
+  perf)
+    # the performance experiments of docs/design/perf-program.md on lane 1 (use LANES=1)
+    rssh "karez-bench-l1-cl" "systemctl stop karez-perf 2>/dev/null; systemctl reset-failed karez-perf 2>/dev/null;       systemd-run -q --unit=karez-perf --collect -p LimitNOFILE=1048576 -p StandardOutput=append:/root/perf.log -p StandardError=append:/root/perf.log       bash /root/karez/bench/cloud/perf-lane.sh $(ip_of karez-bench-l1-db private)"
+    ;;
   tail)
     l="${2:?lane}"; rssh "karez-bench-l$l-cl" "tail -n ${3:-25} /root/campaign.log"
     ;;
@@ -164,7 +168,7 @@ case "${1:-status}" in
       n="karez-bench-l$l-cl"
       [ -n "$(ip_of $n)" ] || continue
       mkdir -p "$OUT/lane$l"
-      rssh "$n" "cd /root && tar czf - --ignore-failed-read --exclude='*-smoke' out campaign.log machine-cl.txt 2>/dev/null; true" | tar xzf - -C "$OUT/lane$l" 2>/dev/null || echo "lane $l: nothing to pull yet" >&2
+      rssh "$n" "cd /root && tar czf - --ignore-failed-read --exclude='*-smoke' out campaign.log perf.log machine-cl.txt 2>/dev/null; true" | tar xzf - -C "$OUT/lane$l" 2>/dev/null || echo "lane $l: nothing to pull yet" >&2
       rssh "karez-bench-l$l-db" "cat /root/machine-db.txt" > "$OUT/lane$l/machine-db.txt" 2>/dev/null || true
     done
     echo "pulled to $OUT"
