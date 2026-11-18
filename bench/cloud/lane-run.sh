@@ -19,6 +19,13 @@ if [ "$PROFILE" = full ] || [ "$PROFILE" = smoke ] || [ "$PROFILE" = lean2 ]; th
   python3 run.py verify --clients "$CLIENTS" --root-cert /root/ca.crt > "$OUT/verify.txt" 2>&1
   echo "verify: rc=$? (see verify.txt)"
 fi
+if [ "${XCHECK:-0}" = 1 ]; then
+  # pgbench cross-check of the open-loop method (bench/crosscheck.py), S1 and S2, low rates, on this droplet pair
+  for sc in s1 s2; do
+    python3 crosscheck.py --url "$BENCH_URL" --pgbench pgbench --rates 1000,2000 --conns 8 --duration 20 --scenario $sc --jobs 4 > "$OUT/crosscheck-$sc.txt" 2>&1
+    echo "crosscheck $sc: rc=$? (see crosscheck-$sc.txt)"
+  done
+fi
 python3 run.py campaign --profile "$PROFILE" --out "$OUT" --clients "$CLIENTS" --lane "lane$LANE" --round "$ROUND" \
   --db-host "root@$DB" --root-cert /root/ca.crt
 rc=$?

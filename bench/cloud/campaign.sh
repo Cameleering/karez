@@ -30,7 +30,7 @@ rm -f "$STATE/STOP"
 stop_requested() { [ -f "$STATE/STOP" ]; }
 
 read -r -a PROFILES <<< "${1:?profiles, e.g. \"full repeat repeat\"}"
-round=0
+round=$(( ${ROUND_START:-1} - 1 ))   # ROUND_START=3 makes the first round of this run round 3 (client rotation follows the round number)
 for profile in "${PROFILES[@]}"; do
   round=$((round + 1))
   if stop_requested; then log "STOP file present; not starting round $round"; break; fi

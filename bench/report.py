@@ -8,22 +8,30 @@ only between rows of the same lane and round (the published figure is the median
 Reads every `cells.jsonl` below the directory (lane1/out/lane1-round1-full/cells.jsonl, ...).
 Standard library only. Nothing is estimated: a number is a median of raw runs.
 """
-import glob, json, os, statistics, sys
+import glob, gzip, json, math, os, statistics, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import run as harness  # noqa: E402
 
 REFS = ("karez-blocking", "karez-shared")
+# two-sided 95% Student t by degrees of freedom (n - 1)
+T95 = {2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228}
 
 
-def load(root):
+def load(*roots):
+    """Every cells.jsonl (or cells.jsonl.gz) below each root; several roots merge rounds run on different days."""
     rows = []
-    for f in sorted(glob.glob(os.path.join(root, "**", "cells.jsonl"), recursive=True)):
-        for line in open(f):
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+    for root in roots:
+        files = glob.glob(os.path.join(root, "**", "cells.jsonl"), recursive=True)
+        files += glob.glob(os.path.join(root, "**", "cells.jsonl.gz"), recursive=True)
+        for f in sorted(files):
+            fh = gzip.open(f, "rt", encoding="utf8") if f.endswith(".gz") else open(f, encoding="utf8")
+            with fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
     return rows
 
 
@@ -41,7 +49,15 @@ def ratio_cell(vals):
     if not vals:
         return "-"
     lo, hi = min(vals), max(vals)
-    return f"{statistics.median(vals):.2f} (n={len(vals)}, {lo:.2f}-{hi:.2f})"
+    base = f"{statistics.median(vals):.2f} (n={len(vals)}, {lo:.2f}-{hi:.2f}"
+    n = len(vals)
+    if n >= 3 and hi > lo:
+        # 95% t interval of the mean of the per-pair ratios (assumes roughly normal ratios; wide at small n)
+        t = T95.get(n - 1, 1.96)
+        half = t * statistics.stdev(vals) / math.sqrt(n)
+        m = statistics.fmean(vals)
+        base += f"; t95 {m - half:.2f}-{m + half:.2f}"
+    return base + ")"
 
 
 def oltp(rows, out):
@@ -138,12 +154,13 @@ def machines(root, out):
 
 
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else "."
-    rows = load(root)
+    roots = sys.argv[1:] or ["."]
+    root = roots[0]   # REPORT.md is written next to the first one
+    rows = load(*roots)
     out = ["# Benchmark report", "",
            "Built by `bench/report.py` from the raw cells (`cells.jsonl`) of every lane and round. Every number is `[measured here]`, "
            "on the machines listed at the end, on the dates in the raw files. **Ratios compare clients only between rows of the same "
-           "lane and round; the figure shown is their median with the count and range.** Absolute numbers belong to their droplets. "
+           "lane and round; the figure shown is their median with the count and range, and for n of 3 or more a 95% t interval of the mean (wide at small n).** Absolute numbers belong to their droplets. "
            "S1 to S3 and S8 are open loop with the p99 bound given in each heading; the SLO rate is the highest rate searched at which the "
            "median p99 of the final runs stayed inside it. Losses are in the same tables as wins.", ""]
     n_lr = len({(r.get("lane"), str(r.get("round"))) for r in rows if r.get("phase") in ("result", "bulk")})

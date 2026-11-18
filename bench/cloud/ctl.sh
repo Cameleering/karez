@@ -49,8 +49,8 @@ rssh() { # rssh NAME cmd...
 rscp() { scp "${SSH_OPTS[@]}" "$@"; }
 
 # the client groups; karez runs in every lane and round
-KAREZ="karez-blocking,karez-shared,karez-blocking-chunk,karez-blocking-part,karez-blocking-mrow"
-GROUPS_=("libpq,tokio-postgres,pgjdbc,asyncpg" "deadpool-postgres,pgx,vertx-pg-client,psycopg3,sqlx-tuned,diesel" "sqlx,pgjdbc-tuned,r2dbc-postgresql,zero-postgres,wtx")
+KAREZ="karez-blocking,karez-shared,karez-blocking-chunk,karez-blocking-part,karez-blocking-mrow,diesel,wtx"
+GROUPS_=("libpq,tokio-postgres,pgjdbc,asyncpg" "deadpool-postgres,pgx,vertx-pg-client,psycopg3,sqlx-tuned" "sqlx,pgjdbc-tuned,r2dbc-postgresql,zero-postgres")
 
 pack() {
   local tarball="$STATE/karez-tree.tar.gz"
@@ -151,7 +151,7 @@ case "${1:-status}" in
       dbp="$(ip_of karez-bench-l$l-db private)"
       echo "round $round lane $l: $clients"
       rssh "karez-bench-l$l-cl" "systemctl stop karez-campaign 2>/dev/null; systemctl reset-failed karez-campaign 2>/dev/null; \
-        systemd-run -q --unit=karez-campaign --collect -p LimitNOFILE=1048576 -p StandardOutput=append:/root/campaign.log -p StandardError=append:/root/campaign.log \
+        systemd-run -q --unit=karez-campaign --collect -p LimitNOFILE=1048576 -p StandardOutput=append:/root/campaign.log -p StandardError=append:/root/campaign.log -E XCHECK=${XCHECK:-0} \
         bash /root/karez/bench/cloud/lane-run.sh $l $round $profile $dbp '$clients'" || echo "lane $l failed to start" >&2
     done
     ;;
