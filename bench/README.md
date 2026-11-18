@@ -275,3 +275,20 @@ Limits: the round was **cut at its stop time** (4 h 24 min), so bulk scenarios r
 cell); `sqlx-tuned` and `zero-postgres` stay at n=2; no TLS bulk reads; diesel has no R2/R3/R4 or S5/S6/S8; wtx has S1 and S2 only. Rerun: gunzip each `cells.jsonl.gz`, then
 `python bench/report.py bench/results/2026-11-16-campaign2 bench/results/2026-11-18-round3` (the report is written next to the first root; the stored copy of the combined one is in the round 3 folder).
 
+
+
+### 2026-11-18, the round 3 tail and the combined report of 11 lane-rounds
+
+Results: `bench/results/2026-11-18-round3-tail/` (gzipped raw cells for lanes 1 and 3, the `run.py verify` output and pgbench cross-checks of each lane, and `REPORT.md` that combines campaign 2, round 3 and the tail:
+11 lane-rounds, 11,776 raw cells; it supersedes the report in the round 3 folder). Run by `bench/cloud/lane-tail.sh` (the `tail` profile of `lane-run.sh`; `campaign.sh` takes `LANES="1 3"`): four `c-4` droplets in `blr1`
+(lanes 1 and 3, PostgreSQL 18.7), the part of round 3 that the stop time cut off, with its own karez baselines (round label `3t`). DigitalOcean had no `c-4` in `blr1` from 10:19Z to 10:47Z, so the start waited.
+Droplets up 10:47Z, run 11:00Z to 12:40Z, deleted 12:41Z (about 1.9 hours, about $1; the safety net was not needed). `[measured here, 2026-11-18]`.
+
+What it supports: bulk scenarios on lanes 1 and 3, so karez has n=9 on bulk and n=11 on point queries, every rotated competitor n=3 (asyncpg S8 n=2); all `verify` checks and checksums matched; the pgbench cross-check
+now has 20 cells (pgbench's p50 is 54 to 115 µs above the adapter's in every cell). Numbers and reading: [docs/design/perf-program.md](../docs/design/perf-program.md) section 20. In short: the partitioned scan is
+1.33x the best other client on S4 (0.96 to 1.61, one loss in nine) and 1.65x on S8 (1.42 to 1.90); 1.9x to 2.0x tuned pgJDBC (n=3); single-connection scans are level with tokio-postgres, pgx and sqlx; the earlier
+diesel S4 figure of 0.39 was a low outlier (three runs: 0.82).
+
+Limits: no TLS bulk reads; diesel has no R2/R3/R4 or S5/S6/S8; wtx has S1 and S2 only; one profile (`lean2`); one region and one droplet class (the 1.9 Gbit/s link is the likely limit of the bulk reads, untested).
+Rerun: gunzip each `cells.jsonl.gz`, then `python bench/report.py bench/results/2026-11-18-round3-tail bench/results/2026-11-18-round3 bench/results/2026-11-16-campaign2` (written next to the first root, so it
+lands in the tail folder; do not give campaign 2 first, the report would overwrite that folder's `REPORT.md`).

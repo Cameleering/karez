@@ -570,7 +570,7 @@ Raw data and the combined `REPORT.md` (campaign 2 plus round 3, 10,645 raw cells
 2026-11-18). diesel and wtx ran in every lane (n=3 from this one round). All `run.py verify` checks passed (S2, S3, R1 to R4, identical checksums across clients), and no
 checksum mismatch or lane failure shows in the report. `[measured here, 2026-11-18]`.
 
-**Round 3 is partial.** The campaign stopped waiting at its stop time (07:45Z, 4 h 24 min) before every client finished. Bulk scenarios ran only on lane 2 (karez rows, libpq, tokio-postgres,
+**Round 3 is partial (the tail run in section 20 completed it; its combined report supersedes the n=7 bulk figures below).** The campaign stopped waiting at its stop time (07:45Z, 4 h 24 min) before every client finished. Bulk scenarios ran only on lane 2 (karez rows, libpq, tokio-postgres,
 asyncpg, pgjdbc, and diesel S4); lanes 1 and 3 have open-loop results only, and the last client of each lane has fewer scenarios (`r2dbc-postgresql` R2/R4, `psycopg3` R4). One pgjdbc S8 pass failed
 (its default heap), as in rounds 1 and 2. The row counts in the report say how many runs each figure has.
 
@@ -621,3 +621,68 @@ OLTP parity marks hold with wider evidence (n=3); the 2x over tuned pgJDBC is no
 **Not covered (still):** TLS bulk reads (no adapter); diesel R2/R3/R4 and bulk S5/S6/S8; wtx taxi, TLS and bulk (the buffer limit, section 18); a full third round (bulk on lanes 1 and 3, and the tail of each lane, were cut by the stop time, and a
 repeat would cost about $4 to $5 for six droplets); the faster network; `sqlx-tuned` and `zero-postgres` at n=3.
 
+
+
+## 20. The round 3 tail: bulk on lanes 1 and 3, and the missing clients (2026-11-18)
+
+Raw data and the combined `REPORT.md` (campaign 2, round 3 and the tail; 11 lane-rounds, 11,776 raw cells): `bench/results/2026-11-18-round3-tail/`. The report in
+`bench/results/2026-11-18-round3/` (section 19) is superseded by it. `[measured here, 2026-11-18]`.
+
+**What ran.** The owner chose "Finish round 3 bulk on droplets" and approved at most six `c-4` droplets in `blr1`, at most 6 hours, about $5 (CLAUDE.md, seventh exception). Four were needed
+(lanes 1 and 3). DigitalOcean offered no `c-4` in `blr1` from 10:19Z to 10:47Z, so the script waited and retried every five minutes. Droplets up 10:47Z, the run
+(`bench/cloud/lane-tail.sh`) 11:00Z to 12:40Z, deleted 12:41Z; the safety net was armed for 16:48Z and was not needed. Cost: about $1 (four droplets, about 1.9 hours, at the rate of the round 3 bill; not read
+from the invoice). Setup was as in section 17 (PostgreSQL 18.7, 4 vCPU client and database droplets). The tail has its own karez baselines on the fresh droplets (round label `3t`), so every ratio
+compares rows of the same lane and round only. Each lane ran `run.py verify` (all checks OK, identical checksums across clients), the clients that round 3 missed (lane 1: `zero-postgres`, `r2dbc-postgresql` R2/R4;
+lane 3: `sqlx-tuned`, `psycopg3` R4), and the bulk scenarios for the clients that had no bulk run yet (`diesel` S4 on both lanes; `sqlx`, `pgjdbc-tuned`, `r2dbc-postgresql` on lane 1; `pgx`, `vertx-pg-client`,
+`psycopg3` on lane 3). No checksum mismatch shows in the report; the three `failed` lines in it are the default pgJDBC S8 heap failures of rounds 1 and 2.
+
+**What changes in the counts.** karez has n=11 on the open-loop rows and n=9 on bulk. Every rotated competitor has n=3 on bulk and open loop, including `zero-postgres`, `sqlx-tuned`, `r2dbc-postgresql` and
+`psycopg3` R4. The one row with n=2 is asyncpg S8 (about 2 minutes a pass; skipped by design). Where a row has n=3 the 95% interval is wide (t=4.30).
+
+**Bulk reads, ratio to `karez-blocking` (row view) in the same lane and round; median, range, n=3 unless noted:**
+
+| client | S4 (1M rows) | S5 (insert, 100k) | S6 (COPY, 3M) | S8 (13.07M rows) |
+|---|---|---:|---:|---|
+| karez-blocking-part (8 connections) | **1.30 (0.99 to 1.68, n=9; t95 1.16 to 1.45)** | - | - | **1.51 (1.23 to 2.20, n=9; t95 1.34 to 1.80)** |
+| karez-blocking-chunk | 0.88 (0.63 to 1.03, n=9; t95 0.75 to 0.98) | - | - | 0.99 (0.86 to 1.32, n=9) |
+| karez-blocking-mrow | - | 1.83 (1.73 to 1.88, n=9) | - | - |
+| tokio-postgres | 0.95 (0.94 to 1.03) | 0.49 | 0.94 (0.90 to 0.96) | 0.90 (0.83 to 0.99) |
+| sqlx | 0.94 (0.75 to 1.05) | 1.70 (1.68 to 1.71) | 0.97 (0.95 to 0.98) | 1.05 (0.95 to 1.26) |
+| pgx | 1.03 (0.90 to 1.08) | 0.74 | 0.80 | 0.83 (0.74 to 1.28) |
+| libpq | 0.89 | 1.09 | 0.78 | 0.64 (0.56 to 0.69) |
+| diesel | 0.82 (0.39 to 0.94) | not run | not run | not run |
+| pgjdbc-tuned / pgjdbc | 0.81 / 0.40 | 1.20 / 0.76 | 0.80 / 0.80 | 0.73 / out of memory |
+| vertx-pg-client | 0.57 | 0.76 | not run | not run |
+| r2dbc-postgresql | 0.29 | not run | not run | not run |
+| asyncpg / psycopg3 | 0.26 / 0.30 | 1.16 / 0.37 | 0.60 / 0.48 | 0.10 (n=2) / 0.12 |
+
+Reading: on one connection karez-blocking is **level with tokio-postgres, pgx and sqlx on the scans** and ahead of the Java, Python and r2dbc clients. The chunk path is about 12% slower than the row view on S4 (the
+interval stays below 1) and level on S8; its CPU per million rows is lower (0.40 against 0.42 on S4, 0.56 against 0.73 on S8). On S5 sqlx is 1.70x karez's per-row path and the multi-row path is 1.83x, so
+karez's multi-row insert is about 1.07x sqlx: level, not the plan's 1.3x. **The earlier diesel S4 figure (0.39, one run on lane 2) was a low outlier: three runs give 0.82 (0.39 to 0.94)**; the cause of the slow
+run was not investigated.
+
+**The partitioned scan against the best other client in the same lane and round (nine lane-rounds):**
+
+- **S4:** 1.33x median (0.96 to 1.61; t95 of the mean 1.18 to 1.49). One loss: 0.96 of tokio-postgres (round 3, lane 2). The ratios by lane-round: 1.31, 1.09, 1.47, 1.31, 1.61, 0.96, 1.50, 1.33, 1.45.
+- **S8:** 1.65x median (1.42 to 1.90; t95 1.49 to 1.73). The ratios: 1.52, 1.65, 1.71, 1.67, 1.46, 1.90, 1.42, 1.44, 1.72. (Section 19 gave 1.31x and 1.52x at n=7; two more lane-rounds raise the medians; the ranges
+  did not move.)
+- **Against tuned pgJDBC** (the three lane-rounds where both ran): **1.86x on S4 (1.59 to 2.08) and 2.05x on S8 (1.91 to 2.48)**, and 2.6x to 3.1x default pgJDBC on S4. Tuned pgJDBC ran bulk in only three lane-rounds (S8: 545,276, 661,316 and 705,860 rows per second), each paired with the
+  karez run of the same lane and round. These ratios are higher than the earlier "about 1.7x" (section 17), which came from medians of other rounds; at n=3 read them as "about 1.6x to 2.5x".
+- **The rate is the same in every lane:** the partitioned scan read 1.34 to 1.36 million rows per second on S8 in all nine lane-rounds. A rate that does not move across lanes and rounds, with the database host not
+  saturated, points at the 1.9 Gbit/s link (section 8), not at the client. That is a likely reading and **still untested**; the faster-network test is parked.
+
+**Open-loop rows that moved with n=3 (64 connections, ratio to karez-blocking; p99 bound 2 ms for S1, S2, S7, 8 ms for R2 and R4):** `zero-postgres` S1 0.97 (0.80 to 1.09), S2 0.96 (0.80 to 1.18), at one connection
+0.87 and at 512 connections 0.86; `sqlx-tuned` S1 0.55, S2 0.69, S7 0.63 (about two thirds of karez-blocking or less); `r2dbc-postgresql` R2 0.15 and R4 0.18, with 6 to 7 times the CPU per
+request; `psycopg3` R4 0.07. All other rows keep the section 19 reading. With n=11, **karez-shared is 0.89 of karez-blocking on S1 at 64 connections (0.70 to 0.98; t95 0.78 to 0.92)** and 0.94 on S2 (t95 0.89 to
+0.97): about 6% to 11% behind unpipelined, at about 1.8x the CPU per request. Pipelined R1 at 8 connections is unchanged: tokio-postgres 1.10x karez-shared (n=3, t95 0.97 to 1.25).
+
+**pgbench cross-check on droplets, now 20 cells** (the 12 of the smoke round plus 8 in the tail: S1 and S2, 8 connections, open loop at 1,000 and 2,000 per second, 20 s): pgbench's p50 is 54 to 115 µs above the libpq
+adapter's p50 in every cell (tail: 359 against 264 µs on lane 1, S1 at 1,000 per second; 348 against 268 µs on lane 3), and its p99 and p99.9 are higher in every tail cell (p99: 822 against 420 µs, 601 against 375 µs, ...).
+pgbench's client is the slower of the two, so the adapter does not understate latency relative to the standard tool. Still two rates per machine class and one 20-second run per cell; it does not calibrate p99.9.
+Files: `bench/results/2026-11-18-round3-tail/lane*/out/lane*-round4-tail/crosscheck-s1.txt` and `crosscheck-s2.txt`.
+
+**What this changes in the gate (plan section 1.3):** nothing that was open is cleared. The S4 mark (2x the best Rust row API) is **not met on the 1.9 Gbit/s link** (1.33x on S4 with one loss in nine, 1.65x on S8); the
+3x over tuned pgJDBC is not met either (1.9x on S4, 2.0x on S8, n=3); the OLTP parity marks hold with wider evidence; the 2x over tuned pgJDBC on S2 is not met (server-bound). The faster-network test stays parked.
+
+**Not covered (still):** TLS bulk reads (no adapter); diesel R2/R3/R4 and bulk S5/S6/S8; wtx taxi, TLS and bulk (section 18); a third asyncpg S8 run; the faster network; a different region or a faster droplet class for the
+bulk reads; a profile other than `lean2`.

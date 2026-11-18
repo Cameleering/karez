@@ -42,7 +42,7 @@ for profile in "${PROFILES[@]}"; do
     states=""
     busy=0
     gone=0
-    for l in 1 2 3; do
+    for l in ${LANES:-1 2 3}; do
       s="$(lane_state $l)"; states="$states $l=$s"
       case "$s" in active|activating) busy=1 ;; unreachable) gone=1 ;; esac
     done

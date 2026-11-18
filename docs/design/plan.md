@@ -113,14 +113,14 @@ architecture is not worth a new crate family. Do option C instead: a thin standa
 over tokio-postgres, contributing the chunk decoder to it. Everything else in this plan is
 conditional on this gate.
 
-**Where the gate stands (2026-11-18; campaign 2 plus a partial round 3: three lanes, three rounds, karez n=9, competitors n=3, bulk n=7, so still indicative; details and sources in
+**Where the gate stands (2026-11-18; campaign 2, round 3 and its tail run: three lanes, three rounds, karez n=11 on point queries and n=9 on bulk, competitors n=3, so still indicative; details and sources in
 [perf-program.md](perf-program.md)):**
 
 | row of the gate | measured | state |
 |---|---|---|
 | S1/S2 one connection, within 5% of the fastest Rust client | karez-blocking at 0.88 to 1.07 of a raw pre-encoded floor (three droplet pairs); level with tokio-postgres, pgx, deadpool in the open-loop runs | **met** |
 | S2 at 64 connections, within 5% of the fastest; at least 2x tuned pgJDBC | within one search step of the best (the database host is 85% busy, server-bound); about 1.1x to 1.2x tuned pgJDBC (rounds 1 to 3: 0.89 and 0.81 of karez), **not 2x** | parity met; the 2x over pgJDBC **not met** (server-bound) |
-| S4 chunk path at least 2x the best Rust row API | 1.0x on one connection; with `scan_partitioned` **1.3x (S4, 1M rows; 0.96 to 1.61, one loss) and 1.5x (S8, 13M rows; 1.42 to 1.90) the best other client in the same lane and round** on DigitalOcean `c-4` (1.9 Gbit/s link, the limit; campaign 2, three lanes, two rounds) and 2.4x (S4) to 3.4x (S8) with no network limit (WSL, loopback) | **not met on the available network; met without a network limit.** A faster two-machine network is the deciding test and is parked by the owner |
+| S4 chunk path at least 2x the best Rust row API | 1.0x on one connection; with `scan_partitioned` **1.33x (S4, 1M rows; 0.96 to 1.61, one loss) and 1.65x (S8, 13M rows; 1.42 to 1.90) the best other client in the same lane and round (n=9)** on DigitalOcean `c-4` (1.9 Gbit/s link, the limit; campaign 2, round 3 and its tail, three lanes, three rounds), and 1.9x to 2.0x tuned pgJDBC (n=3; the plan wants 3x) and 2.4x (S4) to 3.4x (S8) with no network limit (WSL, loopback) | **not met on the available network; met without a network limit.** A faster two-machine network is the deciding test and is parked by the owner |
 | S4 row view within 15% of the chunk path | CPU equal (0.35 s against 0.36 s); wall difference was noise | met (CPU) |
 | client CPU | about half of tokio-postgres on S8 (6 to 7.7 CPU-s against 12 to 14), 14% below on S1 | met, not a gate row |
 | size, dependencies | zero third-party dependencies (the tree is `karez`, `karez-pg`, `karez-chunk`, `karez-proto-pg`); stripped blocking hello-world **441 KiB** (LTO, `opt-level="s"`, `panic="abort"`) or **483 KiB** (`opt-level=3`), against 282 and 296 KiB for an empty `println!` binary; tokio-postgres hello-world 824 and 940 KiB (68 crates in its tree), sqlx 1,060 KiB (147 crates, `opt-level="s"` only) | **met** (at most 600 KB); diesel 6,157 KiB (static libpq and OpenSSL), wtx 995 KiB and rusqlite 1,317 KiB (SQLite, not PostgreSQL) measured on 2026-11-18 with the same profile (perf-program.md section 18) |
