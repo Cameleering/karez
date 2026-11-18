@@ -257,5 +257,5 @@ other client on a 1.9 Gbit/s link; `insert_batch` ahead of every other client; t
 
 Limits: default pgjdbc ran out of memory on S8 in both rounds (it buffers the result; a result, not a harness fault); competitors have n=2,
 so the ranges are wide; the S8 rate of the partitioned scan is the same in all lanes, which points at the link, not proven here; the
-pgbench cross-check was not rerun on droplets; diesel, rusqlite and wtx are not in the client set; no TLS runs; one profile only.
+pgbench cross-check was not rerun on droplets; diesel and wtx were not in the client set (adapters added 2026-11-18, perf-program.md section 18); TLS ran only as S7 (S2 over TLS, 64 connections), not for bulk reads; one profile only.
 Rerun the report with `gunzip` of each `cells.jsonl.gz` and `python bench/report.py bench/results/2026-11-16-campaign2`.

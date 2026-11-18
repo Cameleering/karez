@@ -8,6 +8,10 @@ mod bulk;
 mod bulk_async;
 mod bulk_karez;
 mod clients;
+#[cfg(feature = "diesel-client")]
+mod diesel_client;
+#[cfg(feature = "wtx-client")]
+mod wtx_client;
 mod hist;
 
 use hist::Hist;

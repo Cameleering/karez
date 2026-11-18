@@ -526,5 +526,38 @@ row API) is **still not met on a 1.9 Gbit/s link**: 1.3x on the 1M-row scan and 
 (section 10). The OLTP marks stand as they were: parity with the best clients met, 2x tuned pgJDBC not met. The pending item is the same:
 a faster two-machine network (parked by the owner on 2026-11-16).
 
-**Not covered:** the pgbench cross-check on droplets; diesel, rusqlite and wtx (not in the client set); a third round (budget); confidence intervals
-(n=2 for competitors, so ranges are shown instead); the TLS path (all runs plain).
+**Not covered:** the pgbench cross-check on droplets; diesel and wtx (adapters written on 2026-11-18, section 18; rusqlite is SQLite, so only its binary size is compared); a third round (budget); confidence intervals
+(n=2 for competitors, so ranges are shown instead); TLS bulk reads. (An earlier version of this note said no TLS ran: S7, the S2 query over TLS at 64 connections,
+did run. karez-blocking 47,067 per second; tokio-postgres 0.99, libpq 0.98, karez-shared 0.97, pgx 0.95, tuned pgJDBC 0.68, tuned sqlx 0.64 of it.)
+
+## 18. diesel and wtx added; hello-world sizes (2026-11-18, local, no droplets)
+
+Written and checked locally (WSL, PostgreSQL 18 in a container); not yet run on droplets.
+
+**Adapters** (`bench/rustbench/src/diesel_client.rs`, `wtx_client.rs`; cargo features `diesel-client` and `wtx-client`, on by default;
+entries in `clients.json` with a new `scenarios` allow-list that `run.py` honours in sweeps and in `verify`):
+
+| client | what it is | scenarios | not covered |
+|---|---|---|---|
+| `diesel` | diesel 2.4 over libpq built from source (`pq-sys` with `bundled`, OpenSSL vendored, so the same libpq on every machine); one connection per worker, no pool; statement cache on | S1, S2, S7 (libpq does `sslmode=verify-full`; untested locally), R1, S4 (row by row, libpq single-row mode) | R2/R3/R4 (a repeated parameter does not map onto `sql().bind()` without changing the statement), pipelining (diesel has none), S5/S6/S8 |
+| `wtx` | wtx 0.52 PostgreSQL client, a blocking `TcpStream` per worker on wtx's own `StdRuntime`, plaintext, SCRAM through its `crypto-ring` backend | S1, S2 | taxi scenarios (timestamp decoding not wired), TLS, pool, pipelining, **all bulk**: `execute_stmt_many` keeps the whole result in its read buffer and failed the 1M-row S4 result with `NetError(ForbiddenClear)` at the default limit; no streaming call was found |
+
+`run.py verify` (one worker, same request sequence, checksums compared) passes for karez-blocking, diesel, wtx and tokio-postgres on S1 and S2, and for
+diesel on R1; the S4 checksum of diesel equals karez-blocking's. Neither adapter has a number yet; a smoke run on droplets is the first. On the 1M-row S4 pass, locally, diesel used about 1.8x the CPU of karez-blocking (0.49 against 0.27 CPU-s per pass) in about the same time; WSL shares CPUs, so that is an observation, not a result.
+
+**Hello-world sizes** (blocking connect and `SELECT 1`, stripped, LTO, `codegen-units=1`, `panic="abort"`; `[measured here, 2026-11-18]`, same profile as the
+karez, tokio-postgres and sqlx figures in plan 1.3; "crates" is `cargo tree -e normal` lines, root included):
+
+| binary | `opt-level="s"` | `opt-level=3` | crates |
+|---|---:|---:|---:|
+| empty `println!` | 282 KiB | 296 KiB | 1 |
+| karez (PostgreSQL, no TLS) | 441 KiB | 483 KiB | 5 (none third-party) |
+| rusqlite (bundled SQLite, **not PostgreSQL**) | 1,317 KiB | 2,189 KiB | 10 |
+| wtx (PostgreSQL, plaintext) | 995 KiB | 1,165 KiB | 14 |
+| diesel (PostgreSQL, libpq and OpenSSL linked statically) | 6,157 KiB | 6,218 KiB | 32 |
+
+diesel's figure is large because libpq and OpenSSL are inside the binary. With a system libpq linked dynamically the executable would be much smaller but
+depends on a shared library; that variant was not measured (no libpq headers on the build machine). The crate counts of the earlier tokio-postgres (68) and sqlx (147)
+figures came from the same kind of tree listing, but were not recounted with this command.
+
+**Still open after this:** the droplet run of both adapters, S7 for diesel, a third round of the main set with confidence intervals, pgbench on droplets, TLS bulk reads.

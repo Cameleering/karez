@@ -429,6 +429,8 @@ def cmd_verify(a):
                 continue
             if sc.startswith("r") and c == "zero-postgres":
                 continue
+            if CLIENTS[c].get("scenarios") and sc not in CLIENTS[c]["scenarios"]:
+                continue
             # R3 is server-bound (tens of ms per query): a low rate, or the number of finished requests differs
             raw = run_cell(a, c, sc, "unpipelined", 1, 20 if sc == "r3" else 200, 4, 1, 0, "shared")
             if raw.get("failed"):
@@ -533,6 +535,8 @@ def cmd_campaign(a):
             if mode not in spec["modes"]:
                 continue
             if sc.startswith("r") and not spec.get("taxi", True):
+                continue
+            if spec.get("scenarios") and sc not in spec["scenarios"]:
                 continue
             if pool and not spec.get("pool"):
                 continue

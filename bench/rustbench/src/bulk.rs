@@ -155,6 +155,8 @@ pub fn run(cfg: &Cfg) -> Option<String> {
         "karez-blocking-part" => crate::bulk_karez::run_part(cfg),
         "tokio-postgres" => crate::bulk_async::tokio_pg(cfg),
         "sqlx" | "sqlx-tuned" => crate::bulk_async::sqlx_(cfg),
+        #[cfg(feature = "diesel-client")]
+        "diesel" => crate::diesel_client::bulk(cfg),
         other => die(&format!("{other}: no bulk adapter (karez-blocking, karez-blocking-chunk, tokio-postgres, sqlx)")),
     };
     Some(report(cfg, &version, &passes))

@@ -37,6 +37,10 @@ pub fn run(client: &str, sh: Arc<Shared>) -> String {
         "zero-postgres" => zero_pg(sh),
         "sqlx" => sqlx_client(sh, false),
         "sqlx-tuned" => sqlx_client(sh, true),
+        #[cfg(feature = "diesel-client")]
+        "diesel" => crate::diesel_client::run(sh),
+        #[cfg(feature = "wtx-client")]
+        "wtx" => crate::wtx_client::run(sh),
         other => die(&format!(
             "unknown client {other} (karez-blocking, karez-shared, tokio-postgres, deadpool-postgres, zero-postgres, sqlx, sqlx-tuned)"
         )),
@@ -47,13 +51,13 @@ pub fn run(client: &str, sh: Arc<Shared>) -> String {
 
 type SyncRx = Arc<Mutex<mpsc::Receiver<u64>>>;
 
-enum SyncSrc {
+pub enum SyncSrc {
     Open(SyncRx),
     Closed,
 }
 
 impl SyncSrc {
-    fn next(&self, sh: &Shared) -> Option<u64> {
+    pub fn next(&self, sh: &Shared) -> Option<u64> {
         match self {
             SyncSrc::Open(rx) => rx.lock().unwrap().recv().ok(),
             SyncSrc::Closed => {
@@ -65,7 +69,7 @@ impl SyncSrc {
 }
 
 /// Queues for `workers` threads. Returns the senders (for the generator) and a source per worker.
-fn sync_queues(sh: &Shared, workers: usize) -> (Vec<mpsc::Sender<u64>>, Vec<SyncSrc>) {
+pub fn sync_queues(sh: &Shared, workers: usize) -> (Vec<mpsc::Sender<u64>>, Vec<SyncSrc>) {
     if sh.cfg.rate == 0.0 {
         return (Vec::new(), (0..workers).map(|_| SyncSrc::Closed).collect());
     }
@@ -83,7 +87,7 @@ fn sync_queues(sh: &Shared, workers: usize) -> (Vec<mpsc::Sender<u64>>, Vec<Sync
     (txs, srcs)
 }
 
-fn run_generator(sh: &Shared, txs: Vec<mpsc::Sender<u64>>) {
+pub fn run_generator(sh: &Shared, txs: Vec<mpsc::Sender<u64>>) {
     if txs.is_empty() {
         // closed loop: just let the window pass
         std::thread::sleep(Duration::from_nanos(sh.end_ns.saturating_sub(sh.now_ns())));
