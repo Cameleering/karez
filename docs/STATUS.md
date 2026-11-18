@@ -48,6 +48,10 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - **Names:** reserve `karez` and `karez-*` on crates.io, PyPI and npm now, as minimal placeholders. **crates.io done 2026-11-16** (`karez`, `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, version 0.0.1, no code; the owner told me to publish them with the existing cargo login). **npm and PyPI not done**: there is no login on this machine (`npm whoami` fails, no PyPI token); the packages are built and checked in `packaging/placeholders/`, and need the owner to log in. Planned names beyond these five (`karez-odbc`, `karez-adbc`, `karez-jdbc`, ...) are not reserved: crates.io forbids squatting, so reserve each when it has code.
 - **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
 
+## Milestone 1 (started 2026-11-18)
+
+The owner moved the project from Milestone 0 to Milestone 1 on 2026-11-18 and chose to start with the core API and the fuzz and differential harnesses. The plan, refined against the code, is [design/m1-plan.md](design/m1-plan.md). Step 1 is done: SQLSTATE class and a transient flag on errors, and a std-only mutation fuzzer for every server-to-client parser (400,000 mutated streams per target in release mode, no panic; not coverage-guided). Next: step 2, multi-host URLs and `target_session_attrs`. One decision for the owner is open: keep `Pool` inside `karez-pg` through M1 and extract `karez-pool` and the driver traits at the start of M2 (m1-plan.md section 3).
+
 ## Next steps
 
 - [ ] Fix the logo tagline and the social preview caption, and make the unlabelled social image

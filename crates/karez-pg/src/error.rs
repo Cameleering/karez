@@ -21,6 +21,27 @@ impl ServerError {
         &self.0.code
     }
 
+    /// The two-character SQLSTATE class, for example `23` (integrity constraint violation) or
+    /// `40` (transaction rollback). Empty if the server sent no code.
+    pub fn class(&self) -> &str {
+        self.0.code.get(..2).unwrap_or("")
+    }
+
+    /// True if the same statement may succeed when tried again, on this connection or a new
+    /// one, without the caller changing anything: a serialization failure or deadlock (`40001`,
+    /// `40P01`), a connection exception (class `08`), insufficient resources (class `53`), a lock
+    /// that could not be taken (`55P03`), a server that is shutting down or not yet accepting
+    /// connections (`57P01`, `57P02`, `57P03`), or a write sent to a read-only server after a
+    /// failover (`25006`). Everything else, including constraint violations and syntax errors,
+    /// is not transient. This is a hint for a retry loop, not a promise: the caller still decides
+    /// whether the statement is safe to repeat (an `INSERT` whose commit outcome is unknown is not).
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self.0.code.as_str(),
+            "40001" | "40P01" | "55P03" | "57P01" | "57P02" | "57P03" | "25006"
+        ) || matches!(self.class(), "08" | "53")
+    }
+
     /// The primary message from the server.
     pub fn message(&self) -> &str {
         &self.0.message
@@ -93,6 +114,43 @@ impl Error {
         match self {
             Error::Server(e) => Some(e.sqlstate()),
             _ => None,
+        }
+    }
+
+    /// The two-character SQLSTATE class if this is a server error.
+    pub fn sqlstate_class(&self) -> Option<&str> {
+        match self {
+            Error::Server(e) => Some(e.class()),
+            _ => None,
+        }
+    }
+
+    /// True if repeating the operation, on a new connection if this one is gone, can succeed
+    /// without any change by the caller. See [`ServerError::is_transient`] for the server codes.
+    /// Socket errors that mean the peer or the path went away (reset, aborted, broken pipe,
+    /// refused, timed out, end of file) and a connection closed by the server count too.
+    /// Configuration, authentication, TLS verification, protocol, type and usage errors do not:
+    /// they repeat identically.
+    ///
+    /// A transient error is not a licence to retry blindly. If the error came after a commit or a
+    /// non-idempotent statement was sent, the outcome is unknown, and only the caller can tell
+    /// whether to repeat it.
+    pub fn is_transient(&self) -> bool {
+        use std::io::ErrorKind as K;
+        match self {
+            Error::Server(e) => e.is_transient(),
+            Error::Io(e) => matches!(
+                e.kind(),
+                K::ConnectionReset
+                    | K::ConnectionAborted
+                    | K::BrokenPipe
+                    | K::ConnectionRefused
+                    | K::TimedOut
+                    | K::UnexpectedEof
+                    | K::WouldBlock
+            ),
+            Error::Closed => true,
+            _ => false,
         }
     }
 
@@ -169,3 +227,73 @@ impl From<ChunkError> for Error {
 
 /// Result alias for this crate.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(code: &str) -> Error {
+        Error::Server(ServerError::new(ErrorFields {
+            severity: "ERROR".into(),
+            code: code.into(),
+            message: "m".into(),
+            ..ErrorFields::default()
+        }))
+    }
+
+    #[test]
+    fn class_is_the_first_two_characters() {
+        assert_eq!(server("23505").sqlstate_class(), Some("23"));
+        assert_eq!(server("40P01").sqlstate_class(), Some("40"));
+        assert_eq!(server("").sqlstate_class(), Some(""));
+        assert_eq!(Error::Closed.sqlstate_class(), None);
+    }
+
+    #[test]
+    fn transient_server_codes() {
+        for code in [
+            "40001", "40P01", "08000", "08006", "08P01", "53000", "53100", "53200", "53300",
+            "53400", "55P03", "57P01", "57P02", "57P03", "25006",
+        ] {
+            assert!(server(code).is_transient(), "{code} should be transient");
+        }
+    }
+
+    #[test]
+    fn permanent_server_codes() {
+        for code in [
+            "23505", "23503", "23502", "42601", "42P01", "42703", "22012", "22P02", "28000",
+            "28P01", "3D000", "57014", "XX000", "0A000", "42501", "",
+        ] {
+            assert!(
+                !server(code).is_transient(),
+                "{code} should not be transient"
+            );
+        }
+    }
+
+    #[test]
+    fn non_server_errors() {
+        use std::io::{Error as IoError, ErrorKind as K};
+        for k in [
+            K::ConnectionReset,
+            K::ConnectionAborted,
+            K::BrokenPipe,
+            K::ConnectionRefused,
+            K::TimedOut,
+            K::UnexpectedEof,
+        ] {
+            assert!(Error::Io(IoError::from(k)).is_transient(), "{k:?}");
+        }
+        assert!(!Error::Io(IoError::from(K::PermissionDenied)).is_transient());
+        assert!(!Error::Io(IoError::from(K::InvalidData)).is_transient());
+        assert!(Error::Closed.is_transient());
+        assert!(!Error::Broken.is_transient());
+        assert!(!Error::Auth("x".into()).is_transient());
+        assert!(!Error::Config("x".into()).is_transient());
+        assert!(!Error::Tls("x".into()).is_transient());
+        assert!(!Error::Usage("x").is_transient());
+        assert!(!Error::Value("x".into()).is_transient());
+        assert!(!Error::Caller(IoError::from(K::BrokenPipe)).is_transient());
+    }
+}
