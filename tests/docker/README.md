@@ -43,3 +43,18 @@ Every server has TLS on with a throwaway CA generated at start and written to `t
 KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 \
   cargo test -p karez-pg -p karez-rt --features karez-pg/tls,karez-rt/tls
 ```
+
+## Windows
+
+Docker runs in WSL here, and a Windows process reaches `127.0.0.1:54316` through the WSL localhost relay. **The relay stalls when a test sends and receives
+several hundred KiB at the same time.** Two tests do that on purpose and fail on Windows through the relay: `execute_many_does_not_deadlock_when_requests_and_results_are_both_large`
+and `a_failing_statement_in_a_large_batch_leaves_the_connection_usable` (they hang for about a minute, then the connection is reset). The code is not at fault: a plain Python echo server
+stalls the same way through the relay at about 190 KB of two-way traffic and passes 20 MB inside WSL; and both tests pass in 0.25 s on Windows when the traffic goes to the WSL VM's own address
+(checked 2026-11-18, PostgreSQL 16 container, Windows 11, WSL2). On Windows run the suite with the script, which starts `forward.py` in WSL and points `KAREZ_TEST_PG` at it:
+
+```powershell
+powershell -File tests/docker/windows-test.ps1                                   # cargo test --workspace
+powershell -File tests/docker/windows-test.ps1 test -p karez-pg --test pg_integration
+```
+
+The TLS tests check the server name `localhost`, so run those through the relay address as shown above; their traffic is small. Or run the whole suite inside WSL, where none of this applies.

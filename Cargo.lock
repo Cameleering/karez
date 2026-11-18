@@ -62,10 +62,15 @@ name = "karez-pg"
 version = "0.0.0"
 dependencies = [
  "karez-chunk",
+ "karez-pool",
  "karez-proto-pg",
  "rustls",
  "webpki-roots",
 ]
+
+[[package]]
+name = "karez-pool"
+version = "0.0.0"
 
 [[package]]
 name = "karez-proto-pg"
