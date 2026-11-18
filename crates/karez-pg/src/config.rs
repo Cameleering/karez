@@ -50,13 +50,83 @@ pub enum SslMode {
     VerifyFull,
 }
 
+/// What a session must be like for [`Config::target_session_attrs`] to accept the host
+/// (libpq's `target_session_attrs`). A server is a standby if it reports `in_hot_standby = on`
+/// (PostgreSQL 14 and later; older servers are asked with `SELECT pg_is_in_recovery()`). A session
+/// is read-only if the server is a standby or `default_transaction_read_only` is `on` (older
+/// servers are asked with `SHOW transaction_read_only`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TargetSessionAttrs {
+    /// Any host will do (default).
+    #[default]
+    Any,
+    /// The session accepts writes.
+    ReadWrite,
+    /// The session does not accept writes.
+    ReadOnly,
+    /// The host is not a standby.
+    Primary,
+    /// The host is a standby.
+    Standby,
+    /// Prefer a standby: try every host for one, then fall back to any host.
+    PreferStandby,
+}
+
+impl TargetSessionAttrs {
+    /// The URL spelling, for example `read-write`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetSessionAttrs::Any => "any",
+            TargetSessionAttrs::ReadWrite => "read-write",
+            TargetSessionAttrs::ReadOnly => "read-only",
+            TargetSessionAttrs::Primary => "primary",
+            TargetSessionAttrs::Standby => "standby",
+            TargetSessionAttrs::PreferStandby => "prefer-standby",
+        }
+    }
+
+    fn parse(v: &str) -> Result<Self> {
+        Ok(match v {
+            "any" => TargetSessionAttrs::Any,
+            "read-write" => TargetSessionAttrs::ReadWrite,
+            "read-only" => TargetSessionAttrs::ReadOnly,
+            "primary" => TargetSessionAttrs::Primary,
+            "standby" => TargetSessionAttrs::Standby,
+            "prefer-standby" => TargetSessionAttrs::PreferStandby,
+            other => {
+                return Err(Error::Config(format!(
+                    "unknown target_session_attrs {other:?}; use any, read-write, read-only, primary, standby or prefer-standby"
+                )))
+            }
+        })
+    }
+}
+
+/// In which order the hosts of a multi-host configuration are tried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoadBalance {
+    /// In the order written (default).
+    #[default]
+    Disable,
+    /// In a random order, chosen again for every connection.
+    Random,
+}
+
 /// Connection settings.
 #[derive(Clone)]
 pub struct Config {
-    /// Host name or IP address.
+    /// Host name or IP address of the first host (see [`Config::hosts`] for all of them).
     pub host: String,
-    /// TCP port.
+    /// TCP port of the first host.
     pub port: u16,
+    /// More hosts to try after `host:port`, in order, if it cannot be reached or does not
+    /// satisfy [`Config::target_session_attrs`]. Empty for a single-host configuration.
+    pub fallback_hosts: Vec<(String, u16)>,
+    /// What a session must be like to be accepted. Checked on every host before the connection
+    /// is returned, from the server's reported parameters where it sends them.
+    pub target_session_attrs: TargetSessionAttrs,
+    /// The order in which hosts are tried.
+    pub load_balance_hosts: LoadBalance,
     /// User name.
     pub user: String,
     /// Database name.
@@ -89,6 +159,9 @@ impl fmt::Debug for Config {
         f.debug_struct("Config")
             .field("host", &self.host)
             .field("port", &self.port)
+            .field("fallback_hosts", &self.fallback_hosts)
+            .field("target_session_attrs", &self.target_session_attrs)
+            .field("load_balance_hosts", &self.load_balance_hosts)
             .field("user", &self.user)
             .field("database", &self.database)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
@@ -112,6 +185,9 @@ impl Config {
         Config {
             host: host.into(),
             port,
+            fallback_hosts: Vec::new(),
+            target_session_attrs: TargetSessionAttrs::Any,
+            load_balance_hosts: LoadBalance::Disable,
             database: user.clone(),
             user,
             password: None,
@@ -127,6 +203,20 @@ impl Config {
         }
     }
 
+    /// Every host to try, the first one first: `host:port` followed by the fallback hosts.
+    pub fn hosts(&self) -> Vec<(String, u16)> {
+        let mut v = Vec::with_capacity(1 + self.fallback_hosts.len());
+        v.push((self.host.clone(), self.port));
+        v.extend(self.fallback_hosts.iter().cloned());
+        v
+    }
+
+    /// Add a host to try after the ones already configured.
+    pub fn add_host(&mut self, host: impl Into<String>, port: u16) -> &mut Self {
+        self.fallback_hosts.push((host.into(), port));
+        self
+    }
+
     /// Set the password.
     pub fn password(&mut self, password: &str) -> &mut Self {
         self.password = Some(Secret::new(password.as_bytes()));
@@ -138,12 +228,15 @@ impl Config {
     }
 
     /// Parse a connection URL: `karez:pg://`, `postgresql://` or `postgres://`, then
-    /// `user[:password]@host[:port]/database?key=value&...`.
+    /// `user[:password]@host[:port][,host[:port]...]/database?key=value&...`. A comma-separated
+    /// host list is tried in order (or at random with `load_balance_hosts=random`).
     ///
     /// Recognised keys: `sslmode` (`disable`, `require`, `verify-ca`, `verify-full`; default
     /// `verify-full`), `sslrootcert` (a PEM file or `system`), `application_name`, `connect_timeout` and
     /// `read_timeout` (seconds), `auth` (comma list of `scram`, `password`, `trust`),
-    /// `unsupported_types` (`error` or `text`). Any other key is an error: nothing in a URL can
+    /// `unsupported_types` (`error` or `text`), `target_session_attrs` (`any`, `read-write`,
+    /// `read-only`, `primary`, `standby`, `prefer-standby`) and `load_balance_hosts` (`disable` or
+    /// `random`). Any other key is an error: nothing in a URL can
     /// load code or open a file.
     pub fn from_url(url: &str) -> Result<Config> {
         let rest = ["karez:pg://", "postgresql://", "postgres://"]
@@ -177,16 +270,22 @@ impl Config {
         if user.is_empty() {
             return Err(Error::Config("URL has no user name".into()));
         }
-        let (host, port) = split_host_port(hostport)?;
-        let mut cfg = Config::new(
-            if host.is_empty() {
-                "localhost".to_string()
-            } else {
-                host
-            },
-            port,
-            user,
-        );
+        let mut hostlist = Vec::new();
+        for h in hostport.split(',') {
+            let (host, port) = split_host_port(h)?;
+            hostlist.push((
+                if host.is_empty() {
+                    "localhost".to_string()
+                } else {
+                    host
+                },
+                port,
+            ));
+        }
+        let mut hostlist = hostlist.into_iter();
+        let (host, port) = hostlist.next().expect("split always yields one item");
+        let mut cfg = Config::new(host, port, user);
+        cfg.fallback_hosts = hostlist.collect();
         if let Some(p) = password {
             cfg.password = Some(Secret::new(percent_decode(p)?.into_bytes()));
         }
@@ -241,6 +340,20 @@ impl Config {
                         }
                         cfg.auth = p;
                     }
+                    "target_session_attrs" => {
+                        cfg.target_session_attrs = TargetSessionAttrs::parse(&v)?
+                    }
+                    "load_balance_hosts" => {
+                        cfg.load_balance_hosts = match v.as_str() {
+                            "disable" => LoadBalance::Disable,
+                            "random" => LoadBalance::Random,
+                            other => {
+                                return Err(Error::Config(format!(
+                                    "unknown load_balance_hosts {other:?}; use disable or random"
+                                )))
+                            }
+                        }
+                    }
                     "unsupported_types" => {
                         cfg.unsupported_types = match v.as_str() {
                             "error" => UnsupportedTypes::Error,
@@ -272,9 +385,6 @@ fn secs(key: &str, v: &str) -> Result<Duration> {
 }
 
 fn split_host_port(s: &str) -> Result<(String, u16)> {
-    if s.contains(',') {
-        return Err(Error::Config("multiple hosts are not supported".into()));
-    }
     let (host, port) = if let Some(rest) = s.strip_prefix('[') {
         let (h, after) = rest
             .split_once(']')
@@ -377,7 +487,10 @@ mod tests {
             "postgresql://h/d",         // no user
             "postgresql://u@h:0/d",     // port 0
             "postgresql://u@h:99999/d", // port range
-            "postgresql://u@h1,h2/d",   // multi host
+            "postgresql://u@h1,h2:0/d", // port 0 on the second host
+            "postgresql://u@h1,h2:x/d", // bad port on the second host
+            "postgresql://u@h/d?target_session_attrs=sometimes",
+            "postgresql://u@h/d?load_balance_hosts=often",
             "postgresql://u@h/d?sslmode=sometimes",
             "postgresql://u@h/d?sslmode=",
             "postgresql://u@h/d?sslrootcert=",
@@ -388,6 +501,44 @@ mod tests {
         ] {
             assert!(Config::from_url(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn parses_several_hosts_and_session_attrs() {
+        let c = Config::from_url(
+            "postgresql://u:p@a.example:5433,[::1],b.example:6000/d?target_session_attrs=read-write&load_balance_hosts=random&sslmode=disable",
+        )
+        .unwrap();
+        assert_eq!((c.host.as_str(), c.port), ("a.example", 5433));
+        assert_eq!(
+            c.fallback_hosts,
+            vec![("::1".to_string(), 5432), ("b.example".to_string(), 6000)]
+        );
+        assert_eq!(c.hosts().len(), 3);
+        assert_eq!(c.target_session_attrs, TargetSessionAttrs::ReadWrite);
+        assert_eq!(c.load_balance_hosts, LoadBalance::Random);
+        // a single host keeps the old shape
+        let c = Config::from_url("postgresql://u@h/d").unwrap();
+        assert!(c.fallback_hosts.is_empty());
+        assert_eq!(c.target_session_attrs, TargetSessionAttrs::Any);
+        assert_eq!(c.load_balance_hosts, LoadBalance::Disable);
+        // every spelling round-trips
+        for a in [
+            TargetSessionAttrs::Any,
+            TargetSessionAttrs::ReadWrite,
+            TargetSessionAttrs::ReadOnly,
+            TargetSessionAttrs::Primary,
+            TargetSessionAttrs::Standby,
+            TargetSessionAttrs::PreferStandby,
+        ] {
+            assert_eq!(TargetSessionAttrs::parse(a.as_str()).unwrap(), a);
+        }
+        // the password never appears, however many hosts
+        let dbg = format!(
+            "{:?}",
+            Config::from_url("postgresql://u:hunter2@a,b/d").unwrap()
+        );
+        assert!(!dbg.contains("hunter2"));
     }
 
     #[test]

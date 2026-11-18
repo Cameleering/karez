@@ -28,7 +28,7 @@ mod tls;
 mod transport;
 mod tx;
 
-pub use config::{AuthPolicy, Config, SslMode, UnsupportedTypes};
+pub use config::{AuthPolicy, Config, LoadBalance, SslMode, TargetSessionAttrs, UnsupportedTypes};
 pub use conn::{CancelToken, Connection, Cursor, Notification, RawParts, Statement};
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{Chunk, Column, ColumnType, Date, Field, RowRef, Timestamp};

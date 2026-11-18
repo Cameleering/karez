@@ -106,6 +106,16 @@ pub enum Error {
     Broken,
     /// The call was made in a state where it is not allowed.
     Usage(&'static str),
+    /// A configuration with several hosts, or with `target_session_attrs` other than `any`, found
+    /// no host to use. `attempts` says what happened on each host, in the order tried.
+    /// `transient` is true if any attempt failed in a way that may pass (a host that was
+    /// unreachable, shutting down or not yet promoted), so trying again later can succeed.
+    NoSuitableHost {
+        /// One line per host tried.
+        attempts: String,
+        /// Whether a retry can help.
+        transient: bool,
+    },
 }
 
 impl Error {
@@ -150,6 +160,7 @@ impl Error {
                     | K::WouldBlock
             ),
             Error::Closed => true,
+            Error::NoSuitableHost { transient, .. } => *transient,
             _ => false,
         }
     }
@@ -192,6 +203,9 @@ impl fmt::Display for Error {
             Error::Closed => write!(f, "connection closed by the server"),
             Error::Broken => write!(f, "connection is broken by an earlier error"),
             Error::Usage(m) => write!(f, "{m}"),
+            Error::NoSuitableHost { attempts, .. } => {
+                write!(f, "no host could be used: {attempts}")
+            }
         }
     }
 }
@@ -295,5 +309,13 @@ mod tests {
         assert!(!Error::Usage("x").is_transient());
         assert!(!Error::Value("x".into()).is_transient());
         assert!(!Error::Caller(IoError::from(K::BrokenPipe)).is_transient());
+        let nsh = |t| Error::NoSuitableHost {
+            attempts: "a:1: refused".into(),
+            transient: t,
+        };
+        assert!(nsh(true).is_transient());
+        assert!(!nsh(false).is_transient());
+        assert!(!nsh(true).is_fatal(), "no connection exists to be broken");
+        assert!(nsh(false).to_string().contains("a:1: refused"));
     }
 }

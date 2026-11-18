@@ -2405,3 +2405,55 @@ fn scan_partitioned_pool_reuses_connections_and_leaves_them_clean() -> R {
     assert_eq!(parts, vec![count]);
     Ok(())
 }
+
+#[test]
+fn a_real_server_reports_what_target_session_attrs_needs() -> R {
+    let addr = need_server!();
+    let port = addr.rsplit(':').next().unwrap();
+    // PostgreSQL 14 and later send these two at startup; the client decides from them without a query.
+    let c = connect(&addr)?;
+    assert_eq!(c.server_param("in_hot_standby"), Some("off"));
+    assert_eq!(c.server_param("default_transaction_read_only"), Some("off"));
+    drop(c);
+    // a dead first host, then the real server, which is a read-write primary
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let hosts = format!("127.0.0.1:{dead},{addr}");
+    for ok in ["any", "read-write", "primary", "prefer-standby"] {
+        let url = format!(
+            "postgresql://karez_scram:{SCRAM_PW}@{hosts}/karez?sslmode=disable&target_session_attrs={ok}"
+        );
+        let mut c = Connection::connect_url(&url)?;
+        assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1, "{ok}");
+        assert!(
+            format!("{:?}", c.cancel_token()).contains(&format!("port: {port}")),
+            "{ok}: a cancel goes to the host that answered, not the dead one"
+        );
+    }
+    // a primary is neither read-only nor a standby
+    for no in ["read-only", "standby"] {
+        let url = format!(
+            "postgresql://karez_scram:{SCRAM_PW}@{hosts}/karez?sslmode=disable&target_session_attrs={no}"
+        );
+        match Connection::connect_url(&url) {
+            Err(Error::NoSuitableHost {
+                attempts,
+                transient,
+            }) => {
+                assert!(
+                    attempts.contains(&format!("127.0.0.1:{dead}")),
+                    "{attempts}"
+                );
+                assert!(
+                    attempts.contains(&format!("{addr}: connected, but not {no}")),
+                    "{attempts}"
+                );
+                assert!(transient);
+            }
+            other => panic!("{no}: {other:?}"),
+        }
+    }
+    Ok(())
+}

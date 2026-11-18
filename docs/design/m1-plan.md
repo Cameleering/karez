@@ -23,7 +23,7 @@ Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a comp
 | SCRAM-SHA-256-PLUS | **not built** (SCRAM without channel binding works) |
 | async adapter | built as `karez-rt` (std-only I/O threads and channels); a tokio adapter is not |
 | `karez-pool` | **built 2026-11-18 (step 1b)**: a std-only crate with a `Manager` trait and a first-come-first-served `Pool`; `karez-pg::Pool` wraps it. The plan's other `karez-pool` items (statement cache, multi-host routing, health checks) are not in it: the statement cache is per connection in `karez-pg`, routing is step 2 |
-| URL translation | built for PostgreSQL (`karez:pg://`, `postgresql://`, `postgres://`); **one host only**, no `target_session_attrs` |
+| URL translation | built for PostgreSQL (`karez:pg://`, `postgresql://`, `postgres://`); several hosts, `target_session_attrs` and `load_balance_hosts` since 2026-11-18 (step 2) |
 | errors with SQLSTATE | built; the class and a transient flag were added on 2026-11-18 (step 1) |
 | fuzz harness | a std-only mutation fuzzer was added on 2026-11-18 (step 1); coverage-guided fuzzing is not set up |
 | differential harness | **not built** |
@@ -40,8 +40,13 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
    `crates/karez-proto-pg/tests/fuzz_backend.rs`: a corpus of valid server streams (every message type, 30 known type OIDs and one unknown) mutated with the in-repo PRNG and fed through framing,
    message parsing, row decoding into chunks, SCRAM and base64, in random splits. 400,000 mutated streams per target in release mode ran without a panic, a hang or an over-limit buffer.
    Limits: it is not coverage-guided; it was not checked for what share of the decoders it reaches; it covers the server-to-client direction only.
-2. **Multi-host URLs and `target_session_attrs`** (`any`, `read-write`, `read-only`, `primary`, `standby`, `prefer-standby`), with the connect loop trying hosts in order or at random
-   (`load_balance_hosts`), a per-host timeout and the error of the last host kept. Exit: tests against two containers (one made a standby), including a dead first host.
+2. **Multi-host URLs and `target_session_attrs`. Done 2026-11-18.** `host1[:port],host2[:port]` in the URL (or `Config::add_host`), `target_session_attrs` (`any`, `read-write`, `read-only`, `primary`, `standby`,
+   `prefer-standby`) and `load_balance_hosts` (`disable`, `random`). Hosts are tried in order; one that is unreachable, refuses the login or does not satisfy the attributes is skipped; if none is usable the error is
+   `Error::NoSuitableHost` with one line per host and a `transient` flag (a single host with `any` still returns its own error unchanged). The check uses `in_hot_standby` and `default_transaction_read_only`, which
+   PostgreSQL 14 and later report at startup, so it costs no query; older servers are asked once (`pg_is_in_recovery()`, `SHOW transaction_read_only`). `prefer-standby` tries every host for a standby, then every host
+   for any. The timeout is per host (`connect_timeout`). 13 tests against scripted servers (dead and refusing hosts, read-only, standby, legacy servers, ordering, random order, the error text; a mutation of the
+   read-write rule makes 5 of them fail) and 1 against the real PostgreSQL 16 container. **Not tested: a real standby** (no replica fixture exists; the standby path is covered by the scripted servers and by the
+   parameter names PostgreSQL documents), and `load_balance_hosts=random` only for the spread, not for evenness.
 3. **Native types.** `numeric` to a `Decimal128` column (precision and scale kept) with a text fallback beyond 38 digits; `interval`, `time`, `timetz`, `inet`/`cidr`/`macaddr`, `bit`, `json(b)` as
    dedicated chunk types or as `Utf8` with a marker, one decision per type recorded here before code; array and enum parameters. Exit: step 4 passes for each.
 4. **Differential harness.** For every supported type: the values NULL, zero, one, minimum, maximum, a random sample and the known edge cases (numeric `NaN`, infinity dates, time zones across DST),

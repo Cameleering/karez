@@ -1,4 +1,4 @@
-use crate::config::{Config, UnsupportedTypes};
+use crate::config::{Config, LoadBalance, TargetSessionAttrs, UnsupportedTypes};
 use crate::error::{Error, Result, ServerError};
 use crate::transport::Transport;
 use crate::tx::Isolation;
@@ -204,6 +204,33 @@ impl std::fmt::Debug for Connection {
     }
 }
 
+/// The decision of `target_session_attrs`, given what was learned about the session: `standby`
+/// (None if not needed) and `read_only` (None if not needed).
+fn session_matches(
+    want: TargetSessionAttrs,
+    standby: Option<bool>,
+    read_only: Option<bool>,
+) -> bool {
+    match want {
+        TargetSessionAttrs::Any => true,
+        TargetSessionAttrs::ReadWrite => read_only == Some(false),
+        TargetSessionAttrs::ReadOnly => read_only == Some(true),
+        TargetSessionAttrs::Primary => standby == Some(false),
+        TargetSessionAttrs::Standby | TargetSessionAttrs::PreferStandby => standby == Some(true),
+    }
+}
+
+/// Put the hosts in a random order. Randomness is `std`'s per-process hash keys: not for
+/// cryptography, only to spread load.
+fn shuffle(v: &mut [(String, u16)]) {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    for i in (1..v.len()).rev() {
+        let r = RandomState::new().build_hasher().finish();
+        v.swap(i, (r % (i as u64 + 1)) as usize);
+    }
+}
+
 fn tcp_connect(cfg: &Config) -> Result<TcpStream> {
     tcp_connect_to(&cfg.host, cfg.port, cfg.connect_timeout)
 }
@@ -357,8 +384,122 @@ impl Connection {
     }
 
     /// Connect and authenticate.
+    ///
+    /// With one host and `target_session_attrs=any` this is a single attempt and its error is
+    /// returned as it is. With several hosts, or another `target_session_attrs`, hosts are tried
+    /// in order (or in random order with `load_balance_hosts=random`): a host that cannot be
+    /// reached, refuses the login, or does not satisfy the attributes is skipped, and if none
+    /// is usable the result is [`Error::NoSuitableHost`] listing every attempt. With
+    /// `prefer-standby` every host is first tried for a standby, then for any host.
     pub fn connect(cfg: &Config) -> Result<Connection> {
         Transport::check_supported(cfg)?;
+        let single = cfg.fallback_hosts.is_empty();
+        if single && cfg.target_session_attrs == TargetSessionAttrs::Any {
+            return Connection::connect_host(cfg);
+        }
+        let mut hosts = cfg.hosts();
+        if cfg.load_balance_hosts == LoadBalance::Random {
+            shuffle(&mut hosts);
+        }
+        let passes: &[TargetSessionAttrs] = match cfg.target_session_attrs {
+            TargetSessionAttrs::PreferStandby => {
+                &[TargetSessionAttrs::Standby, TargetSessionAttrs::Any]
+            }
+            other => &[other][..],
+        };
+        let mut attempts = Vec::new();
+        let mut transient = false;
+        for want in passes {
+            for (host, port) in &hosts {
+                let mut one = cfg.clone();
+                one.host = host.clone();
+                one.port = *port;
+                one.fallback_hosts.clear();
+                one.target_session_attrs = TargetSessionAttrs::Any;
+                match Connection::connect_host(&one) {
+                    Err(e) => {
+                        if single {
+                            return Err(e);
+                        }
+                        transient |= e.is_transient();
+                        attempts.push(format!("{host}:{port}: {e}"));
+                    }
+                    Ok(mut conn) => match conn.satisfies(*want) {
+                        Ok(true) => return Ok(conn),
+                        Ok(false) => {
+                            // a standby may be promoted, a primary may fail over: worth a retry
+                            transient = true;
+                            attempts.push(format!(
+                                "{host}:{port}: connected, but not {}",
+                                want.as_str()
+                            ));
+                        }
+                        Err(e) => {
+                            transient |= e.is_transient();
+                            attempts
+                                .push(format!("{host}:{port}: could not check the session ({e})"));
+                        }
+                    },
+                }
+            }
+        }
+        Err(Error::NoSuitableHost {
+            attempts: attempts.join("; "),
+            transient,
+        })
+    }
+
+    /// Whether this session meets `want`. Uses the parameters the server reported at startup
+    /// (`in_hot_standby` and `default_transaction_read_only`, sent by PostgreSQL 14 and later) and
+    /// asks with a query only when they are missing.
+    fn satisfies(&mut self, want: TargetSessionAttrs) -> Result<bool> {
+        let standby_param = self.server_param("in_hot_standby").map(|v| v == "on");
+        let default_ro_param = self
+            .server_param("default_transaction_read_only")
+            .map(|v| v == "on");
+        let need_standby = matches!(
+            want,
+            TargetSessionAttrs::Primary | TargetSessionAttrs::Standby
+        );
+        let need_ro = matches!(
+            want,
+            TargetSessionAttrs::ReadWrite | TargetSessionAttrs::ReadOnly
+        );
+        let mut standby = standby_param;
+        let mut ro = None;
+        if need_standby && standby.is_none() {
+            standby = Some(self.ask_bool("SELECT pg_is_in_recovery()")?);
+        }
+        if need_ro {
+            ro = match (standby_param, default_ro_param) {
+                (Some(s), Some(d)) => Some(s || d),
+                _ => Some(self.ask_text("SHOW transaction_read_only")? == "on"),
+            };
+        }
+        Ok(session_matches(want, standby, ro))
+    }
+
+    fn ask_bool(&mut self, sql: &str) -> Result<bool> {
+        let mut cur = self.query(sql, &[])?;
+        let v = match cur.next()? {
+            Some(row) => row.get::<bool>(0)?,
+            None => return Err(Error::Usage("the session check returned no row")),
+        };
+        drop(cur);
+        Ok(v)
+    }
+
+    fn ask_text(&mut self, sql: &str) -> Result<String> {
+        let mut cur = self.query(sql, &[])?;
+        let v = match cur.next()? {
+            Some(row) => row.get::<&str>(0)?.to_owned(),
+            None => return Err(Error::Usage("the session check returned no row")),
+        };
+        drop(cur);
+        Ok(v)
+    }
+
+    fn connect_host(cfg: &Config) -> Result<Connection> {
         let tcp = tcp_connect(cfg)?;
         tcp.set_nodelay(true)?;
         tcp.set_read_timeout(cfg.read_timeout)?;
