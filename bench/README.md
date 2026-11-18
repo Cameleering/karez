@@ -259,3 +259,19 @@ Limits: default pgjdbc ran out of memory on S8 in both rounds (it buffers the re
 so the ranges are wide; the S8 rate of the partitioned scan is the same in all lanes, which points at the link, not proven here; the
 pgbench cross-check was not rerun on droplets; diesel and wtx were not in the client set (adapters added 2026-11-18, perf-program.md section 18); TLS ran only as S7 (S2 over TLS, 64 connections), not for bulk reads; one profile only.
 Rerun the report with `gunzip` of each `cells.jsonl.gz` and `python bench/report.py bench/results/2026-11-16-campaign2`.
+
+
+### 2026-11-18, round 3 (partial) and the combined report
+
+Results: `bench/results/2026-11-18-round3/` (gzipped raw cells for each lane, `REPORT.md` that combines campaign 2 and round 3: nine lane-rounds, 10,645 raw cells, and `smoke-checks/` with the
+`run.py verify` and pgbench cross-check outputs of the smoke round). Same setup as campaign 2 (three lanes of two `c-4`, `blr1`, PostgreSQL 18.7), one more `lean2` round with the client groups
+rotated again, plus diesel and wtx in every lane. Droplets up 02:22Z, round 3 03:21Z to 07:45Z, deleted 07:46Z (about 5.4 hours, about $4). `[measured here, 2026-11-18]`.
+
+What it supports: karez n=9, rotated competitors n=3 (95% t interval shown from n=3), diesel and wtx n=3, all `verify` checks and checksums matched. Numbers and reading:
+[docs/design/perf-program.md](../docs/design/perf-program.md) section 19. In short: wtx is level with karez-blocking on S1 and S2; diesel is 0.4 to 0.7 of it; the partitioned scan is 1.31x the best other client on S4
+(range 0.96 to 1.61, one loss) and 1.52x on S8; the pipelined shared connection is about 9% behind tokio-postgres, with an interval that includes parity.
+
+Limits: the round was **cut at its stop time** (4 h 24 min), so bulk scenarios ran only on lane 2 and the last client of each lane has fewer scenarios; the pgbench cross-check ran only in the smoke round (two rates, 20 s per
+cell); `sqlx-tuned` and `zero-postgres` stay at n=2; no TLS bulk reads; diesel has no R2/R3/R4 or S5/S6/S8; wtx has S1 and S2 only. Rerun: gunzip each `cells.jsonl.gz`, then
+`python bench/report.py bench/results/2026-11-16-campaign2 bench/results/2026-11-18-round3` (the report is written next to the first root; the stored copy of the combined one is in the round 3 folder).
+

@@ -4,7 +4,7 @@ _2026-11-13, updated 2026-11-16. Branch `claude/m0-spike-1bacb7`, pushed with a 
 
 **Scope in one line:** a PostgreSQL client with optional TLS (feature `tls`, rustls), **verified against a real server
 on PostgreSQL 14.25, 16.15 and 17.12; versions 13, 15 and 18 were not run.** This note has **no benchmarks and no
-performance claims**; the first measurements (campaign 2: three lanes, two rounds; method of
+performance claims**; the first measurements (campaign 2: three lanes, two rounds, plus a partial round 3 on 2026-11-18; method of
 [plan.md](plan.md) section 6, on separate machines) are in [perf-program.md](perf-program.md).
 
 ## What was built

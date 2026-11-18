@@ -6,7 +6,7 @@ _Updated 2026-11-16. Read this first, then [plan.md](design/plan.md)._
 
 karez is in the **design stage with a first working slice** on the branch `claude/m0-spike-1bacb7`
 (local, not pushed, not merged): a PostgreSQL client with optional TLS. It has no release and
-**first measurements** (a reduced campaign on 2026-11-14, one-lane experiments and a two-round, three-lane campaign on 2026-11-16, [perf-program.md](design/perf-program.md) section 17; they support the README figures with their conditions, not a "fastest" claim). The owner decided on 2026-11-16 to go ahead with the current numbers and to **park the faster-network test** that would settle the plan's 2x bulk-read gate ([design/perf-program.md](design/perf-program.md) sections 9 to 15). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
+**first measurements** (a reduced campaign on 2026-11-14, one-lane experiments and a two-round, three-lane campaign on 2026-11-16 plus a partial third round on 2026-11-18, [perf-program.md](design/perf-program.md) section 17; they support the README figures with their conditions, not a "fastest" claim). The owner decided on 2026-11-16 to go ahead with the current numbers and to **park the faster-network test** that would settle the plan's 2x bulk-read gate ([design/perf-program.md](design/perf-program.md) sections 9 to 15). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
 versions 13, 15 and 18 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
 tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-results.md).
 
@@ -62,7 +62,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - [x] TLS (`sslmode=verify-full` default, `tls` feature, rustls). The shared connection works over TLS.
 - [x] `karez-rt`: shared pipelined connection with futures (built; see [design/karez-rt.md](design/karez-rt.md) section 13 for the gaps).
 - [x] The `bench/` load generator: open loop, SLO-throughput search, adapters for 16 PostgreSQL clients (Rust, Python, Go, C, Java), bulk scenarios S4 to S6, DigitalOcean scripts. Tested in WSL on PostgreSQL 17 and 18, plain and TLS. See [bench/README.md](../bench/README.md).
-- [x] Campaign 2 on DigitalOcean (2026-11-16): three lanes, two rounds of `lean2`, clients rotated across lanes (n=2 per competitor, n=6 for karez); results in `bench/results/2026-11-16-campaign2/`. Still open: a third round, confidence intervals and the faster network.
+- [x] Campaign 2 on DigitalOcean (2026-11-16): three lanes, two rounds of `lean2`, clients rotated across lanes (n=2 per competitor, n=6 for karez); results in `bench/results/2026-11-16-campaign2/`. Round 3 (2026-11-18, partial: cut at its stop time, bulk only on lane 2) and the combined report with 95% intervals: `bench/results/2026-11-18-round3/`, [perf-program.md](design/perf-program.md) section 19; diesel and wtx (S1/S2) added, pgbench cross-check ran in the smoke round only. Still open: a complete third round, TLS bulk reads and the faster network.
 - [ ] Acquire the two primary texts the research could not read (JDBC 4.3 chapter 6, ISO
       9075-3:2023) before freezing the parity checklist.
 - [ ] Resolve the unverified items in research.md section 13 before quoting them outside the repo.

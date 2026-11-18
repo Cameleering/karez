@@ -526,8 +526,8 @@ row API) is **still not met on a 1.9 Gbit/s link**: 1.3x on the 1M-row scan and 
 (section 10). The OLTP marks stand as they were: parity with the best clients met, 2x tuned pgJDBC not met. The pending item is the same:
 a faster two-machine network (parked by the owner on 2026-11-16).
 
-**Not covered:** the pgbench cross-check on droplets; diesel and wtx (adapters written on 2026-11-18, section 18; rusqlite is SQLite, so only its binary size is compared); a third round (budget); confidence intervals
-(n=2 for competitors, so ranges are shown instead); TLS bulk reads. (An earlier version of this note said no TLS ran: S7, the S2 query over TLS at 64 connections,
+**Not covered here (later added, see section 19):** the pgbench cross-check on droplets (smoke round only); diesel and wtx (adapters written on 2026-11-18, section 18; rusqlite is SQLite, so only its binary size is compared); a third round (partial); confidence intervals
+(n=2 for competitors in this section, so ranges are shown instead). Still not covered: TLS bulk reads. (An earlier version of this note said no TLS ran: S7, the S2 query over TLS at 64 connections,
 did run. karez-blocking 47,067 per second; tokio-postgres 0.99, libpq 0.98, karez-shared 0.97, pgx 0.95, tuned pgJDBC 0.68, tuned sqlx 0.64 of it.)
 
 ## 18. diesel and wtx added; hello-world sizes (2026-11-18, local, no droplets)
@@ -560,4 +560,64 @@ diesel's figure is large because libpq and OpenSSL are inside the binary. With a
 depends on a shared library; that variant was not measured (no libpq headers on the build machine). The crate counts of the earlier tokio-postgres (68) and sqlx (147)
 figures came from the same kind of tree listing, but were not recounted with this command.
 
-**Still open after this:** the droplet run of both adapters, S7 for diesel, a third round of the main set with confidence intervals, pgbench on droplets, TLS bulk reads.
+**Still open after this (the droplet runs happened on 2026-11-18, section 19):** TLS bulk reads and a complete third round.
+
+## 19. Round 3 and the combined report: nine lane-rounds (2026-11-18)
+
+Raw data and the combined `REPORT.md` (campaign 2 plus round 3, 10,645 raw cells): `bench/results/2026-11-18-round3/`. Setup as in section 17: three lanes of two
+`c-4` droplets in `blr1` (PostgreSQL 18.7), one more round of the profile `lean2` with the client groups rotated again (lane l ran group (l+1) mod 3 in round 3), droplets up
+02:22Z, round 3 03:21Z to 07:45Z, deleted 07:46Z by the campaign script (about 5.4 hours, six droplets, about $4; the owner approved up to 6 hours and about $4.50 on
+2026-11-18). diesel and wtx ran in every lane (n=3 from this one round). All `run.py verify` checks passed (S2, S3, R1 to R4, identical checksums across clients), and no
+checksum mismatch or lane failure shows in the report. `[measured here, 2026-11-18]`.
+
+**Round 3 is partial.** The campaign stopped waiting at its stop time (07:45Z, 4 h 24 min) before every client finished. Bulk scenarios ran only on lane 2 (karez rows, libpq, tokio-postgres,
+asyncpg, pgjdbc, and diesel S4); lanes 1 and 3 have open-loop results only, and the last client of each lane has fewer scenarios (`r2dbc-postgresql` R2/R4, `psycopg3` R4). One pgjdbc S8 pass failed
+(its default heap), as in rounds 1 and 2. The row counts in the report say how many runs each figure has.
+
+**What the third round changes: karez has n=9 (three lanes, three rounds), every competitor that rotated has n=3, `sqlx-tuned` and `zero-postgres` stay at n=2 (round 1 only), and the report now
+shows a 95% t interval of the mean next to the range.** At n=3 the interval is wide (it uses t=4.30), so it only separates clients that are far apart.
+
+**Point queries, 64 connections, ratio to `karez-blocking` (median, n=3 each; interval in brackets), p99 bound 2 ms:**
+
+| client | S1 | S2 | S7 (S2 over TLS) |
+|---|---:|---:|---:|
+| karez-blocking | 1.00 (81,447/s, n=9) | 1.00 (56,260/s, n=9) | 1.00 (44,620/s, n=9) |
+| deadpool-postgres | 0.96 (0.85 to 1.04) | 0.97 (0.86 to 1.14) | not run |
+| pgx | 0.95 (0.82 to 1.10) | 0.97 (0.89 to 1.05) | 0.96 (0.79 to 1.21) |
+| tokio-postgres | 0.99 (0.80 to 1.19) | 0.97 (0.97 to 0.97) | 1.00 (0.97 to 1.02) |
+| **wtx** (plaintext) | 1.03 (0.88 to 1.14) | 0.97 (0.84 to 1.16) | not run |
+| libpq | 0.92 (0.53 to 1.31) | 0.91 (0.73 to 1.05) | 0.97 (0.92 to 1.02) |
+| karez-shared | 0.84 (0.76 to 0.92, n=9) | 0.95 (0.89 to 0.98, n=9) | 0.97 (0.92 to 1.00, n=9) |
+| pgjdbc-tuned / pgjdbc | 0.81 / 0.70 | 0.89 / 0.83 | 0.69 / 0.59 |
+| **diesel** (libpq built in, no pool) | 0.67 (0.57 to 0.78) | 0.43 (0.30 to 0.51) | 0.47 (0.36 to 0.56) |
+| sqlx | 0.39 | 0.51 | 0.46 |
+| asyncpg / psycopg3 | 0.15 / 0.06 | 0.19 / 0.09 | 0.09 / 0.10 |
+
+karez-blocking is **level with the best Rust and C clients** (the intervals of deadpool, pgx, tokio-postgres, wtx and libpq all contain 1.00) and about 1.1x to 1.2x tuned pgJDBC on S1 and S2
+(1.23x and 1.12x from the medians): the plan's 2x over tuned pgJDBC is **still not met** (the database host is the limit). The new rows: **wtx is level with karez-blocking** at one, 8, 64
+and 512 connections (0.96 to 1.04 of it) and uses about 10 to 20% less CPU per request (S1: 23.3 against 26.0 CPU-s per million; S2 at 64 connections: 24.3 against 30.8), so the plan's
+"within 5% of the fastest of tokio-postgres, zero-postgres and wtx" holds for karez-blocking on S2, with wtx not ahead by more than the noise. **diesel is far behind** (0.43 to 0.69 on the point
+queries, 0.38 to 0.47 on R1 and 0.47 on S7): it ran one blocking connection per worker over libpq with a per-connection statement cache, and its CPU per request on S1 is near karez's (27.7), so the
+gap is wall time per request, not CPU; the reason was not investigated. diesel's S7 ran over TLS (`sslmode=verify-full`) without error.
+
+**karez-shared vs tokio-postgres with pipelining (R1, 8 connections, p99 bound 3 ms):** tokio-postgres reached 64,000 per second against 58,336 for karez-shared; the median ratio is 1.10 (n=3, 1.07 to 1.18,
+t95 0.97 to 1.25), that is karez-shared about **9% behind, and the interval includes parity**. The plan's 5% mark is not shown to be met; its 10% stop rule is not shown to be triggered. vertx-pg-client was 0.65 of
+karez-shared. Unpipelined, karez-shared is 0.94 of karez-blocking on R1 at 64 connections (t95 0.83 to 0.98) and uses about 2x the CPU per request (68.8 against 32.2 CPU-s per million).
+
+**Bulk reads (S4 1M rows, S8 13.07M rows; n=7 for karez, because round 3 ran bulk only on lane 2):** `scan_partitioned` is **1.27x karez-blocking on S4** (0.99 to 1.68, t95 1.10 to 1.50) and **1.49x on S8**
+(1.23 to 1.85, t95 1.29 to 1.67); against the best other client in the same lane and round it is **1.31x median on S4 (0.96 to 1.61, n=7)** and **1.52x on S8 (1.42 to 1.90, n=7)**. **On S4 the new lane-round is a
+loss: 0.96 of tokio-postgres (round 3, lane 2).** The earlier ranges were 1.09 to 1.61 and 1.42 to 1.67. The single-connection clients are level on S4 (tokio-postgres 0.95, sqlx 1.00, pgx 1.06 of karez-blocking) and on
+S8 sqlx is ahead (1.16, n=2). The chunk path equals the row path (0.93 on S4, 0.99 on S8). diesel's one S4 run (row by row, libpq single-row mode) read 599,520 rows per second, 0.39 of karez-blocking, with 1.66 CPU-s per
+million rows against 0.42 (n=1, lane 2 only). The mrow insert (S5) is 1.81x the per-row path (n=7); COPY (S6) is level for sqlx and tokio-postgres (0.96, 0.94) and about 0.8 for pgx, pgjdbc and libpq.
+
+**pgbench cross-check on droplets (smoke round only, S1 and S2, 8 connections, open loop at 1,000 and 2,000 per second, 20 s):** pgbench p50 is 54 to 112 µs above the libpq adapter's p50 on every pair
+(for example lane 1, S1 at 1,000/s: 404 against 350 µs; lane 3, S1 at 1,000/s: 376 against 264 µs) and its p99 is higher in all 12 cells. pgbench's own client is the slower of the two here, so the adapter's latency is not
+understated relative to the standard tool. The check is **two rates on one machine class and one 20-second run per cell**, so it supports "the adapter harness does not look faster than pgbench by its own measuring"; it does not calibrate p99.9. Files:
+`bench/results/2026-11-18-round3/smoke-checks/`.
+
+**What this changes in the gate (plan section 1.3):** nothing is cleared that was open. The S4 mark (2x the best Rust row API) is still not met on the 1.9 Gbit/s link (1.31x on S4 with one loss, 1.52x on S8); the
+OLTP parity marks hold with wider evidence (n=3); the 2x over tuned pgJDBC is not met. The faster-network test stays parked.
+
+**Not covered (still):** TLS bulk reads (no adapter); diesel R2/R3/R4 and bulk S5/S6/S8; wtx taxi, TLS and bulk (the buffer limit, section 18); a full third round (bulk on lanes 1 and 3, and the tail of each lane, were cut by the stop time, and a
+repeat would cost about $4 to $5 for six droplets); the faster network; `sqlx-tuned` and `zero-postgres` at n=3.
+
