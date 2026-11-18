@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 karez-chunk = { path = "../karez-chunk" }
+karez-pool = { path = "../karez-pool" }
 karez-proto-pg = { path = "../karez-proto-pg" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 webpki-roots = { version = "1.0.12", optional = true }

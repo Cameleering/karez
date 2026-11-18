@@ -1,0 +1,456 @@
+//! A small blocking connection pool for karez drivers. Std only, no dependencies.
+//!
+//! The pool is generic over a [`Manager`], which knows how to open a connection and how to check
+//! one that comes back. A driver crate (`karez-pg` today; MySQL and the others later) implements
+//! `Manager` and wraps [`Pool`] in its own types.
+//!
+//! Behaviour:
+//!
+//! * Connections are opened lazily, up to a maximum, and handed out one at a time.
+//! * Waiters are served first come, first served.
+//! * A connection goes back when its guard is dropped, after [`Manager::recycle`] has looked at it.
+//!   `recycle` runs outside the pool's lock, so it may do network I/O (a `ROLLBACK`, say). If it
+//!   returns `false` the connection is discarded and its slot is free again.
+//! * Connections are not tested before they are handed out, so a server restart shows up as an
+//!   error on first use; the driver's `recycle` then discards the broken connection and the next
+//!   `get` opens a new one.
+
+#![forbid(unsafe_code)]
+
+use std::collections::VecDeque;
+use std::fmt;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+/// What a driver supplies to the pool.
+pub trait Manager: Send + Sync + 'static {
+    /// The connection type held by the pool.
+    type Connection: Send + 'static;
+    /// The error of opening a connection.
+    type Error;
+
+    /// Open a new connection. Called without the pool's lock held.
+    fn connect(&self) -> Result<Self::Connection, Self::Error>;
+
+    /// Look at a connection that is being returned and make it ready for the next user (for
+    /// example roll back an open transaction). Return `true` to keep it, `false` to discard it.
+    /// Called without the pool's lock held.
+    fn recycle(&self, conn: &mut Self::Connection) -> bool;
+}
+
+/// Why [`Pool::get`] or [`Pool::new`] failed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PoolError<E> {
+    /// A pool must have room for at least one connection.
+    ZeroSize,
+    /// No connection became free before the deadline.
+    Timeout,
+    /// Opening a new connection failed; the pool's count is unchanged.
+    Connect(E),
+}
+
+impl<E: fmt::Display> fmt::Display for PoolError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PoolError::ZeroSize => f.write_str("a pool needs room for at least one connection"),
+            PoolError::Timeout => f.write_str("timed out waiting for a pooled connection"),
+            PoolError::Connect(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for PoolError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PoolError::Connect(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+struct State<C> {
+    idle: Vec<C>,
+    /// Connections that exist: idle, checked out, or being opened.
+    total: usize,
+    /// Tickets of the threads waiting for a connection, in arrival order.
+    waiters: VecDeque<u64>,
+    next_ticket: u64,
+}
+
+struct Shared<M: Manager> {
+    manager: M,
+    max: usize,
+    state: Mutex<State<M::Connection>>,
+    available: Condvar,
+}
+
+impl<M: Manager> Shared<M> {
+    fn lock(&self) -> MutexGuard<'_, State<M::Connection>> {
+        // The state is a counter and a list; a panic elsewhere cannot leave it inconsistent.
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// A blocking pool of connections to one server. Cheap to clone; clones share the pool.
+pub struct Pool<M: Manager> {
+    shared: Arc<Shared<M>>,
+}
+
+impl<M: Manager> Clone for Pool<M> {
+    fn clone(&self) -> Self {
+        Pool {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+impl<M: Manager> fmt::Debug for Pool<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = self.shared.lock();
+        f.debug_struct("Pool")
+            .field("max", &self.shared.max)
+            .field("total", &s.total)
+            .field("idle", &s.idle.len())
+            .finish()
+    }
+}
+
+impl<M: Manager> Pool<M> {
+    /// Create a pool of at most `max_size` connections. Nothing is opened yet.
+    pub fn new(manager: M, max_size: usize) -> Result<Self, PoolError<M::Error>> {
+        if max_size == 0 {
+            return Err(PoolError::ZeroSize);
+        }
+        Ok(Pool {
+            shared: Arc::new(Shared {
+                manager,
+                max: max_size,
+                state: Mutex::new(State {
+                    idle: Vec::new(),
+                    total: 0,
+                    waiters: VecDeque::new(),
+                    next_ticket: 0,
+                }),
+                available: Condvar::new(),
+            }),
+        })
+    }
+
+    /// The manager this pool was built with.
+    pub fn manager(&self) -> &M {
+        &self.shared.manager
+    }
+
+    /// Take a connection, opening one if there is room and waiting if the pool is full.
+    pub fn get(&self) -> Result<Pooled<M>, PoolError<M::Error>> {
+        self.get_inner(None)
+    }
+
+    /// Like [`Pool::get`], giving up with [`PoolError::Timeout`] after `timeout`.
+    pub fn get_timeout(&self, timeout: Duration) -> Result<Pooled<M>, PoolError<M::Error>> {
+        self.get_inner(Some(Instant::now() + timeout))
+    }
+
+    /// The most connections this pool will open.
+    pub fn max_size(&self) -> usize {
+        self.shared.max
+    }
+
+    /// Connections that currently exist (idle or in use).
+    pub fn size(&self) -> usize {
+        self.shared.lock().total
+    }
+
+    /// Connections idle in the pool.
+    pub fn idle(&self) -> usize {
+        self.shared.lock().idle.len()
+    }
+
+    fn get_inner(&self, deadline: Option<Instant>) -> Result<Pooled<M>, PoolError<M::Error>> {
+        let mut st = self.shared.lock();
+        // First come, first served: a waiter proceeds only when it is at the front of the queue.
+        let ticket = st.next_ticket;
+        st.next_ticket += 1;
+        st.waiters.push_back(ticket);
+        loop {
+            if st.waiters.front() == Some(&ticket) {
+                if let Some(c) = st.idle.pop() {
+                    st.waiters.pop_front();
+                    drop(st);
+                    self.shared.available.notify_all();
+                    return Ok(self.guard(c));
+                }
+                if st.total < self.shared.max {
+                    st.total += 1;
+                    st.waiters.pop_front();
+                    drop(st);
+                    self.shared.available.notify_all();
+                    return match self.shared.manager.connect() {
+                        Ok(c) => Ok(self.guard(c)),
+                        Err(e) => {
+                            self.shared.lock().total -= 1;
+                            self.shared.available.notify_all();
+                            Err(PoolError::Connect(e))
+                        }
+                    };
+                }
+            }
+            st = match deadline {
+                None => self
+                    .shared
+                    .available
+                    .wait(st)
+                    .unwrap_or_else(|e| e.into_inner()),
+                Some(d) => {
+                    let now = Instant::now();
+                    if now >= d {
+                        st.waiters.retain(|t| *t != ticket);
+                        drop(st);
+                        self.shared.available.notify_all();
+                        return Err(PoolError::Timeout);
+                    }
+                    self.shared
+                        .available
+                        .wait_timeout(st, d - now)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0
+                }
+            };
+        }
+    }
+
+    fn guard(&self, c: M::Connection) -> Pooled<M> {
+        Pooled {
+            conn: Some(c),
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+/// A connection on loan from a [`Pool`]; it goes back when dropped.
+pub struct Pooled<M: Manager> {
+    conn: Option<M::Connection>,
+    shared: Arc<Shared<M>>,
+}
+
+impl<M: Manager> fmt::Debug for Pooled<M>
+where
+    M::Connection: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Pooled").field(&self.conn).finish()
+    }
+}
+
+impl<M: Manager> Pooled<M> {
+    /// Remove this connection from the pool instead of returning it.
+    pub fn discard(mut self) {
+        self.conn = None;
+        // Drop does the bookkeeping.
+    }
+}
+
+impl<M: Manager> Deref for Pooled<M> {
+    type Target = M::Connection;
+    fn deref(&self) -> &M::Connection {
+        self.conn.as_ref().expect("connection present until drop")
+    }
+}
+
+impl<M: Manager> DerefMut for Pooled<M> {
+    fn deref_mut(&mut self) -> &mut M::Connection {
+        self.conn.as_mut().expect("connection present until drop")
+    }
+}
+
+impl<M: Manager> Drop for Pooled<M> {
+    fn drop(&mut self) {
+        // recycle may do I/O, and may panic in a driver: run it outside the lock, and make sure the
+        // slot is released either way.
+        let keep = match self.conn.take() {
+            Some(mut c) => {
+                let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.shared.manager.recycle(&mut c)
+                }))
+                .unwrap_or(false);
+                ok.then_some(c)
+            }
+            None => None,
+        };
+        let mut st = self.shared.lock();
+        match keep {
+            Some(c) => st.idle.push(c),
+            None => st.total -= 1,
+        }
+        drop(st);
+        self.shared.available.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+
+    struct Mock {
+        opened: AtomicUsize,
+        fail_next: AtomicUsize,
+        keep: bool,
+    }
+
+    impl Mock {
+        fn new(keep: bool) -> Self {
+            Mock {
+                opened: AtomicUsize::new(0),
+                fail_next: AtomicUsize::new(0),
+                keep,
+            }
+        }
+    }
+
+    impl Manager for Mock {
+        type Connection = usize;
+        type Error = &'static str;
+        fn connect(&self) -> Result<usize, &'static str> {
+            if self.fail_next.load(Ordering::SeqCst) > 0 {
+                self.fail_next.fetch_sub(1, Ordering::SeqCst);
+                return Err("refused");
+            }
+            Ok(self.opened.fetch_add(1, Ordering::SeqCst))
+        }
+        fn recycle(&self, _: &mut usize) -> bool {
+            self.keep
+        }
+    }
+
+    #[test]
+    fn zero_size_is_refused() {
+        assert_eq!(
+            Pool::new(Mock::new(true), 0).unwrap_err(),
+            PoolError::ZeroSize
+        );
+    }
+
+    #[test]
+    fn opens_lazily_and_reuses() {
+        let pool = Pool::new(Mock::new(true), 3).unwrap();
+        assert_eq!((pool.size(), pool.idle()), (0, 0));
+        let a = pool.get().unwrap();
+        assert_eq!(*a, 0);
+        assert_eq!((pool.size(), pool.idle()), (1, 0));
+        drop(a);
+        assert_eq!((pool.size(), pool.idle()), (1, 1));
+        let b = pool.get().unwrap();
+        assert_eq!(*b, 0, "the idle connection is reused, not a new one");
+        assert_eq!(pool.manager().opened.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn never_exceeds_the_maximum_and_times_out() {
+        let pool = Pool::new(Mock::new(true), 2).unwrap();
+        let _a = pool.get().unwrap();
+        let _b = pool.get().unwrap();
+        assert_eq!(pool.size(), 2);
+        let t = Instant::now();
+        assert_eq!(
+            pool.get_timeout(Duration::from_millis(60)).unwrap_err(),
+            PoolError::Timeout
+        );
+        assert!(t.elapsed() >= Duration::from_millis(50));
+        assert_eq!(pool.size(), 2);
+    }
+
+    #[test]
+    fn a_failed_connect_gives_the_slot_back() {
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        pool.manager().fail_next.store(1, Ordering::SeqCst);
+        assert_eq!(pool.get().unwrap_err(), PoolError::Connect("refused"));
+        assert_eq!(pool.size(), 0);
+        assert!(pool.get().is_ok());
+    }
+
+    #[test]
+    fn recycle_false_and_discard_free_the_slot() {
+        let pool = Pool::new(Mock::new(false), 1).unwrap();
+        drop(pool.get().unwrap());
+        assert_eq!((pool.size(), pool.idle()), (0, 0));
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        pool.get().unwrap().discard();
+        assert_eq!((pool.size(), pool.idle()), (0, 0));
+        // a new connection is opened (id 1 on the second manager is not the point; the slot is free)
+        assert!(pool.get_timeout(Duration::from_millis(50)).is_ok());
+    }
+
+    #[test]
+    fn a_panic_in_recycle_still_frees_the_slot() {
+        struct Boom;
+        impl Manager for Boom {
+            type Connection = ();
+            type Error = ();
+            fn connect(&self) -> Result<(), ()> {
+                Ok(())
+            }
+            fn recycle(&self, _: &mut ()) -> bool {
+                panic!("driver bug")
+            }
+        }
+        let pool = Pool::new(Boom, 1).unwrap();
+        drop(pool.get().unwrap());
+        assert_eq!(pool.size(), 0);
+        assert!(pool.get_timeout(Duration::from_millis(50)).is_ok());
+    }
+
+    #[test]
+    fn waiters_are_served_in_arrival_order() {
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        let held = pool.get().unwrap();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut handles = Vec::new();
+        for i in 0..4usize {
+            let (p, o) = (pool.clone(), order.clone());
+            handles.push(thread::spawn(move || {
+                let g = p.get().unwrap();
+                o.lock().unwrap().push(i);
+                thread::sleep(Duration::from_millis(5));
+                drop(g);
+            }));
+            // let each thread reach the wait queue before the next starts
+            thread::sleep(Duration::from_millis(40));
+        }
+        drop(held);
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(*order.lock().unwrap(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn many_threads_never_hold_more_than_max() {
+        let pool = Pool::new(Mock::new(true), 3).unwrap();
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let hs: Vec<_> = (0..12)
+            .map(|_| {
+                let (p, l, k) = (pool.clone(), live.clone(), peak.clone());
+                thread::spawn(move || {
+                    for _ in 0..50 {
+                        let g = p.get().unwrap();
+                        let now = l.fetch_add(1, Ordering::SeqCst) + 1;
+                        k.fetch_max(now, Ordering::SeqCst);
+                        thread::yield_now();
+                        l.fetch_sub(1, Ordering::SeqCst);
+                        drop(g);
+                    }
+                })
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        assert!(peak.load(Ordering::SeqCst) <= 3);
+        assert!(pool.manager().opened.load(Ordering::SeqCst) <= 3);
+        assert_eq!(pool.size(), pool.idle());
+    }
+}

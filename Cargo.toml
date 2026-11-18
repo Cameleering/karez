@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/karez-chunk",
     "crates/karez-proto-pg",
+    "crates/karez-pool",
     "crates/karez-pg",
     "crates/karez-rt",
     "crates/karez-compat-tests",

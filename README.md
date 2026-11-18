@@ -18,7 +18,7 @@ standards, decodes results straight from the wire into **Apache Arrow** columnar
 exported as an **ADBC driver, an ODBC driver and a JDBC driver**, so Python, Java, Go, .NET, R,
 BI tools and query engines can use the same core. It is designed to be **fast, small and safe**.
 
-> **Status: design stage with a working first slice.** A PostgreSQL client exists in this repository: five crates with no
+> **Status: design stage with a working first slice.** A PostgreSQL client exists in this repository: six crates with no
 > third-party dependencies, optional TLS, a pool, a shared pipelined connection, `COPY`, a partitioned parallel table scan and
 > a multi-row insert (see [What exists today](#what-exists-today)). It is **verified against a real server on PostgreSQL 14.25,
 > 16.15 and 17.12 (versions 13, 15 and 18 were not run)** and the whole test suite passes. It is **not released**: the code is not
@@ -87,7 +87,7 @@ as wide as JDBC, ODBC and Arrow together, and three exports from one C ABI.
 
 ## What exists today
 
-Five library crates and a top-level crate, with **no third-party dependencies** and `#![forbid(unsafe_code)]` in each (TLS is an
+Six library crates and a top-level crate, with **no third-party dependencies** and `#![forbid(unsafe_code)]` in each (TLS is an
 optional feature that adds rustls). Details, test counts and commands are in
 [docs/design/m0-spike-results.md](docs/design/m0-spike-results.md); the measurements are in
 [docs/design/perf-program.md](docs/design/perf-program.md).

@@ -6,7 +6,7 @@ plan it says so._
 
 ## 1. Where M0 left the code
 
-Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a compatibility-test crate).
+Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a compatibility-test crate; `karez-pool` was added the same day, step 1b).
 
 | M1 item in plan section 8 | state |
 |---|---|
@@ -22,7 +22,7 @@ Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a comp
 | OAUTHBEARER | **not built** |
 | SCRAM-SHA-256-PLUS | **not built** (SCRAM without channel binding works) |
 | async adapter | built as `karez-rt` (std-only I/O threads and channels); a tokio adapter is not |
-| `karez-pool` | a `Pool` exists inside `karez-pg`; a driver-neutral crate does not (there is one driver, so there is nothing to be neutral over) |
+| `karez-pool` | **built 2026-11-18 (step 1b)**: a std-only crate with a `Manager` trait and a first-come-first-served `Pool`; `karez-pg::Pool` wraps it. The plan's other `karez-pool` items (statement cache, multi-host routing, health checks) are not in it: the statement cache is per connection in `karez-pg`, routing is step 2 |
 | URL translation | built for PostgreSQL (`karez:pg://`, `postgresql://`, `postgres://`); **one host only**, no `target_session_attrs` |
 | errors with SQLSTATE | built; the class and a transient flag were added on 2026-11-18 (step 1) |
 | fuzz harness | a std-only mutation fuzzer was added on 2026-11-18 (step 1); coverage-guided fuzzing is not set up |
@@ -34,6 +34,7 @@ Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a comp
 Each step ends in tests that pass and a number or a list that is checked in. Steps 1 to 5 need no spend and no
 network beyond the local PostgreSQL containers in `tests/docker/`.
 
+1b. **`karez-pool` extracted. Done 2026-11-18** (owner: "extract now"). `crates/karez-pool`: `Manager` (`connect`, `recycle`), `Pool<M>`, `Pooled<M>`, `PoolError`; recycle runs outside the lock and a panic in it still frees the slot; 8 unit tests (lazy open, reuse, maximum, timeout, failed connect, discard, panic in recycle, FIFO order, 12 threads against a limit of 3). `karez-pg`'s `Pool` and `PooledConnection` keep their API; the 47 real-server tests pass on Linux with Rust 1.85.0 against PostgreSQL 16.
 1. **Error classes and the std-only fuzz floor. Done 2026-11-18.**
    `ServerError::class`, `ServerError::is_transient`, `Error::is_transient`, `Error::sqlstate_class` (unit tests for 15 transient and 16 permanent codes and every non-server variant).
    `crates/karez-proto-pg/tests/fuzz_backend.rs`: a corpus of valid server streams (every message type, 30 known type OIDs and one unknown) mutated with the in-repo PRNG and fed through framing,
@@ -59,11 +60,11 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
 9. **Exit measurements (needs the owner's spend approval, per CLAUDE.md).** S6 COPY against PgBulkInsert (the plan wants at least 1.5x; plan section 10 row 4), S1 to S8 with TLS on,
    and the S8 wait-time distribution against the Erlang C prediction. The TLS bulk-read adapter gap from perf-program.md section 20 closes here.
 
-## 3. Two decisions that change the plan
+## 3. Two decisions that change the plan (the first one decided)
 
-- **`karez-pool` and the driver-neutral API (plan 2.5: `Driver`, `Url`, `drivers().get(&url)`).** With one driver, a neutral trait would be guesswork, and it would be wrong in ways that only a second
-  driver shows (placeholders, type systems, auth). Recommendation: keep `Pool` in `karez-pg` through M1, and extract `karez-pool` and the `Driver` traits at the start of M2, when MySQL gives a second
-  implementation to shape them. The M1 row then reads "pool inside the driver crate". This needs the owner's agreement because it moves a plan item.
+- **`karez-pool` and the driver-neutral API (plan 2.5: `Driver`, `Url`, `drivers().get(&url)`).** Decided by the owner on 2026-11-18: extract the pool now (the recommendation had been to wait for M2). Done as step 1b. What
+  that covers: the pool and its `Manager` trait, which is the one driver-side interface the pool needs. What it does not cover: the query-level traits of plan 2.5 (`Driver`, `Connection`, `Statement`, `Cursor`, the
+  registry). With one driver those would be guesses about placeholders, type systems and auth that a second driver would contradict, so they wait for M2; the `Manager` trait is small enough to change then.
 - **GSS/SSPI.** It is the only M1 item that needs `unsafe` and it cannot be tested without a Kerberos or Windows domain fixture. It is last in step 7 so the rest of M1 does not wait for it.
 
 ## 4. Not in M1 (unchanged from the plan)
