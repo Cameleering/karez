@@ -106,6 +106,9 @@ pub enum Error {
     Broken,
     /// The call was made in a state where it is not allowed.
     Usage(&'static str),
+    /// A statement of a pipeline that was not run because an earlier statement of the same group
+    /// failed: the server skips the rest of a group after an error.
+    Skipped,
     /// A configuration with several hosts, or with `target_session_attrs` other than `any`, found
     /// no host to use. `attempts` says what happened on each host, in the order tried.
     /// `transient` is true if any attempt failed in a way that may pass (a host that was
@@ -203,6 +206,10 @@ impl fmt::Display for Error {
             Error::Closed => write!(f, "connection closed by the server"),
             Error::Broken => write!(f, "connection is broken by an earlier error"),
             Error::Usage(m) => write!(f, "{m}"),
+            Error::Skipped => write!(
+                f,
+                "not run: an earlier statement of the same pipeline failed"
+            ),
             Error::NoSuitableHost { attempts, .. } => {
                 write!(f, "no host could be used: {attempts}")
             }

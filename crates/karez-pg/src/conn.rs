@@ -15,7 +15,9 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod pipeline;
 mod portal;
+pub use pipeline::{Batch, BatchOutcome, BatchRows, Pipeline, StepResult};
 pub use portal::{Fetched, Portal, PortalCursor};
 
 const READ_BUF: usize = 64 * 1024;
@@ -78,6 +80,58 @@ impl Side {
             }
             _ => {}
         }
+    }
+}
+
+/// What one statement of a group produced: its row count from the command tag, its decoded rows
+/// if it was a query, and a value error if a value could not be held.
+#[derive(Debug, Default)]
+pub(crate) struct Step {
+    pub(crate) rows: u64,
+    pub(crate) chunks: Vec<Chunk>,
+    pub(crate) value_err: Option<String>,
+}
+
+/// How far `read_replies` reads.
+#[derive(Clone, Copy)]
+enum Until {
+    /// To ReadyForQuery (the group's Sync has been sent).
+    Ready,
+    /// Until this many statements are answered, with no Sync sent yet.
+    Steps(usize),
+}
+
+/// The replies of a group of statements, filled in by `read_replies`.
+struct Replies<'a> {
+    stmts: &'a [Statement],
+    decode: &'a [bool],
+    steps: Vec<Step>,
+    cur: Step,
+    started: bool,
+    err: Option<ErrorFields>,
+}
+
+impl<'a> Replies<'a> {
+    fn new(stmts: &'a [Statement], decode: &'a [bool]) -> Self {
+        Replies {
+            stmts,
+            decode,
+            steps: Vec::with_capacity(stmts.len()),
+            cur: Step::default(),
+            started: false,
+            err: None,
+        }
+    }
+
+    /// The statement in progress is complete: keep its rows and start the next.
+    fn finish_step(&mut self, rows: u64, builder: &mut ChunkBuilder) {
+        if self.started && builder.rows() > 0 {
+            self.cur.chunks.push(builder.chunk().clone());
+        }
+        builder.reset();
+        self.started = false;
+        self.cur.rows = rows;
+        self.steps.push(std::mem::take(&mut self.cur));
     }
 }
 
@@ -995,10 +1049,35 @@ impl Connection {
             Self::check_params(&stmt, params)?;
             stmts.push(stmt);
         }
+        let decode = vec![false; stmts.len()];
+        let params: Vec<&[Value<'_>]> = items.iter().map(|(_, p)| *p).collect();
+        let (steps, err) = self.run_group(&stmts, &params, &decode)?;
+        if let Some(f) = err {
+            return Err(Error::Server(ServerError::new(f)));
+        }
+        if steps.len() != items.len() {
+            return Err(Error::Proto(ProtoError::InvalidValue(
+                "batch result count differs from statement count",
+            )));
+        }
+        Ok(steps.iter().map(|s| s.rows).collect())
+    }
+
+    /// Run prepared statements with one Sync: encode every Bind and Execute, send them (in windows
+    /// or with a writer thread when the batch is large), and read the replies. `decode[i]` says
+    /// whether statement `i`'s rows are decoded into chunks (a query) or discarded (an execute).
+    /// Returns the steps that completed, and the server's error if one stopped the group; the
+    /// statements after the failing one were skipped by the server.
+    fn run_group(
+        &mut self,
+        stmts: &[Statement],
+        params: &[&[Value<'_>]],
+        decode: &[bool],
+    ) -> Result<(Vec<Step>, Option<ErrorFields>)> {
         self.out.clear();
         // where each statement's Bind and Execute end in `out`, for sending a batch in windows
-        let mut bounds = Vec::with_capacity(items.len());
-        for ((_, params), stmt) in items.iter().zip(&stmts) {
+        let mut bounds = Vec::with_capacity(stmts.len());
+        for (params, stmt) in params.iter().zip(stmts) {
             self.scratch.clear();
             let mut ranges = Vec::with_capacity(params.len());
             for p in params.iter() {
@@ -1021,22 +1100,18 @@ impl Connection {
             bounds.push(self.out.len());
         }
         frontend::sync(&mut self.out);
-        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES {
+        let mut rep = Replies::new(stmts, decode);
+        if self.out.len() <= OVERLAP_WRITE_BYTES {
             self.io.send(&self.out)?;
-            self.read_batch(items.len())?
+            self.read_replies(&mut rep, Until::Ready)?;
         } else if self.io.stream.is_tls() {
             // A TLS stream cannot be split between a reader and a writer thread, so the batch goes
             // out in windows of about 64 KiB, each followed by a Flush and a read of its results.
-            self.send_in_windows(&bounds)?
+            self.send_in_windows(&bounds, &mut rep)?;
         } else {
-            self.write_while_reading(items.len())?
-        };
-        if counts.len() != items.len() {
-            return Err(Error::Proto(ProtoError::InvalidValue(
-                "batch result count differs from statement count",
-            )));
+            self.write_while_reading(&mut rep)?;
         }
-        Ok(counts)
+        Ok((rep.steps, rep.err))
     }
 
     /// Send the encoded batch (`self.out`, statement ends in `bounds`, then a Sync) in windows of
@@ -1044,19 +1119,22 @@ impl Connection {
     /// next. Never more than about one window is unread by the server, so neither side can block
     /// the other, and no second thread is needed. The batch still ends in one Sync, so it is one
     /// implicit transaction, as in the unwindowed path.
-    fn send_in_windows(&mut self, bounds: &[usize]) -> Result<Vec<u64>> {
+    fn send_in_windows(&mut self, bounds: &[usize], rep: &mut Replies<'_>) -> Result<()> {
         let out = std::mem::take(&mut self.out);
-        let r = self.send_in_windows_inner(&out, bounds);
+        let r = self.send_in_windows_inner(&out, bounds, rep);
         self.out = out;
         self.out.clear();
         r
     }
 
-    fn send_in_windows_inner(&mut self, out: &[u8], bounds: &[usize]) -> Result<Vec<u64>> {
-        let mut counts = Vec::with_capacity(bounds.len());
-        let (mut start, mut in_window) = (0usize, 0usize);
+    fn send_in_windows_inner(
+        &mut self,
+        out: &[u8],
+        bounds: &[usize],
+        rep: &mut Replies<'_>,
+    ) -> Result<()> {
+        let mut start = 0usize;
         for (i, &end) in bounds.iter().enumerate() {
-            in_window += 1;
             let last = i + 1 == bounds.len();
             if last || end - start < OVERLAP_WRITE_BYTES {
                 continue;
@@ -1065,63 +1143,28 @@ impl Connection {
             frontend::flush(&mut msg);
             self.io.send(&out[start..end])?;
             self.io.send(&msg)?;
-            self.read_window(in_window, &mut counts)?;
+            // read until the statements sent so far are answered; after an error the server skips
+            // to the next Sync, so `read_replies` sends it and reads to ReadyForQuery
+            if self.read_replies(rep, Until::Steps(i + 1))? {
+                return Ok(());
+            }
             start = end;
-            in_window = 0;
         }
         // the rest and the Sync
         self.io.send(&out[start..])?;
-        let mut tail = self.read_batch(in_window)?;
-        counts.append(&mut tail);
-        Ok(counts)
-    }
-
-    /// Read the results of `n` statements sent with a Flush and no Sync. After a server error the
-    /// server skips input until a Sync: send it, read to ReadyForQuery, and return the error.
-    fn read_window(&mut self, n: usize, counts: &mut Vec<u64>) -> Result<()> {
-        let mut seen = 0;
-        while seen < n {
-            match self.io.next_msg(&mut self.side)? {
-                BackendMessage::BindComplete
-                | BackendMessage::DataRow(_)
-                | BackendMessage::PortalSuspended => {}
-                BackendMessage::CommandComplete(tag) => {
-                    counts.push(rows_from_tag(&tag));
-                    seen += 1;
-                }
-                BackendMessage::EmptyQueryResponse => {
-                    counts.push(0);
-                    seen += 1;
-                }
-                BackendMessage::ErrorResponse(f) => {
-                    let mut sync = Vec::new();
-                    frontend::sync(&mut sync);
-                    self.io.send(&sync)?;
-                    loop {
-                        if let BackendMessage::ReadyForQuery(st) =
-                            self.io.next_msg(&mut self.side)?
-                        {
-                            self.tx_status = st;
-                            break;
-                        }
-                    }
-                    return Err(Error::Server(ServerError::new(f)));
-                }
-                other => return Err(unexpected(&other)),
-            }
-        }
+        self.read_replies(rep, Until::Ready)?;
         Ok(())
     }
 
     /// Send the encoded batch from a helper thread while this thread reads the results. A server
     /// stops reading its input when it cannot write its output, so a client that writes
     /// everything before reading anything can block forever (both sides stuck in `write`).
-    fn write_while_reading(&mut self, n: usize) -> Result<Vec<u64>> {
+    fn write_while_reading(&mut self, rep: &mut Replies<'_>) -> Result<()> {
         let out = std::mem::take(&mut self.out);
         let mut writer = self.io.stream.try_clone_plain()?;
         let (read, written) = std::thread::scope(|sc| {
             let w = sc.spawn(move || writer.write_all(&out).map(|()| out));
-            let read = self.read_batch(n);
+            let read = self.read_replies(rep, Until::Ready);
             if matches!(&read, Err(e) if e.is_fatal()) || self.broken {
                 // Unblock the writer: the connection is unusable after this error anyway. A
                 // server error is not fatal: the server reads on to the Sync, so the writer ends.
@@ -1133,43 +1176,104 @@ impl Connection {
             (read, written)
         });
         match (read, written) {
-            (Ok(counts), Ok(out)) => {
+            (Ok(_), Ok(out)) => {
                 self.out = out;
                 self.out.clear();
-                Ok(counts)
+                Ok(())
             }
             (Err(e), _) => Err(e),
             (Ok(_), Err(e)) => Err(Error::Io(e)),
         }
     }
 
-    /// Read the replies to a batch of Bind/Execute pairs followed by one Sync.
-    fn read_batch(&mut self, n: usize) -> Result<Vec<u64>> {
-        let mut counts = Vec::with_capacity(n);
-        let mut err = None;
+    /// Read replies of a Bind and Execute group into `rep`. Returns true if the server's
+    /// ReadyForQuery was reached (the group is over), false if `until` was met first.
+    fn read_replies(&mut self, rep: &mut Replies<'_>, until: Until) -> Result<bool> {
         loop {
             let m = match self.io.next_msg(&mut self.side) {
                 Ok(m) => m,
-                Err(e) => return Err(self.server_error_or(err.take(), e)),
+                Err(e) => return Err(self.server_error_or(rep.err.take(), e)),
             };
             match m {
-                BackendMessage::BindComplete
-                | BackendMessage::DataRow(_)
-                | BackendMessage::PortalSuspended => {}
-                BackendMessage::CommandComplete(tag) => counts.push(rows_from_tag(&tag)),
-                BackendMessage::EmptyQueryResponse => counts.push(0),
-                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::BindComplete | BackendMessage::PortalSuspended => {}
+                BackendMessage::DataRow(d) => {
+                    let i = rep.steps.len();
+                    if rep.err.is_none()
+                        && rep.cur.value_err.is_none()
+                        && rep.decode.get(i).copied().unwrap_or(false)
+                    {
+                        let plan = &rep.stmts[i].inner.plan;
+                        if !rep.started {
+                            self.builder.set_schema(plan.fields().to_vec());
+                            rep.started = true;
+                        }
+                        match plan.decode_row(d.body, &mut self.builder) {
+                            Ok(()) => {
+                                if self.builder.is_full() {
+                                    rep.cur.chunks.push(self.builder.chunk().clone());
+                                    self.builder.reset();
+                                }
+                            }
+                            // a value this version cannot hold: the stream is intact, so the step
+                            // fails with a value error and the group carries on
+                            Err(ProtoError::BadValue { oid, what }) => {
+                                rep.cur.value_err =
+                                    Some(format!("value of type oid {oid}: {what}"));
+                            }
+                            Err(ProtoError::Chunk(c)) => rep.cur.value_err = Some(c.to_string()),
+                            Err(e) => {
+                                self.broken = true; // unread messages remain
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                BackendMessage::CommandComplete(_) | BackendMessage::EmptyQueryResponse
+                    if rep.steps.len() >= rep.stmts.len() =>
+                {
+                    self.broken = true;
+                    return Err(Error::Proto(ProtoError::InvalidValue(
+                        "more command completions than statements in the group",
+                    )));
+                }
+                BackendMessage::CommandComplete(tag) => {
+                    rep.finish_step(rows_from_tag(&tag), &mut self.builder);
+                    if matches!(until, Until::Steps(n) if rep.steps.len() >= n) {
+                        return Ok(false);
+                    }
+                }
+                BackendMessage::EmptyQueryResponse => {
+                    rep.finish_step(0, &mut self.builder);
+                    if matches!(until, Until::Steps(n) if rep.steps.len() >= n) {
+                        return Ok(false);
+                    }
+                }
+                BackendMessage::ErrorResponse(f) => {
+                    rep.err = Some(f);
+                    if matches!(until, Until::Steps(_)) {
+                        // no Sync has been sent yet and the server is skipping input until one
+                        // arrives: send it and read to ReadyForQuery
+                        let mut sync = Vec::new();
+                        frontend::sync(&mut sync);
+                        self.io.send(&sync)?;
+                        loop {
+                            if let BackendMessage::ReadyForQuery(st) =
+                                self.io.next_msg(&mut self.side)?
+                            {
+                                self.tx_status = st;
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
                 BackendMessage::ReadyForQuery(s) => {
                     self.tx_status = s;
-                    break;
+                    self.builder.reset();
+                    return Ok(true);
                 }
                 other => return Err(unexpected(&other)),
             }
         }
-        if let Some(f) = err {
-            return Err(Error::Server(ServerError::new(f)));
-        }
-        Ok(counts)
     }
 
     /// Backend process id of this session.

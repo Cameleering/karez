@@ -1,4 +1,6 @@
-use crate::conn::{quote_ident, Connection, Cursor, Fetched, Portal, PortalCursor, Statement};
+use crate::conn::{
+    quote_ident, Batch, Connection, Cursor, Fetched, Pipeline, Portal, PortalCursor, Statement,
+};
 use crate::error::Result;
 use karez_chunk::RowRef;
 use karez_proto_pg::{TxStatus, Value};
@@ -66,6 +68,16 @@ impl<'c> Transaction<'c> {
     /// Run a prepared statement; returns the affected row count.
     pub fn execute_prepared(&mut self, stmt: &Statement, params: &[Value<'_>]) -> Result<u64> {
         self.conn.execute_prepared(stmt, params)
+    }
+
+    /// Start a [`Pipeline`] inside this transaction; see [`Connection::pipeline`].
+    pub fn pipeline<'p>(&mut self) -> Pipeline<'_, 'p> {
+        self.conn.pipeline()
+    }
+
+    /// Start a [`Batch`] of `stmt` inside this transaction; see [`Connection::batch`].
+    pub fn batch<'s>(&mut self, stmt: &'s Statement) -> Batch<'_, 's> {
+        self.conn.batch(stmt)
     }
 
     /// Open a server-side cursor on `sql`; see [`Connection::portal`]. It lives until the end of

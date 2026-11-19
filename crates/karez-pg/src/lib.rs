@@ -31,8 +31,8 @@ mod tx;
 
 pub use config::{AuthPolicy, Config, LoadBalance, SslMode, TargetSessionAttrs, UnsupportedTypes};
 pub use conn::{
-    CancelToken, Connection, Cursor, Fetched, Notification, Portal, PortalCursor, RawParts,
-    Statement,
+    Batch, BatchOutcome, BatchRows, CancelToken, Connection, Cursor, Fetched, Notification,
+    Pipeline, Portal, PortalCursor, RawParts, Statement, StepResult,
 };
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{
