@@ -292,3 +292,15 @@ diesel S4 figure of 0.39 was a low outlier (three runs: 0.82).
 Limits: no TLS bulk reads; diesel has no R2/R3/R4 or S5/S6/S8; wtx has S1 and S2 only; one profile (`lean2`); one region and one droplet class (the 1.9 Gbit/s link is the likely limit of the bulk reads, untested).
 Rerun: gunzip each `cells.jsonl.gz`, then `python bench/report.py bench/results/2026-11-18-round3-tail bench/results/2026-11-18-round3 bench/results/2026-11-16-campaign2` (written next to the first root, so it
 lands in the tail folder; do not give campaign 2 first, the report would overwrite that folder's `REPORT.md`).
+
+### 2026-11-19, exit measurements of M1 step 9 (one lane, shared-CPU droplets)
+
+Results: `bench/results/2026-11-19-exit/` (gzipped raw cells, `verify.txt`, the generated `report.md` and `REPORT.md`, which reads them). Run by `bench/cloud/lane-exit.sh` (the `exit` profile of `lane-run.sh`; `LANES=1 campaign.sh "exit"`): two `s-4vcpu-8gb` droplets in `blr1`
+(PostgreSQL 18.7; DigitalOcean had no `c-4` in `blr1` that day), 08:53Z to 09:58Z, deleted by the script (77 minutes, about $0.18). Round label `x1`. `[measured here, 2026-11-19]`.
+
+What it supports: S6 (10,000,000 rows) with a PgBulkInsert adapter, and S4 to S6 over TLS (`run.py bulk --bulk-tls`), n=3 passes per cell, all row counts and S4 checksums matched. In short: karez 318,889 rows/s and PgBulkInsert 357,862 on S6 (0.89x; karez at 0.66x the CPU), the
+database as the likely limit; TLS costs every client's S4 rate 3% to 36% (karez row view 24%).
+
+Limits: the shared droplet class (not comparable with the `c-4` campaigns); one lane; n=3; the open-loop S1 to S3 and S8, plain and over TLS, found no throughput under the 2 ms bound (p99 3.4 to 36 ms down to 16 requests a second) and were stopped, so they are **not measured**; the plan's S6 gate (1.5x) is
+neither met nor ruled out and needs `c-4`.
+Rerun: `gunzip -k` the cells, then `python bench/run.py report <folder>` on the folder that holds them.

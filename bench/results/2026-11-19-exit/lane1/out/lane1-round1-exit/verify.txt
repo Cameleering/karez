@@ -1,0 +1,15 @@
+s2: OK
+    checksum 4181340182376054073 ok 800 errors 0: karez-blocking, karez-shared, tokio-postgres, sqlx, pgx, libpq, asyncpg, pgjdbc-tuned
+s3: OK
+    checksum 492800 ok 800 errors 0: karez-blocking, karez-shared, tokio-postgres, sqlx, pgx, libpq, asyncpg, pgjdbc-tuned
+r1 pgx: FAILED goadapter: warm: 0 rows, wanted 1
+r1: OK
+    checksum 0 ok 0 errors 800: karez-blocking, karez-shared, tokio-postgres, sqlx, libpq, asyncpg, pgjdbc-tuned
+r2 pgx: FAILED goadapter: warm: 0 rows, wanted 100
+r2: OK
+    checksum 0 ok 0 errors 800: karez-blocking, karez-shared, tokio-postgres, sqlx, libpq, asyncpg, pgjdbc-tuned
+r3: OK
+    checksum 0 ok 80 errors 0: karez-blocking, karez-shared, tokio-postgres, sqlx, pgx, libpq, asyncpg, pgjdbc-tuned
+r4 pgx: FAILED goadapter: warm: 0 rows, wanted 1
+r4: OK
+    checksum 0 ok 0 errors 800: karez-blocking, karez-shared, tokio-postgres, sqlx, libpq, asyncpg, pgjdbc-tuned
