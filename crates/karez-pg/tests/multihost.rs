@@ -392,17 +392,25 @@ fn only_permanent_failures_are_not_transient() {
     );
 }
 
+/// A host that closes at once shows up as a reset (`Io`) or as an end of stream (`Closed`),
+/// depending on timing; both are the connection's own failure, not `NoSuitableHost`.
+fn connection_failure<T>(r: &Result<T, Error>) -> bool {
+    matches!(r, Err(Error::Io(_)) | Err(Error::Closed))
+}
+
 #[test]
 fn one_host_keeps_its_own_error() {
     // single host, any: the exact error, as before multi-host support
     let c = cfg(&[dead_port()], TargetSessionAttrs::Any);
-    assert!(matches!(Connection::connect(&c), Err(Error::Io(_))));
+    let r = Connection::connect(&c);
+    assert!(connection_failure(&r), "{r:?}");
     // single host, attributes it cannot meet: NoSuitableHost, but a connection failure is still the I/O error
     let ro = start(MODERN_RO, 111);
     let err = Connection::connect(&cfg(&[ro.port], TargetSessionAttrs::ReadWrite)).unwrap_err();
     assert!(matches!(err, Error::NoSuitableHost { .. }), "{err:?}");
     let c = cfg(&[dead_port()], TargetSessionAttrs::ReadWrite);
-    assert!(matches!(Connection::connect(&c), Err(Error::Io(_))));
+    let r = Connection::connect(&c);
+    assert!(connection_failure(&r), "{r:?}");
 }
 
 #[test]

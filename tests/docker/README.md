@@ -40,7 +40,7 @@ The seed finishes by creating a `seed_done` table; the compose health check wait
 
 ```sh
 docker compose -f tests/docker/standby.yaml up -d --wait
-KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQUIRE_SERVER=1 cargo test -p karez-pg --test standby
+KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQUIRE_STANDBY=1 cargo test -p karez-pg --test standby
 docker compose -f tests/docker/standby.yaml down -v
 ```
 

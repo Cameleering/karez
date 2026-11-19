@@ -3,12 +3,21 @@
 //! Supported result types are in [`oid`]. A column of any other type is requested in text
 //! format and stored as `Utf8` (PostgreSQL's own text rendering), because those types have no
 //! decoder here yet. That is the only text path.
+//!
+//! Native chunk types: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `bytea`, `uuid`,
+//! `date`, `time` (`Time64Micros`), `timestamp`, `timestamptz`, `interval` (`Interval`) and
+//! `numeric(p,s)` with `p` up to 38 (`Decimal128`). Stored as `Utf8` text, read in binary and
+//! rendered exactly as `::text` would (`render.rs`): an unconstrained `numeric` or one wider than
+//! 38 digits, `timetz`, `json`, `jsonb`, `xml`, `inet`, `cidr`, `macaddr`, `macaddr8`, `bit`,
+//! `varbit`, `"char"`, arrays and enums. The decision for each, with the reason, is in
+//! `docs/design/m1-plan.md` step 3.
 
 use crate::backend::FieldDescription;
 use crate::error::{ProtoError, Result};
+use crate::numeric;
 use crate::render;
 use crate::wire::Reader;
-use karez_chunk::{ChunkBuilder, ColumnType, Date, Field, Timestamp};
+use karez_chunk::{ChunkBuilder, ColumnType, Date, Decimal128, Field, Interval, Time, Timestamp};
 use std::ops::Range;
 
 /// PostgreSQL type OIDs used by this crate.
@@ -98,6 +107,15 @@ enum Kind {
     TimestampTz,
     /// `oid`, stored as `Int64`.
     OidI64,
+    /// `numeric(precision, scale)` that fits a `Decimal128`.
+    Numeric {
+        precision: u8,
+        scale: u8,
+    },
+    /// `time`
+    Time,
+    /// `interval`
+    Interval,
     /// Binary value rendered to its text form by `render` (numeric, jsonb, interval, ...).
     Rendered(u32),
     /// Array of the given element type, rendered as an array literal.
@@ -122,12 +140,26 @@ impl Kind {
             oid::TIMESTAMP => Kind::Timestamp,
             oid::TIMESTAMPTZ => Kind::TimestampTz,
             oid::OID => Kind::OidI64,
+            oid::TIME => Kind::Time,
+            oid::INTERVAL => Kind::Interval,
             o if render::is_renderable(o) => Kind::Rendered(o),
             o => match render::array_elem(o) {
                 Some(e) => Kind::Array(e),
                 None => Kind::TextFallback,
             },
         }
+    }
+
+    /// Like [`Kind::from_oid`], using the type modifier: `numeric(p,s)` with `p <= 38` is a
+    /// `Decimal128`, any other `numeric` stays rendered text.
+    fn from_field(oid: u32, typmod: i32) -> Kind {
+        if oid == oid::NUMERIC {
+            return match numeric::precision_scale(typmod) {
+                Some((precision, scale)) => Kind::Numeric { precision, scale },
+                None => Kind::Rendered(oid),
+            };
+        }
+        Kind::from_oid(oid)
     }
 
     fn column_type(self) -> ColumnType {
@@ -146,6 +178,9 @@ impl Kind {
             Kind::Date => ColumnType::Date32,
             Kind::Timestamp => ColumnType::TimestampMicros { tz: false },
             Kind::TimestampTz => ColumnType::TimestampMicros { tz: true },
+            Kind::Numeric { precision, scale } => ColumnType::Decimal128 { precision, scale },
+            Kind::Time => ColumnType::Time64Micros,
+            Kind::Interval => ColumnType::Interval,
         }
     }
 }
@@ -189,7 +224,7 @@ impl ResultPlan {
     ) -> Self {
         let kinds: Vec<Kind> = desc
             .iter()
-            .map(|d| match Kind::from_oid(d.type_oid) {
+            .map(|d| match Kind::from_field(d.type_oid, d.type_modifier) {
                 Kind::TextFallback if is_text_binary(d.type_oid) => Kind::Text,
                 k => k,
             })
@@ -295,6 +330,24 @@ impl ResultPlan {
                     render::render_array(*e, v, &mut s)?;
                     col.push_utf8(s.as_bytes())?
                 }
+                Kind::Numeric { scale, .. } => col.push_decimal(numeric::decode(v, *scale)?)?,
+                Kind::Time => {
+                    let us = i64::from_be_bytes(fixed(v, oid::TIME)?);
+                    if !(0..=86_400_000_000).contains(&us) {
+                        return Err(bad(oid::TIME, "time out of range"));
+                    }
+                    col.push_time(Time(us))?
+                }
+                Kind::Interval => {
+                    let b: [u8; 16] = fixed(v, oid::INTERVAL)?;
+                    col.push_interval(Interval {
+                        micros: i64::from_be_bytes([
+                            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                        ]),
+                        days: i32::from_be_bytes([b[8], b[9], b[10], b[11]]),
+                        months: i32::from_be_bytes([b[12], b[13], b[14], b[15]]),
+                    })?
+                }
                 Kind::F32 => col.push_f32(f32::from_be_bytes(fixed(v, oid::FLOAT4)?))?,
                 Kind::F64 => col.push_f64(f64::from_be_bytes(fixed(v, oid::FLOAT8)?))?,
                 Kind::Text | Kind::TextFallback => col.push_utf8(v)?,
@@ -393,9 +446,109 @@ pub enum Value<'a> {
     Timestamp(Timestamp),
     /// `timestamptz`
     TimestampTz(Timestamp),
+    /// `time`
+    Time(Time),
+    /// `interval`
+    Interval(Interval),
+    /// `numeric`: `unscaled / 10^scale`, sent in the binary format with that display scale.
+    Numeric(Decimal128),
+    /// A one-dimensional array of a basic type, sent in the binary format.
+    Array(Array<'a>),
     /// A text-format literal whose type the server infers from context (for types without a
-    /// codec here, such as `numeric`). It is still sent as a bound value.
+    /// codec here, such as an enum label, `inet` or `jsonb`). It is still sent as a bound value.
     Unknown(&'a str),
+}
+
+/// A one-dimensional array parameter. `None` is a NULL element. An empty slice is an empty array.
+/// Arrays of other element types go through [`Value::Unknown`] as an array literal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Array<'a> {
+    /// `bool[]`
+    Bool(&'a [Option<bool>]),
+    /// `int2[]`
+    I16(&'a [Option<i16>]),
+    /// `int4[]`
+    I32(&'a [Option<i32>]),
+    /// `int8[]`
+    I64(&'a [Option<i64>]),
+    /// `float4[]`
+    F32(&'a [Option<f32>]),
+    /// `float8[]`
+    F64(&'a [Option<f64>]),
+    /// `text[]`
+    Text(&'a [Option<&'a str>]),
+}
+
+impl Array<'_> {
+    /// OID of the array type.
+    fn array_oid(&self) -> u32 {
+        match self {
+            Array::Bool(_) => 1000,
+            Array::I16(_) => 1005,
+            Array::I32(_) => 1007,
+            Array::I64(_) => 1016,
+            Array::F32(_) => 1021,
+            Array::F64(_) => 1022,
+            Array::Text(_) => 1009,
+        }
+    }
+
+    fn elem_oid(&self) -> u32 {
+        match self {
+            Array::Bool(_) => oid::BOOL,
+            Array::I16(_) => oid::INT2,
+            Array::I32(_) => oid::INT4,
+            Array::I64(_) => oid::INT8,
+            Array::F32(_) => oid::FLOAT4,
+            Array::F64(_) => oid::FLOAT8,
+            Array::Text(_) => oid::TEXT,
+        }
+    }
+
+    fn encode(&self, out: &mut Vec<u8>) -> Result<()> {
+        fn body<T>(
+            items: &[Option<T>],
+            elem: u32,
+            out: &mut Vec<u8>,
+            mut put: impl FnMut(&T, &mut Vec<u8>),
+        ) -> Result<()> {
+            let ndim: i32 = if items.is_empty() { 0 } else { 1 };
+            let has_null = i32::from(items.iter().any(Option::is_none));
+            out.extend_from_slice(&ndim.to_be_bytes());
+            out.extend_from_slice(&has_null.to_be_bytes());
+            out.extend_from_slice(&elem.to_be_bytes());
+            if items.is_empty() {
+                return Ok(());
+            }
+            let n = i32::try_from(items.len()).map_err(|_| ProtoError::Overflow)?;
+            out.extend_from_slice(&n.to_be_bytes());
+            out.extend_from_slice(&1i32.to_be_bytes()); // lower bound
+            for it in items {
+                match it {
+                    None => out.extend_from_slice(&(-1i32).to_be_bytes()),
+                    Some(x) => {
+                        let at = out.len();
+                        out.extend_from_slice(&[0; 4]);
+                        put(x, out);
+                        let len =
+                            i32::try_from(out.len() - at - 4).map_err(|_| ProtoError::Overflow)?;
+                        out[at..at + 4].copy_from_slice(&len.to_be_bytes());
+                    }
+                }
+            }
+            Ok(())
+        }
+        let e = self.elem_oid();
+        match self {
+            Array::Bool(v) => body(v, e, out, |x, o| o.push(u8::from(*x))),
+            Array::I16(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
+            Array::I32(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
+            Array::I64(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
+            Array::F32(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
+            Array::F64(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
+            Array::Text(v) => body(v, e, out, |x, o| o.extend_from_slice(x.as_bytes())),
+        }
+    }
 }
 
 impl<'a> Value<'a> {
@@ -448,6 +601,10 @@ impl<'a> Value<'a> {
             Value::Date(_) => oid::DATE,
             Value::Timestamp(_) => oid::TIMESTAMP,
             Value::TimestampTz(_) => oid::TIMESTAMPTZ,
+            Value::Time(_) => oid::TIME,
+            Value::Interval(_) => oid::INTERVAL,
+            Value::Numeric(_) => oid::NUMERIC,
+            Value::Array(a) => a.array_oid(),
         }
     }
 
@@ -476,6 +633,21 @@ impl<'a> Value<'a> {
             Value::Date(d) => scratch.extend_from_slice(&date_to_pg(*d)?.to_be_bytes()),
             Value::Timestamp(t) | Value::TimestampTz(t) => {
                 scratch.extend_from_slice(&timestamp_to_pg(*t)?.to_be_bytes())
+            }
+            Value::Time(t) => {
+                if !(0..=86_400_000_000).contains(&t.0) {
+                    return Err(bad(oid::TIME, "time out of range"));
+                }
+                scratch.extend_from_slice(&t.0.to_be_bytes())
+            }
+            Value::Interval(i) => {
+                scratch.extend_from_slice(&i.micros.to_be_bytes());
+                scratch.extend_from_slice(&i.days.to_be_bytes());
+                scratch.extend_from_slice(&i.months.to_be_bytes());
+            }
+            Value::Numeric(d) => numeric::encode(d.unscaled, d.scale, scratch),
+            Value::Array(a) => {
+                a.encode(scratch).inspect_err(|_| scratch.truncate(start))?;
             }
         }
         Ok(Some(start..scratch.len()))
@@ -730,6 +902,145 @@ mod tests {
             assert_eq!(r.get::<[u8; 16]>(7).unwrap(), *u);
             assert_eq!(r.get::<bool>(8).unwrap(), n.5);
         }
+    }
+
+    #[test]
+    fn numeric_time_and_interval_decode_natively_and_the_rest_stays_text() {
+        let mut d = desc(&[
+            oid::NUMERIC,
+            oid::NUMERIC,
+            oid::TIME,
+            oid::INTERVAL,
+            oid::TIMETZ,
+        ]);
+        d[0].type_modifier = ((12 << 16) | 2) + 4; // numeric(12,2)
+        d[1].type_modifier = -1; // numeric
+        let plan = ResultPlan::from_description(&d);
+        assert_eq!(
+            plan.fields().iter().map(|f| f.ty).collect::<Vec<_>>(),
+            vec![
+                ColumnType::Decimal128 {
+                    precision: 12,
+                    scale: 2
+                },
+                ColumnType::Utf8,
+                ColumnType::Time64Micros,
+                ColumnType::Interval,
+                ColumnType::Utf8,
+            ]
+        );
+        assert_eq!(plan.result_formats(), &[1, 1, 1, 1, 1]);
+        let mut b = ChunkBuilder::new(plan.fields().to_vec());
+        // numeric(12,2) -12.50: digits 12 and 5000, weight 0, negative, dscale 2
+        let mut n = Vec::new();
+        for x in [2i16, 0, 0x4000, 2, 12, 5000] {
+            n.extend_from_slice(&x.to_be_bytes());
+        }
+        let mut iv = (14_706_789_000i64).to_be_bytes().to_vec(); // micros
+        iv.extend_from_slice(&3i32.to_be_bytes()); // days
+        iv.extend_from_slice(&14i32.to_be_bytes()); // months
+        let mut tz = 0i64.to_be_bytes().to_vec();
+        tz.extend_from_slice(&0i32.to_be_bytes());
+        plan.decode_row(
+            &row(&[
+                Some(n.clone()),
+                Some(n),
+                Some(86_400_000_000i64.to_be_bytes().to_vec()),
+                Some(iv),
+                Some(tz),
+            ]),
+            &mut b,
+        )
+        .unwrap();
+        let r = b.chunk().row(0).unwrap();
+        assert_eq!(r.get::<Decimal128>(0).unwrap().to_string(), "-12.50");
+        assert_eq!(r.get::<&str>(1).unwrap(), "-12.50");
+        assert_eq!(r.get::<Time>(2).unwrap().to_string(), "24:00:00");
+        assert_eq!(
+            r.get::<Interval>(3).unwrap(),
+            Interval {
+                months: 14,
+                days: 3,
+                micros: 14_706_789_000
+            }
+        );
+        assert_eq!(r.get::<&str>(4).unwrap(), "00:00:00+00");
+        // out of range values are value errors that leave the builder clean
+        let bad_time = row(&[
+            None,
+            None,
+            Some(86_400_000_001i64.to_be_bytes().to_vec()),
+            None,
+            None,
+        ]);
+        assert!(plan.decode_row(&bad_time, &mut b).is_err());
+        let mut nan = Vec::new();
+        for x in [0i16, 0, -0x4000, 0] {
+            nan.extend_from_slice(&x.to_be_bytes());
+        }
+        let bad_nan = row(&[Some(nan), None, None, None, None]);
+        assert!(plan.decode_row(&bad_nan, &mut b).is_err());
+        b.chunk().validate().unwrap();
+        assert_eq!(b.rows(), 1);
+    }
+
+    #[test]
+    fn native_parameters_encode_as_the_server_expects() {
+        let mut s = Vec::new();
+        let t = Value::Time(Time(1)).encode_into(&mut s).unwrap().unwrap();
+        assert_eq!(&s[t], &1i64.to_be_bytes());
+        s.clear();
+        let i = Value::Interval(Interval {
+            months: 1,
+            days: 2,
+            micros: 3,
+        })
+        .encode_into(&mut s)
+        .unwrap()
+        .unwrap();
+        assert_eq!(&s[i][..8], &3i64.to_be_bytes(), "micros come first");
+        assert_eq!(&s[8..12], &2i32.to_be_bytes());
+        assert_eq!(&s[12..16], &1i32.to_be_bytes());
+        assert!(Value::Time(Time(-1)).encode_into(&mut s).is_err());
+        assert!(Value::Time(Time(86_400_000_001))
+            .encode_into(&mut s)
+            .is_err());
+        assert_eq!(Value::Time(Time(0)).oid(), oid::TIME);
+        assert_eq!(
+            Value::Numeric(Decimal128 {
+                unscaled: 1,
+                scale: 0
+            })
+            .oid(),
+            oid::NUMERIC
+        );
+        // array: header, one dimension, NULL as length -1
+        s.clear();
+        let items = [Some(7i32), None];
+        let a = Value::Array(Array::I32(&items));
+        assert_eq!(a.oid(), 1007);
+        assert_eq!(a.format(), 1);
+        let r = a.encode_into(&mut s).unwrap().unwrap();
+        let mut want = Vec::new();
+        for x in [1i32, 1, 23, 2, 1] {
+            want.extend_from_slice(&x.to_be_bytes());
+        }
+        want.extend_from_slice(&4i32.to_be_bytes());
+        want.extend_from_slice(&7i32.to_be_bytes());
+        want.extend_from_slice(&(-1i32).to_be_bytes());
+        assert_eq!(&s[r], &want[..]);
+        // an empty array has no dimensions
+        s.clear();
+        let none: [Option<i64>; 0] = [];
+        let r = Value::Array(Array::I64(&none))
+            .encode_into(&mut s)
+            .unwrap()
+            .unwrap();
+        let mut want = Vec::new();
+        for x in [0i32, 0, 20] {
+            want.extend_from_slice(&x.to_be_bytes());
+        }
+        assert_eq!(&s[r], &want[..]);
     }
 
     #[test]

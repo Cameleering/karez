@@ -68,8 +68,18 @@ const OIDS: &[u32] = &[
     oid::VARBIT,
     oid::NUMERIC,
     oid::JSONB,
-    4242, // unknown: text fallback
+    oid::NUMERIC, // the second numeric has a type modifier, numeric(12,2): a Decimal128 column
+    4242,         // unknown: text fallback
 ];
+
+/// The type modifier of column `i`: `numeric(12,2)` for the second numeric, none for the rest.
+fn typmod(i: usize) -> i32 {
+    if i == OIDS.len() - 2 {
+        ((12 << 16) | 2) + 4
+    } else {
+        -1
+    }
+}
 
 fn row_description() -> Vec<u8> {
     let mut b = (OIDS.len() as u16).to_be_bytes().to_vec();
@@ -80,7 +90,7 @@ fn row_description() -> Vec<u8> {
         b.extend_from_slice(&0i16.to_be_bytes());
         b.extend_from_slice(&o.to_be_bytes());
         b.extend_from_slice(&(-1i16).to_be_bytes());
-        b.extend_from_slice(&(-1i32).to_be_bytes());
+        b.extend_from_slice(&typmod(i).to_be_bytes());
         // unknown types come in text format (0), the others in binary (1)
         b.extend_from_slice(&i16::from(*o != 4242).to_be_bytes());
     }
@@ -126,14 +136,18 @@ fn value_for(o: u32, rng: &mut SplitMix64) -> Option<Vec<u8>> {
             v
         }
         oid::NUMERIC => {
-            // ndigits, weight, sign, dscale, digits
-            let nd = rng.range(0, 6);
+            // ndigits, weight, sign, dscale, digits; always a value that fits numeric(12,2), so
+            // the typed column decodes cleanly too: up to 4 integer digits and 2 fractional ones
+            let nd = rng.range(0, 2);
             let mut v = (nd as i16).to_be_bytes().to_vec();
-            v.extend_from_slice(&(rng.range(0, 4) as i16).to_be_bytes());
-            v.extend_from_slice(&[0, 0]);
-            v.extend_from_slice(&(rng.range(0, 6) as i16).to_be_bytes());
-            for _ in 0..nd {
+            v.extend_from_slice(&0i16.to_be_bytes()); // weight 0
+            v.extend_from_slice(&if rng.chance(1, 4) { [0x40, 0] } else { [0, 0] });
+            v.extend_from_slice(&2i16.to_be_bytes()); // dscale 2
+            if nd >= 1 {
                 v.extend_from_slice(&(rng.range(0, 9999) as i16).to_be_bytes());
+            }
+            if nd == 2 {
+                v.extend_from_slice(&((rng.range(0, 99) * 100) as i16).to_be_bytes());
             }
             v
         }

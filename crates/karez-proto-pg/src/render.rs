@@ -224,42 +224,16 @@ fn fraction(f: i64, out: &mut String) {
 }
 
 fn interval(micros: i64, days: i32, months: i32, out: &mut String) {
-    if micros == 0 && days == 0 && months == 0 {
-        out.push_str("PT0S");
-        return;
-    }
-    out.push('P');
-    let (years, mons) = (months / 12, months % 12);
-    if years != 0 {
-        let _ = write!(out, "{years}Y");
-    }
-    if mons != 0 {
-        let _ = write!(out, "{mons}M");
-    }
-    if days != 0 {
-        let _ = write!(out, "{days}D");
-    }
-    if micros != 0 {
-        out.push('T');
-        let hours = micros / 3_600_000_000;
-        let mins = micros / 60_000_000 % 60;
-        let sec = micros % 60_000_000;
-        if hours != 0 {
-            let _ = write!(out, "{hours}H");
+    // one implementation of the ISO 8601 form, shared with the native `Interval` column type
+    let _ = write!(
+        out,
+        "{}",
+        karez_chunk::Interval {
+            months,
+            days,
+            micros
         }
-        if mins != 0 {
-            let _ = write!(out, "{mins}M");
-        }
-        if sec != 0 {
-            if sec < 0 {
-                out.push('-');
-            }
-            let a = sec.unsigned_abs();
-            let _ = write!(out, "{}", a / 1_000_000);
-            fraction((a % 1_000_000) as i64, out);
-            out.push('S');
-        }
-    }
+    );
 }
 
 fn numeric(v: &[u8], out: &mut String) -> Result<()> {

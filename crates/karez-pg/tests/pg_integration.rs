@@ -10,7 +10,7 @@
 #![allow(clippy::type_complexity)]
 
 use karez_pg::{
-    oid, Chunk, Config, Connection, Date, Error, Isolation, Timestamp, TxStatus, Value,
+    oid, Chunk, ColumnType, Config, Connection, Date, Error, Isolation, Timestamp, TxStatus, Value,
 };
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Barrier};
@@ -509,11 +509,30 @@ fn same_as_server(c: &mut Connection, sql: &str) -> Result<usize, Error> {
     let mut cur = c.query(sql, &[])?;
     let mut n = 0;
     while let Some(r) = cur.next()? {
-        let (a, b) = (r.get::<Option<&str>>(0)?, r.get::<Option<&str>>(1)?);
-        assert_eq!(a, b, "{sql}: row {n}");
+        let (a, b) = (cell_text(&r, 0)?, r.get::<Option<&str>>(1)?);
+        assert_eq!(a.as_deref(), b, "{sql}: row {n}");
         n += 1;
     }
     Ok(n)
+}
+
+/// A cell as text: text columns as they are, and the native decimal, time and interval columns
+/// through their `Display`, which is meant to equal PostgreSQL's own text output
+/// (`intervalstyle = 'iso_8601'`).
+fn cell_text(r: &karez_pg::RowRef<'_>, i: usize) -> Result<Option<String>, Error> {
+    if r.is_null(i)? {
+        return Ok(None);
+    }
+    if let Ok(s) = r.get::<&str>(i) {
+        return Ok(Some(s.to_string()));
+    }
+    if let Ok(v) = r.get::<karez_pg::Interval>(i) {
+        return Ok(Some(v.to_string()));
+    }
+    if let Ok(v) = r.get::<karez_pg::Time>(i) {
+        return Ok(Some(v.to_string()));
+    }
+    Ok(Some(r.get::<karez_pg::Decimal128>(i)?.to_string()))
 }
 
 #[test]
@@ -598,9 +617,253 @@ fn rendered_types_match_the_servers_own_text() -> R {
     assert_eq!(r.get::<&str>(0)?, "12345678901234567890.123456789");
     assert_eq!(r.get::<&str>(1)?, "{\"a\": [1, 2, {\"b\": null}]}");
     assert_eq!(r.get::<&str>(2)?, "{1,2,NULL,4}");
-    assert_eq!(r.get::<&str>(3)?, "P1Y2M3DT4H5M6.789S");
+    assert_eq!(
+        r.get::<karez_pg::Interval>(3)?.to_string(),
+        "P1Y2M3DT4H5M6.789S"
+    );
     assert_eq!(r.get::<&str>(4)?, "happy");
     assert_eq!(r.get::<&str>(5)?, "192.168.1.0/24");
+    Ok(())
+}
+
+#[test]
+fn native_decimal_interval_and_time_columns_match_the_servers_text() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    c.execute("SET intervalstyle = 'iso_8601'", &[])?;
+    let cases = [
+        // numeric(p,s) is a Decimal128 column; the server prints exactly `s` fractional digits
+        "SELECT v::numeric(10,2), v::numeric(10,2)::text FROM (VALUES (0::numeric),(1),(-1),(0.5),(-0.01),(99999999.99),\
+         (-99999999.99),(12345.6),(NULL)) t(v)",
+        "SELECT v::numeric(5,0), v::numeric(5,0)::text FROM (VALUES (0::numeric),(99999),(-99999),(1),(NULL)) t(v)",
+        "SELECT v::numeric(38,0), v::numeric(38,0)::text FROM (VALUES (0::numeric),(99999999999999999999999999999999999999),\
+         (-99999999999999999999999999999999999999),(10000),(NULL)) t(v)",
+        "SELECT v::numeric(38,38), v::numeric(38,38)::text FROM (VALUES (0::numeric),(0.99999999999999999999999999999999999999),\
+         (-0.00000000000000000000000000000000000001)) t(v)",
+        "SELECT v::numeric(20,10), v::numeric(20,10)::text FROM (VALUES (0::numeric),(1234567890.1234567890),\
+         (-0.0000000001),(0.5)) t(v)",
+        "SELECT v::numeric(18,4), v::numeric(18,4)::text FROM (SELECT round(((i * 7919)::numeric \
+         * 12345.6789) / (10::numeric ^ (i % 9)), 4) * (CASE WHEN i % 2 = 0 THEN -1 ELSE 1 END) v \
+         FROM generate_series(1, 5000) i) t",
+        // a rounding cast gives the column's scale
+        "SELECT 2.675::numeric(10,2), 2.675::numeric(10,2)::text",
+        "SELECT v, v::text FROM (VALUES ('0 microseconds'::interval),('1 microsecond'),\
+         ('-1 microsecond'),('100 hours'),('1 year'),('13 months'),('-1 day'),\
+         ('2147483647 months'),('-2147483648 months'),('2147483647 days'),\
+         ('1 year 2 mons 3 days 04:05:06.789'),('-1 year -2 mons +3 days -04:05:06.5'),\
+         ('00:00:00.5'),('-00:00:00.5'),('2147483647 hours'),('-2147483647 hours'),\
+         (NULL)) t(v)",
+        "SELECT v, v::text FROM (VALUES ('1 day'::interval(0)),('1.4 seconds'::interval(0))) t(v)",
+        "SELECT v, v::text FROM (VALUES ('00:00:00'::time),('00:00:00.000001'),('12:34:56.789'),\
+         ('23:59:59.999999'),('24:00:00'),(NULL)) t(v)",
+        "SELECT v, v::text FROM (VALUES ('12:34:56.123456'::time(0)),('23:59:59.6'::time(0))) t(v)",
+    ];
+    for sql in cases {
+        assert!(same_as_server(&mut c, sql)? > 0, "{sql}");
+    }
+    // the schema says what the column is
+    let cur = c.query(
+        "SELECT 1.5::numeric(10,3), 1.5::numeric, '1 day'::interval, '01:00'::time, '01:00+01'::timetz",
+        &[],
+    )?;
+    let tys: Vec<ColumnType> = cur.fields().iter().map(|f| f.ty).collect();
+    drop(cur);
+    assert_eq!(
+        tys,
+        vec![
+            ColumnType::Decimal128 {
+                precision: 10,
+                scale: 3
+            },
+            ColumnType::Utf8, // unconstrained numeric: the scale varies by value
+            ColumnType::Interval,
+            ColumnType::Time64Micros,
+            ColumnType::Utf8, // timetz stays text
+        ]
+    );
+    // values by field
+    let mut cur = c.query(
+        "SELECT (-12.50)::numeric(10,2), '1 year 2 mons 3 days 04:05:06.789'::interval, '24:00:00'::time",
+        &[],
+    )?;
+    let r = cur.next()?.unwrap();
+    let d = r.get::<karez_pg::Decimal128>(0)?;
+    assert_eq!((d.unscaled, d.scale), (-1250, 2));
+    let i = r.get::<karez_pg::Interval>(1)?;
+    assert_eq!((i.months, i.days, i.micros), (14, 3, 14_706_789_000));
+    assert_eq!(r.get::<karez_pg::Time>(2)?.0, 86_400_000_000);
+    drop(cur);
+    Ok(())
+}
+
+#[test]
+fn nan_and_infinity_in_a_decimal_column_are_a_value_error_and_the_connection_survives() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let e = {
+        let mut cur = c.query(
+            "SELECT x::numeric(10,2) FROM (VALUES ('NaN'::numeric), (1)) t(x)",
+            &[],
+        )?;
+        loop {
+            match cur.next() {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("expected an error"),
+                Err(e) => break e,
+            }
+        }
+    };
+    assert!(matches!(e, Error::Value(_)), "{e:?}");
+    assert!(e.to_string().contains("::text"), "{e}");
+    assert!(!c.is_broken());
+    assert_eq!(one_i64(&mut c, "SELECT 9::int8", &[])?, 9);
+    // the same value read as text works
+    let mut cur = c.query("SELECT 'NaN'::numeric(10,2)::text", &[])?;
+    assert_eq!(cur.next()?.unwrap().get::<&str>(0)?, "NaN");
+    Ok(())
+}
+
+#[test]
+fn native_parameters_round_trip_through_the_server() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    c.execute("SET intervalstyle = 'iso_8601'", &[])?;
+    // numeric: send a Decimal128 and have the server print it
+    for (u, scale, want) in [
+        (-1250i128, 2u8, "-12.50"),
+        (0, 0, "0"),
+        (0, 3, "0.000"),
+        (5, 8, "0.00000005"),
+        (123_456_789, 4, "12345.6789"),
+        (
+            10i128.pow(38) - 1,
+            0,
+            "99999999999999999999999999999999999999",
+        ),
+        (
+            -(10i128.pow(37)),
+            37,
+            "-1.0000000000000000000000000000000000000",
+        ),
+        (10_000, 0, "10000"),
+        (100, 0, "100"),
+    ] {
+        let v = Value::Numeric(karez_pg::Decimal128 { unscaled: u, scale });
+        let mut cur = c.query(
+            "SELECT $1::numeric::text, $1::numeric = $2::numeric",
+            &[v, Value::Unknown(want)],
+        )?;
+        let r = cur.next()?.unwrap();
+        assert_eq!(r.get::<&str>(0)?, want);
+        assert!(r.get::<bool>(1)?, "{want}");
+    }
+    // into a numeric(p,s) column and back
+    c.execute(
+        "CREATE TEMP TABLE nat (n numeric(12,2), iv interval, t time, a int4[], b text[])",
+        &[],
+    )?;
+    let ia = [Some(1), None, Some(i32::MIN)];
+    let ta = [Some("a b"), None, Some(""), Some("é日🎉"), Some("{x}")];
+    c.execute(
+        "INSERT INTO nat VALUES ($1, $2, $3, $4, $5)",
+        &[
+            Value::Numeric(karez_pg::Decimal128 {
+                unscaled: -123_456,
+                scale: 2,
+            }),
+            Value::Interval(karez_pg::Interval {
+                months: 14,
+                days: -3,
+                micros: -1,
+            }),
+            Value::Time(karez_pg::Time(86_399_999_999)),
+            Value::Array(karez_pg::Array::I32(&ia)),
+            Value::Array(karez_pg::Array::Text(&ta)),
+        ],
+    )?;
+    let mut cur = c.query(
+        "SELECT n, iv, t, a::text, b::text, n::text, iv::text, t::text FROM nat",
+        &[],
+    )?;
+    let r = cur.next()?.unwrap();
+    let d = r.get::<karez_pg::Decimal128>(0)?;
+    assert_eq!((d.unscaled, d.scale), (-123_456, 2));
+    assert_eq!(
+        r.get::<karez_pg::Interval>(1)?,
+        karez_pg::Interval {
+            months: 14,
+            days: -3,
+            micros: -1
+        }
+    );
+    assert_eq!(r.get::<karez_pg::Time>(2)?.0, 86_399_999_999);
+    assert_eq!(r.get::<&str>(3)?, "{1,NULL,-2147483648}");
+    assert_eq!(r.get::<&str>(4)?, "{\"a b\",NULL,\"\",é日🎉,\"{x}\"}");
+    assert_eq!(r.get::<&str>(5)?, "-1234.56");
+    assert_eq!(r.get::<&str>(6)?, "P1Y2M-3DT-0.000001S");
+    assert_eq!(r.get::<&str>(7)?, "23:59:59.999999");
+    drop(cur);
+    // every array element type, with NULLs, and the empty array
+    let (b, i2, i4, i8_, f4, f8) = (
+        [Some(true), None, Some(false)],
+        [Some(i16::MIN), None, Some(i16::MAX)],
+        [Some(i32::MIN), Some(0), None],
+        [Some(i64::MIN), None, Some(i64::MAX)],
+        [Some(1.5f32), None, Some(f32::NEG_INFINITY)],
+        [Some(-0.0f64), None, Some(f64::NAN)],
+    );
+    let empty: [Option<i32>; 0] = [];
+    let mut cur = c.query(
+        "SELECT $1::bool[]::text, $2::int2[]::text, $3::int4[]::text, $4::int8[]::text, \
+         $5::float4[]::text, $6::float8[]::text, $7::int4[]::text, cardinality($7::int4[])",
+        &[
+            Value::Array(karez_pg::Array::Bool(&b)),
+            Value::Array(karez_pg::Array::I16(&i2)),
+            Value::Array(karez_pg::Array::I32(&i4)),
+            Value::Array(karez_pg::Array::I64(&i8_)),
+            Value::Array(karez_pg::Array::F32(&f4)),
+            Value::Array(karez_pg::Array::F64(&f8)),
+            Value::Array(karez_pg::Array::I32(&empty)),
+        ],
+    )?;
+    let r = cur.next()?.unwrap();
+    assert_eq!(r.get::<&str>(0)?, "{t,NULL,f}");
+    assert_eq!(r.get::<&str>(1)?, "{-32768,NULL,32767}");
+    assert_eq!(r.get::<&str>(2)?, "{-2147483648,0,NULL}");
+    assert_eq!(
+        r.get::<&str>(3)?,
+        "{-9223372036854775808,NULL,9223372036854775807}"
+    );
+    assert_eq!(r.get::<&str>(4)?, "{1.5,NULL,-Infinity}");
+    assert_eq!(r.get::<&str>(5)?, "{-0,NULL,NaN}");
+    assert_eq!(r.get::<&str>(6)?, "{}");
+    assert_eq!(r.get::<i32>(7)?, 0);
+    drop(cur);
+    // an array parameter works with a prepared statement and a column of the matching type
+    let ids = [Some(1i64), Some(2), Some(3)];
+    assert_eq!(
+        one_i64(
+            &mut c,
+            "SELECT count(*) FROM customers WHERE id = ANY($1)",
+            &[Value::Array(karez_pg::Array::I64(&ids))]
+        )?,
+        3
+    );
+    // an enum parameter: the label as an unknown-typed text value, and an enum array literal
+    c.execute("CREATE TEMP TABLE moods (m mood, ms mood[])", &[])?;
+    c.execute(
+        "INSERT INTO moods VALUES ($1, $2)",
+        &[Value::Unknown("happy"), Value::Unknown("{sad,ok}")],
+    )?;
+    let mut cur = c.query(
+        "SELECT m::text, ms::text FROM moods WHERE m = $1",
+        &[Value::Unknown("happy")],
+    )?;
+    let r = cur.next()?.unwrap();
+    assert_eq!(
+        (r.get::<&str>(0)?, r.get::<&str>(1)?),
+        ("happy", "{sad,ok}")
+    );
     Ok(())
 }
 

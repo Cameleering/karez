@@ -10,7 +10,7 @@ Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a comp
 
 | M1 item in plan section 8 | state |
 |---|---|
-| types | partial: native codecs for bool, ints, floats, text, bytea, uuid, date, timestamp(tz); `numeric`, `json(b)`, `interval`, `time(tz)`, `inet`, `cidr`, `macaddr`, bit, enums and arrays are decoded to **text** (`render.rs`); no native `Decimal128`; parameters accept only the `Value` variants listed in `types.rs` |
+| types | partial (the state when M1 began; step 3 changed it on 2026-11-19, see below): native codecs for bool, ints, floats, text, bytea, uuid, date, timestamp(tz); `numeric`, `json(b)`, `interval`, `time(tz)`, `inet`, `cidr`, `macaddr`, bit, enums and arrays were decoded to **text** (`render.rs`); no native `Decimal128`; parameters accepted only the `Value` variants then listed in `types.rs` |
 | transactions, savepoints | built (`tx.rs`: `Isolation`, `Savepoint`, `Transaction`) |
 | COPY | built, in and out |
 | LISTEN | built |
@@ -51,8 +51,23 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
    suite was rerun after step 2 (karez-pg 51 tests with `tls`, karez-rt 14 and 6; all pass), the dead-host tests no longer wait two seconds each on Windows (a host that closes at once replaces a refused port, except in the one test about refusal),
    and `execute_many` over 64 KiB now works on a blocking TLS connection: it goes out in windows of about 64 KiB, each followed by a Flush and a read of its results, with one Sync at the end (test: 60 requests of 300 KB answered with 1 MB each, and a failing
    statement in the middle). Still not tested: a failover while a connection is open (only the choice at connect time is).
-3. **Native types.** `numeric` to a `Decimal128` column (precision and scale kept) with a text fallback beyond 38 digits; `interval`, `time`, `timetz`, `inet`/`cidr`/`macaddr`, `bit`, `json(b)` as
-   dedicated chunk types or as `Utf8` with a marker, one decision per type recorded here before code; array and enum parameters. Exit: step 4 passes for each.
+3. **Native types. Built 2026-11-19; the exit (step 4 for every type) is open.** One decision per type, with the reason:
+   - **`numeric(p,s)` with `p <= 38` and `0 <= s <= p` -> `Decimal128 { precision, scale }`** (16 bytes, little-endian `i128`, Arrow's `Decimal128` layout). The scale comes from the type modifier in
+     RowDescription, so every value in the column has it. **An unconstrained `numeric`, a precision above 38, and the PostgreSQL 15 forms with a negative scale or a scale above the precision stay `Utf8`**, rendered exactly
+     (a column whose scale varies by value has no fixed Arrow type, and the text keeps every digit). **`NaN`, `Infinity` and `-Infinity` in a `Decimal128` column are a value error** (`Error::Value`, with the advice to select the column
+     `::text`); the connection stays usable and the rest of the result is read and discarded (as for any value this version cannot hold). A value with more fractional digits than the column scale cannot occur for a constrained column and is an error if a server sends one.
+   - **`interval` -> `Interval { months: i32, days: i32, micros: i64 }`** (16 bytes: PostgreSQL's own three fields). Not Arrow's `MonthDayNano`: PostgreSQL's microseconds times 1,000 overflow an `i64` beyond about 292 years, so the ADBC export (step 5)
+     converts with a checked multiply and a clear error. `Display` is the ISO 8601 form (what `intervalstyle = 'iso_8601'` prints); one implementation serves the column type and the text rendering inside arrays.
+   - **`time` -> `Time(i64)`** microseconds since midnight, 0 to 86,400,000,000 (PostgreSQL allows `24:00:00`); `Display` is PostgreSQL's text.
+   - **`timetz` stays `Utf8`.** Arrow has no type for a time with an offset, PostgreSQL's own documentation discourages it, and its text form round-trips.
+   - **`inet`, `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`, `json`, `jsonb`, `xml`, `"char"`, enums and arrays stay `Utf8`**, read in binary and rendered to the server's `::text` form. No standard Arrow type exists for the network and
+     bit types, and a fixed-size binary would force every consumer to re-implement PostgreSQL's formatting. **No marker in the chunk:** `ResultPlan::type_oids()` already tells which PostgreSQL type a `Utf8` column came from, and the ADBC export (step 5) reads it from there;
+     a field-level tag would change every `Field::new` call for no use before then. JSON has no `Value` variant: send it as `Value::Unknown` text.
+   - **Parameters (binary format):** `Value::Numeric(Decimal128)`, `Value::Interval`, `Value::Time`, and `Value::Array(Array::{Bool, I16, I32, I64, F32, F64, Text})` (one dimension, NULL elements, the empty array). Anything else, including **enum
+     labels and arrays of other types, goes as `Value::Unknown` text** (format 0, type inferred by the server); that is tested for an enum and an enum array and needs no new variant.
+   Tests: `numeric.rs` (type modifiers, known values, refusals, encode against hand-built server bytes, 20,000 random round trips), chunk columns, decoder and encoder unit tests, the mutation fuzzer with a typed numeric column (400,000 streams, no panic),
+   and 3 real-server tests on PostgreSQL 14, 16 and 17: columns against the server's own `::text` (11 numeric, interval, time and `(0)` precision cases, a 5,000-row random numeric, the extremes), parameters sent and printed back, and NaN. Existing
+   rendered-type tests now read interval and time natively. **Not done:** the type x value x format matrix of step 4; `karez-rt`'s `OwnedValue` has no native variants for the new types yet (it carries the older ones only, as before).
 4. **Differential harness.** For every supported type: the values NULL, zero, one, minimum, maximum, a random sample and the known edge cases (numeric `NaN`, infinity dates, time zones across DST),
    written with `COPY` or `INSERT`, read back in binary, rendered, and compared with the server's own `::text` output on the same row. A property test over the type x value x format matrix,
    run against PostgreSQL 14, 16 and 17 (13, 15 and 18 once the containers exist). This is the cross-check plan section 9 asks for ("cross-checked against libpq's text output").

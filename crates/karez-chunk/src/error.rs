@@ -28,6 +28,9 @@ pub enum ChunkError {
     RowIncomplete,
     /// A column name was not found.
     UnknownColumn,
+    /// A value does not fit the column it was pushed to (a time of day past 24 hours, a decimal
+    /// with more digits than the column's precision).
+    OutOfRange(&'static str),
     /// Internal invariant of a column or chunk is broken.
     Corrupt(&'static str),
 }
@@ -49,6 +52,7 @@ impl fmt::Display for ChunkError {
             ChunkError::InvalidUtf8 => write!(f, "invalid UTF-8"),
             ChunkError::RowIncomplete => write!(f, "row finished with a column missing a value"),
             ChunkError::UnknownColumn => write!(f, "unknown column"),
+            ChunkError::OutOfRange(what) => write!(f, "value out of range: {what}"),
             ChunkError::Corrupt(what) => write!(f, "corrupt chunk: {what}"),
         }
     }
