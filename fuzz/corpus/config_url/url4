@@ -1,0 +1,1 @@
+postgres://u@h/d?auth=gss&krbsrvname=postgres

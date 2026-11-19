@@ -18,15 +18,15 @@ Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a comp
 | portals | was **not built** when M1 began (the cursor streams from the socket, so a second statement cannot run while one is open); built 2026-11-19 as step 5 |
 | metadata chunks | was **not built** when M1 began; built 2026-11-19 as step 5 |
 | TLS with rustls | built (feature `tls`) |
-| GSS/SSPI | **not built** (needs FFI, so `unsafe`) |
-| OAUTHBEARER | **not built** |
-| SCRAM-SHA-256-PLUS | **not built** (SCRAM without channel binding works) |
+| GSS/SSPI | GSSAPI (Kerberos) on Unix **built 2026-11-19 (step 7)** in `karez-gss`; Windows SSPI **open** |
+| OAUTHBEARER | **built 2026-11-19 (step 7)** |
+| SCRAM-SHA-256-PLUS | **built 2026-11-19 (step 7)** (`tls-server-end-point`, the only binding PostgreSQL has) |
 | async adapter | built as `karez-rt` (std-only I/O threads and channels); a tokio adapter is not |
 | `karez-pool` | **built 2026-11-18 (step 1b)**: a std-only crate with a `Manager` trait and a first-come-first-served `Pool`; `karez-pg::Pool` wraps it. The plan's other `karez-pool` items (statement cache, multi-host routing, health checks) are not in it: the statement cache is per connection in `karez-pg`, routing is step 2 |
 | URL translation | built for PostgreSQL (`karez:pg://`, `postgresql://`, `postgres://`); several hosts, `target_session_attrs` and `load_balance_hosts` since 2026-11-18 (step 2) |
 | errors with SQLSTATE | built; the class and a transient flag were added on 2026-11-18 (step 1) |
-| fuzz harness | a std-only mutation fuzzer was added on 2026-11-18 (step 1); coverage-guided fuzzing is not set up |
-| differential harness | **not built** |
+| fuzz harness | a std-only mutation fuzzer was added on 2026-11-18 (step 1); coverage-guided targets in `fuzz/` since 2026-11-19 (step 8) |
+| differential harness | **built 2026-11-19 (step 4)** |
 | parity checklist | not started (needs the two primary texts, STATUS next steps) |
 
 ## 2. Steps, in order
@@ -157,9 +157,18 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
      keytab; five tests (a login with a password and mutual authentication, a wrong password, policy, a service name the KDC does not know, a host name that is not the service principal). Needs `KRB5_CONFIG=tests/docker/gss/krb5-client.conf`, which sets `qualify_shortname = ""` (otherwise MIT Kerberos appends the machine's DNS search domain to `localhost`).
    - **Windows SSPI is open.** It is a different interface (`InitializeSecurityContext` in `secur32`), cannot be tested here without an Active Directory or a Kerberos realm reachable from Windows, and the plan says to record it as open if the fixture cannot be built. `karez-gss` compiles to a stub on Windows that
      returns an error saying so. On macOS the crate links the `GSS` framework but was not built there.
-   - **Not done:** SCRAM `SCRAM-SHA-256` with SASLprep for non-ASCII passwords (unchanged: the password is used as given), `tls-exporter` binding (not offered by PostgreSQL), `sslnegotiation=direct` and certificate login (`sslcert`/`sslkey`: client certificates) are not part of this step and remain open.
-8. **Coverage-guided fuzzing outside the std-only crates.** A `fuzz/` directory with cargo-fuzz targets for frame, message, row and SCRAM parsing, excluded from the workspace so the core keeps no
-   dependency; seed corpus from step 1's corpus; a CI job. The plan's target is 30 CPU-days without a new crash (M8); M1 only needs the harness and a first run.
+   - **Client certificates and direct TLS** (added 2026-11-19, after the step): `sslcert` and `sslkey` (PEM; PKCS#8, PKCS#1 and SEC1 keys; a key with a passphrase is refused with a clear error) are offered to the server in all three verifier modes. When a client certificate is
+     set and the connection is TLS, the server may accept it with no password exchange (`hostssl ... cert`), and the client then accepts `AuthenticationOk` without an exchange (without a certificate that is still an error: "server did not ask for authentication"). `sslnegotiation=direct` skips the `SSLRequest` and
+     starts the TLS handshake at once with ALPN `postgresql` (PostgreSQL 17 and later). Tested against PostgreSQL 17 (`cert` compose profile, port 54321): a login by certificate with the server seeing the certificate's subject, a missing key, an unreadable file, garbage in the key file, and a capture of the first bytes
+     sent (the 8-byte `SSLRequest` against a TLS handshake record).
+   - **Not done:** SCRAM `SCRAM-SHA-256` with SASLprep for non-ASCII passwords (the password is used as given; SASLprep needs the Unicode NFKC tables, which std does not have), `tls-exporter` binding (not offered by PostgreSQL), GSS encryption (`gssencmode`), Windows SSPI, and passphrase-protected client keys.
+8. **Coverage-guided fuzzing outside the std-only crates. Built 2026-11-19.** A `fuzz/` directory (its own workspace, excluded from the main one, so the core keeps no dependency) with seven cargo-fuzz (libFuzzer) targets: `frame`, `message`, `row`, `scram`,
+   `oauth`, `cert` and `config_url` (what each one checks is in [fuzz/README.md](../../fuzz/README.md)). Seed corpus: 101 small valid inputs in `fuzz/corpus/`, written by the ignored test `dump_seed_corpus` from step 1's generators (the `cert` seeds are the DER of the fixture CA certificates).
+   `fuzz/run.sh` runs every target for a set time and keeps new inputs outside the repository. A workflow, `.github/workflows/fuzz.yml`, runs it by hand and once a week (120 s per target by default); it has not run yet, because nothing is pushed to a runner that has it.
+   **First run [measured here] (2026-11-19, WSL2 on the owner's Windows machine, nightly rustc 1.102.0, cargo-fuzz 0.13.2, one core per target, 240 s each, from the seeds):** 89.7 million executions in total (frame 8.7 M, message 12.6 M, row 2.3 M, scram 0.16 M, oauth 7.0 M, cert 56.3 M, config_url 2.7 M),
+   **no crash, hang or failed assertion in the library code.** One failure came from the first version of the `cert` target's own assertion (it required a non-empty OID, which a damaged certificate can legitimately give); the target was corrected to check that an empty OID chooses no hash, and the corrected target ran clean.
+   Coverage at the end: frame 741 edges, message 751, row 1,253, scram 435, oauth 293, cert 101, config_url 644 (libFuzzer's `cov`; not a line-coverage figure).
+   **Limits:** that is 28 CPU-minutes in total, against the plan's M8 target of 30 CPU-days without a new crash, so it shows the harness works and finds nothing in the first minutes, not that the parsers are free of crashes. No dictionary and no structure-aware mutator (the `row` target builds its column list from raw bytes). The `scram` target runs slowly (about 670 runs a second) because the client does a PBKDF2 of the server's chosen iteration count; the count is capped at 1,000,000 (`MAX_ITERATIONS`), so there is no hang. It does not fuzz the client-to-server direction, TLS, GSS tokens (the system library parses those) or the metadata and portal code, which only see parsed rows.
 9. **Exit measurements (needs the owner's spend approval, per CLAUDE.md).** S6 COPY against PgBulkInsert (the plan wants at least 1.5x; plan section 10 row 4), S1 to S8 with TLS on,
    and the S8 wait-time distribution against the Erlang C prediction. The TLS bulk-read adapter gap from perf-program.md section 20 closes here.
 

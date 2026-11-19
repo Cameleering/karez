@@ -44,6 +44,10 @@ impl Transport {
         if cfg.ssl_mode == SslMode::Disable {
             return Ok(Transport::Plain(stream));
         }
+        if cfg.ssl_negotiation == crate::config::SslNegotiation::Direct {
+            // no SSLRequest: the handshake starts at once (PostgreSQL 17 and later)
+            return Self::start_tls(stream, cfg);
+        }
         let mut req = Vec::with_capacity(8);
         frontend::ssl_request(&mut req);
         stream.write_all(&req)?;

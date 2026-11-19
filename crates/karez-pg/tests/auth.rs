@@ -608,3 +608,174 @@ mod gss_server {
         }
     }
 }
+
+/// Client certificates and direct TLS negotiation, against a PostgreSQL 17 that requires a client
+/// certificate for the role `karez_cert` (`tests/docker/compose.yaml`, profile `cert`,
+/// `KAREZ_TEST_CERT=127.0.0.1:54321`). PostgreSQL 17 also accepts a direct TLS handshake.
+#[cfg(feature = "tls")]
+mod client_certificate {
+    use super::*;
+    use karez_pg::SslNegotiation;
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    fn server() -> Result<String, String> {
+        let addr = std::env::var("KAREZ_TEST_CERT")
+            .map_err(|_| "KAREZ_TEST_CERT is not set".to_string())?;
+        let sock = addr
+            .to_socket_addrs()
+            .map_err(|e| format!("cannot resolve {addr}: {e}"))?
+            .next()
+            .ok_or_else(|| format!("{addr} resolves to nothing"))?;
+        TcpStream::connect_timeout(&sock, Duration::from_secs(2))
+            .map_err(|e| format!("{addr} is not reachable: {e}"))?;
+        Ok(addr)
+    }
+
+    macro_rules! need_cert {
+        () => {
+            match server() {
+                Ok(a) => a,
+                Err(why) => {
+                    eprintln!("SKIPPED (not verified against a real server): {why}");
+                    if std::env::var("KAREZ_REQUIRE_CERT").as_deref() == Ok("1") {
+                        panic!("KAREZ_REQUIRE_CERT=1 but there is no server: {why}");
+                    }
+                    return;
+                }
+            }
+        };
+    }
+
+    fn certs_dir() -> String {
+        format!("{}/../../tests/docker/certs", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    fn base(addr: &str) -> Config {
+        let port = addr.rsplit(':').next().unwrap();
+        let mut c =
+            Config::from_url(&format!("postgresql://karez_cert@localhost:{port}/karez")).unwrap();
+        c.ssl_mode = SslMode::VerifyFull;
+        c.ssl_root_cert = Some(format!("{}/ca-{port}.crt", certs_dir()));
+        c
+    }
+
+    fn with_cert(addr: &str, key_suffix: &str) -> Config {
+        let port = addr.rsplit(':').next().unwrap();
+        let mut c = base(addr);
+        c.ssl_cert = Some(format!("{}/client-{port}.crt", certs_dir()));
+        c.ssl_key = Some(format!("{}/client-{port}{key_suffix}.key", certs_dir()));
+        c
+    }
+
+    fn who(c: &mut Connection) -> (String, String) {
+        let mut cur = c
+            .query(
+                "SELECT current_user::text, coalesce(client_dn, '') FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .unwrap();
+        let r = cur.next().unwrap().unwrap();
+        (r.get(0).unwrap(), r.get(1).unwrap())
+    }
+
+    #[test]
+    fn a_client_certificate_logs_in_without_a_password_in_both_key_formats() {
+        let addr = need_cert!();
+        // SEC1 ("EC PRIVATE KEY") and PKCS#8 ("PRIVATE KEY")
+        for suffix in ["", "-pkcs8"] {
+            let mut c = Connection::connect(&with_cert(&addr, suffix)).unwrap();
+            let (user, dn) = who(&mut c);
+            assert_eq!(user, "karez_cert");
+            assert!(
+                dn.contains("karez_cert"),
+                "the server saw the certificate: {dn}"
+            );
+        }
+        // the URL spelling
+        let port = addr.rsplit(':').next().unwrap();
+        let url = format!(
+            "postgresql://karez_cert@localhost:{port}/karez?sslmode=verify-full&sslrootcert={d}/ca-{port}.crt&sslcert={d}/client-{port}.crt&sslkey={d}/client-{port}.key",
+            d = certs_dir()
+        );
+        let mut c = Connection::connect_url(&url).unwrap();
+        assert_eq!(who(&mut c).0, "karez_cert");
+    }
+
+    #[test]
+    fn without_the_certificate_the_server_refuses_and_so_does_a_bad_setup() {
+        let addr = need_cert!();
+        // the server's rule demands a certificate
+        match Connection::connect(&base(&addr)) {
+            Err(Error::Server(e)) => assert_eq!(e.sqlstate(), "28000"),
+            Err(Error::Io(_)) | Err(Error::Tls(_)) => {} // the alert can arrive as a closed socket
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+        // a certificate without its key, a missing file, and a file that is not a key
+        let mut c = with_cert(&addr, "");
+        c.ssl_key = None;
+        match Connection::connect(&c) {
+            Err(Error::Tls(m)) => assert!(m.contains("together"), "{m}"),
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+        let mut c = with_cert(&addr, "");
+        c.ssl_key = Some("/no/such/key.pem".into());
+        assert!(matches!(Connection::connect(&c), Err(Error::Tls(_))));
+        let mut c = with_cert(&addr, "");
+        c.ssl_key = c.ssl_cert.clone(); // a certificate where a key should be
+        match Connection::connect(&c) {
+            Err(Error::Tls(m)) => assert!(m.contains("sslkey"), "{m}"),
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+        let mut c = with_cert(&addr, "");
+        c.ssl_cert = c.ssl_key.clone(); // a key where a certificate should be
+        assert!(matches!(Connection::connect(&c), Err(Error::Tls(_))));
+        // a working connection still works afterwards
+        assert!(Connection::connect(&with_cert(&addr, "")).is_ok());
+    }
+
+    /// What a client sends first, seen by a listener that then closes the connection.
+    fn first_bytes(negotiation: SslNegotiation) -> Vec<u8> {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut b = [0u8; 8];
+            let n = s.read(&mut b).unwrap();
+            b[..n].to_vec()
+        });
+        let mut c = Config::new("127.0.0.1", port, "u");
+        c.ssl_mode = SslMode::Require;
+        c.ssl_negotiation = negotiation;
+        let _ = Connection::connect(&c);
+        h.join().unwrap()
+    }
+
+    #[test]
+    fn the_first_bytes_are_an_ssl_request_or_a_tls_client_hello() {
+        // the SSLRequest message: length 8, code 80877103
+        assert_eq!(
+            first_bytes(SslNegotiation::Postgres),
+            [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]
+        );
+        // a TLS record: handshake (0x16), version 3.x
+        let direct = first_bytes(SslNegotiation::Direct);
+        assert!(
+            direct.len() >= 3 && direct[0] == 0x16 && direct[1] == 3,
+            "{direct:?}"
+        );
+    }
+
+    #[test]
+    fn a_direct_tls_handshake_skips_the_ssl_request() {
+        let addr = need_cert!();
+        let mut c = with_cert(&addr, "");
+        c.ssl_negotiation = SslNegotiation::Direct;
+        let mut conn = Connection::connect(&c).unwrap();
+        assert_eq!(who(&mut conn).0, "karez_cert");
+        // the setting parses from the URL
+        let u = Config::from_url("postgresql://u@h/d?sslnegotiation=direct").unwrap();
+        assert_eq!(u.ssl_negotiation, SslNegotiation::Direct);
+        assert!(Config::from_url("postgresql://u@h/d?sslnegotiation=maybe").is_err());
+    }
+}

@@ -29,6 +29,15 @@ x-pg-extra: &pg-extra
       chown postgres:postgres server.key server.crt
       chmod 600 server.key
       cp ca.crt /certs/ca-$${CA_PORT}.crt
+      # a client certificate for the role karez_cert, in the three key formats the client reads
+      openssl ecparam -name prime256v1 -genkey -noout -out client.key
+      openssl req -new -key client.key -subj "/CN=karez_cert" -out client.csr
+      openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 30 -sha256
+      openssl pkcs8 -topk8 -nocrypt -in client.key -out client-pkcs8.key
+      cp client.crt /certs/client-$${CA_PORT}.crt
+      cp client.key /certs/client-$${CA_PORT}.key
+      cp client-pkcs8.key /certs/client-$${CA_PORT}-pkcs8.key
+      chmod 644 /certs/client-*
       exec docker-entrypoint.sh "$$@"
     - ssl-entrypoint
   command:
@@ -369,6 +378,41 @@ services:
       interval: 3s
       timeout: 5s
       retries: 40
+  pgcert:
+    # PostgreSQL 17 that requires a client certificate for the role karez_cert (tests/docker/cert).
+    # PostgreSQL 17 is also the first version that accepts a direct TLS handshake.
+    <<: *pg-extra
+    profiles: ["cert"]
+    image: postgres:17
+    container_name: karez-test-pgcert
+    environment:
+      CA_PORT: ${KAREZ_TEST_CERT_PORT:-54321}
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/ssl/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/ssl/server.key
+      - -c
+      - ssl_ca_file=/var/lib/postgresql/ssl/ca.crt
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_CERT_PORT:-54321}:5432"
+    volumes:
+      - ./cert/pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./cert/init:/docker-entrypoint-initdb.d:ro
+      - ./certs:/certs
+      - karez-test-pgcert-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -d karez -tAc 'select 1' | grep -q 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
 volumes:
   karez-test-pg16-data:
     name: karez-test-pg16-data
@@ -382,3 +426,5 @@ volumes:
     name: karez-test-pg15-data
   karez-test-pg18-data:
     name: karez-test-pg18-data
+  karez-test-pgcert-data:
+    name: karez-test-pgcert-data

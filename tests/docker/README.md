@@ -70,6 +70,13 @@ KAREZ_TEST_GSS=127.0.0.1:54320 KAREZ_REQUIRE_GSS=1 KRB5_CONFIG=$PWD/tests/docker
   cargo test -p karez-pg --features gss --test auth gss_server                              # Unix only
 ```
 
+```sh
+docker compose -f tests/docker/compose.yaml --profile cert up -d --wait pgcert   # PostgreSQL 17 with a client-certificate rule, port 54321
+KAREZ_TEST_CERT=127.0.0.1:54321 KAREZ_REQUIRE_CERT=1 cargo test -p karez-pg --features tls --test auth client_certificate
+```
+
+The `cert` role is `karez_cert`; `pg_hba.conf` accepts it only over TLS with a certificate signed by the fixture CA (`hostssl all karez_cert all cert clientcert=verify-full`). The client certificate and key (SEC1 and PKCS#8) are written next to the CA in `tests/docker/certs` (git-ignored). The same service also serves `sslnegotiation=direct`.
+
 The OAuth validator accepts `karez-token-for-<role>` and nothing else; the Kerberos user is `karez_gss@KAREZ.TEST` with the public password `karez_test_only_gss`. The KDC writes the service keytab to `tests/docker/gss/keytabs` (git-ignored). Everything here is test-only.
 The PostgreSQL 18 TLS fixture signs its certificate with SHA-384, so SCRAM channel binding there uses SHA-384 (the others use SHA-256).
 

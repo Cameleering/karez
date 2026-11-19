@@ -440,3 +440,139 @@ fn scram_and_base64_never_panic() {
         },
     );
 }
+
+/// Write the seed corpus for the coverage-guided targets in `fuzz/` (see `fuzz/README.md`):
+/// `cargo test -p karez-proto-pg --test fuzz_backend dump_seed_corpus -- --ignored`.
+/// The seeds are valid inputs, so the fuzzer starts from code the parsers actually reach.
+#[test]
+#[ignore = "writes files under fuzz/corpus"]
+fn dump_seed_corpus() {
+    use std::fs;
+    use std::path::PathBuf;
+
+    // the OID list of fuzz/fuzz_targets/row.rs; the index is what the seed names
+    const ROW_TARGET_OIDS: &[u32] = &[
+        16, 17, 19, 20, 21, 23, 25, 700, 701, 1042, 1043, 1082, 1114, 1184, 2950, 18, 26, 114, 142,
+        650, 774, 829, 869, 1083, 1186, 1266, 1560, 1562, 1700, 3802, 1007, 1009, 1016, 1231, 1183,
+        1187, 2951, 3807, 4242,
+    ];
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus");
+    let put = |target: &str, name: &str, bytes: &[u8]| {
+        let dir = root.join(target);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(name), bytes).unwrap();
+    };
+
+    // frame: a piece-size byte and a whole server stream
+    let mut rng = SplitMix64::new(11);
+    for (i, k) in [0u8, 6, 40, 200].iter().enumerate() {
+        let mut s = vec![*k];
+        s.extend(corpus_stream(&mut rng));
+        put("frame", &format!("stream{i}"), &s);
+    }
+
+    // message: tag and body, one seed per message in the stream
+    let stream = corpus_stream(&mut SplitMix64::new(12));
+    let mut reader = FrameReader::new(MAX_MESSAGE);
+    reader.push(&stream);
+    let mut n = 0;
+    while let Some(f) = reader.next_frame().unwrap() {
+        let mut s = vec![f.tag];
+        s.extend_from_slice(f.body);
+        put("message", &format!("{n:02}-{}", f.tag), &s);
+        n += 1;
+    }
+
+    // row: columns of the stream's description, mapped to the target's OID list
+    let mut rng = SplitMix64::new(13);
+    for i in 0..6 {
+        let cols: Vec<usize> = OIDS
+            .iter()
+            .map(|o| ROW_TARGET_OIDS.iter().position(|t| t == o).unwrap())
+            .collect();
+        let mut s = vec![cols.len() as u8];
+        for (j, c) in cols.iter().enumerate() {
+            s.push(*c as u8);
+            s.extend_from_slice(&typmod(j).to_be_bytes());
+        }
+        s.extend(data_row(&mut rng));
+        put("row", &format!("full{i}"), &s);
+    }
+    // one narrow seed per type, so each decoder is reached early
+    for (j, o) in OIDS.iter().enumerate() {
+        let c = ROW_TARGET_OIDS.iter().position(|t| t == o).unwrap();
+        let mut s = vec![1u8, c as u8];
+        s.extend_from_slice(&typmod(j).to_be_bytes());
+        let mut body = 1u16.to_be_bytes().to_vec();
+        let v = value_for(*o, &mut rng).unwrap_or_default();
+        body.extend_from_slice(&(v.len() as i32).to_be_bytes());
+        body.extend_from_slice(&v);
+        s.extend(body);
+        put("row", &format!("one{j:02}"), &s);
+    }
+
+    // scram: a split byte, the server-first message, then the server-final message
+    for (i, (first, last)) in [
+        ("r=clientnonceXYZ,s=c2FsdA==,i=4096", "v=c2VydmVy"),
+        ("r=clientnonceXYZ,s=c2FsdA==,i=1", "e=invalid-proof"),
+        ("r=other,s=!!,i=0", ""),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut s = vec![first.len() as u8];
+        s.extend_from_slice(first.as_bytes());
+        s.extend_from_slice(last.as_bytes());
+        put("scram", &format!("exchange{i}"), &s);
+    }
+
+    // oauth: the server's JSON error and some tokens
+    for (i, j) in [
+        r#"{"status":"invalid_token","scope":"openid","openid-configuration":"https://idp.example/.well-known/openid-configuration"}"#,
+        r#"{"status":"invalid_token"}"#,
+        r#"{"scope":"a b c","status":"x\u00e9\n"}"#,
+        "abc.def-ghi_jkl~+/=",
+        "bad token\u{1}",
+        "",
+    ]
+    .iter()
+    .enumerate()
+    {
+        put("oauth", &format!("case{i}"), j.as_bytes());
+    }
+
+    // cert: the DER of the fixture CA certificates, when the compose fixtures have been started
+    let certs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/docker/certs");
+    let mut found = 0;
+    if let Ok(rd) = fs::read_dir(&certs) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "crt") {
+                let pem = fs::read_to_string(&p).unwrap();
+                let b64: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+                if let Some(der) = base64::decode(&b64) {
+                    put("cert", &format!("fixture{found}"), &der);
+                    found += 1;
+                }
+            }
+        }
+    }
+    println!("certificate seeds: {found}");
+
+    // config_url: connection URLs and key/value tails
+    for (i, u) in [
+        "postgres://u:pw@localhost:5432/db",
+        "postgresql://u@h1:5432,h2:5433/db?target_session_attrs=read-write&load_balance_hosts=random",
+        "postgres://u:p%40ss@[::1]:5432/d?sslmode=verify-full&sslrootcert=/ca.pem&channel_binding=require",
+        "postgres://u@h/d?sslcert=/c.crt&sslkey=/c.key&sslnegotiation=direct",
+        "postgres://u@h/d?auth=gss&krbsrvname=postgres",
+        "sslmode=disable&connect_timeout=3&application_name=a%20b",
+        "",
+        "postgres://",
+    ]
+    .iter()
+    .enumerate()
+    {
+        put("config_url", &format!("url{i}"), u.as_bytes());
+    }
+}

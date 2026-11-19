@@ -48,7 +48,10 @@ Nothing else in karez uses it unless `karez-pg`'s `gss` feature is on; the core,
 
 ## How it is tested
 
-- Unit tests (`cargo test -p karez-gss`, Linux): names are imported without a network; a missing ticket is a readable error, not a crash; 50 failed acquisitions in a row leak nothing that the process can see (a crude check; no leak detector ran).
+- Unit tests (`cargo test -p karez-gss`, Linux): names are imported without a network; a missing ticket is a readable error, not a crash; 50 failed acquisitions in a row leak nothing that the process can see (a crude check; the leak-detector run is below).
 - Integration tests (`crates/karez-pg/tests/auth.rs`, module `gss_server`): a real KDC and a real PostgreSQL (`tests/docker/gss`): a login with a password succeeds with mutual authentication; a wrong password, an unknown service name and a host
   name that is not the service principal fail with the library's own message; the secret is not in the error.
-- **Not done:** Miri cannot run FFI; AddressSanitizer and Valgrind runs of these tests were not made. Run them before 1.0 (plan section 7.2 asks for ASan on the crates that allow `unsafe`).
+- **AddressSanitizer with LeakSanitizer [measured here], 2026-11-19:** `bash tests/docker/run_gss_asan.sh` (WSL2, nightly rustc 1.102.0 with `-Zsanitizer=address`, MIT Kerberos 1.20 in the system, the KDC and PostgreSQL 16 fixture). Both test sets above pass with the sanitizer on: the 3 unit tests of `karez-gss` and the 5 `gss_server` tests, with
+  no report of a use after free, double free, out-of-bounds access or leak. The test binary was checked for the instrumentation (`__asan_*` and `__lsan_*` symbols), and a control program that forgets a `Box` was reported as a leak under the same options, so a clean result means something. Limits: the standard library and the system GSS library are not instrumented
+  (ASan intercepts their allocations, so a leak or double free through `karez-gss` is seen, but a bad access inside the C library is not); it covers the paths the tests reach (a login, a wrong password, an unknown service, a bad host, a failed import), not every `gss_*` error return; only MIT Kerberos was run.
+- **Not done:** Miri cannot run FFI, Valgrind was not run, and ASan was run once, not in CI. Malformed server tokens are not tested: the system library parses them, and no test sends one.

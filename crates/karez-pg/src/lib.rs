@@ -30,8 +30,8 @@ mod transport;
 mod tx;
 
 pub use config::{
-    AuthPolicy, ChannelBindingMode, Config, LoadBalance, SslMode, TargetSessionAttrs,
-    TokenProvider, UnsupportedTypes,
+    AuthPolicy, ChannelBindingMode, Config, LoadBalance, SslMode, SslNegotiation,
+    TargetSessionAttrs, TokenProvider, UnsupportedTypes,
 };
 pub use conn::{
     Batch, BatchOutcome, BatchRows, CancelToken, Connection, Cursor, Fetched, Notification,

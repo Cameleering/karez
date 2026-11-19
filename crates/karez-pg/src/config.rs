@@ -96,6 +96,19 @@ pub enum UnsupportedTypes {
     Text,
 }
 
+/// How TLS is started (PostgreSQL's `sslnegotiation`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SslNegotiation {
+    /// Ask first with an `SSLRequest` message and start TLS if the server answers `S` (default; every
+    /// server version).
+    #[default]
+    Postgres,
+    /// Start the TLS handshake at once, with the ALPN protocol `postgresql`, saving a round trip
+    /// (PostgreSQL 17 and later). A server that does not support it sees garbage and closes the
+    /// connection.
+    Direct,
+}
+
 /// How a connection uses TLS (PostgreSQL's `sslmode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SslMode {
@@ -216,6 +229,14 @@ pub struct Config {
     /// Where the trusted CA certificates (PEM) come from: a file path, or `system` for the
     /// built-in Mozilla roots. `None` means the built-in roots.
     pub ssl_root_cert: Option<String>,
+    /// The client certificate chain (PEM file) to present when the server asks for one
+    /// (`sslcert`). Needs [`Config::ssl_key`].
+    pub ssl_cert: Option<String>,
+    /// The private key (PEM file, PKCS#8, PKCS#1 or SEC1, not encrypted) of the client certificate
+    /// (`sslkey`).
+    pub ssl_key: Option<String>,
+    /// How TLS is started; see [`SslNegotiation`].
+    pub ssl_negotiation: SslNegotiation,
     /// Prepared statements kept per connection.
     pub statement_cache_size: usize,
     /// Largest accepted server message in bytes.
@@ -270,6 +291,9 @@ impl Config {
             unsupported_types: UnsupportedTypes::Error,
             ssl_mode: SslMode::VerifyFull,
             ssl_root_cert: None,
+            ssl_cert: None,
+            ssl_key: None,
+            ssl_negotiation: SslNegotiation::Postgres,
             statement_cache_size: 256,
             max_message: karez_proto_pg::DEFAULT_MAX_MESSAGE,
         }
@@ -425,6 +449,27 @@ impl Config {
                             return Err(Error::Config("sslrootcert needs a value".into()));
                         }
                         cfg.ssl_root_cert = Some(v);
+                    }
+                    "sslcert" | "sslkey" => {
+                        if v.is_empty() {
+                            return Err(Error::Config(format!("{k} needs a value")));
+                        }
+                        if k == "sslcert" {
+                            cfg.ssl_cert = Some(v);
+                        } else {
+                            cfg.ssl_key = Some(v);
+                        }
+                    }
+                    "sslnegotiation" => {
+                        cfg.ssl_negotiation = match v.as_str() {
+                            "postgres" => SslNegotiation::Postgres,
+                            "direct" => SslNegotiation::Direct,
+                            other => {
+                                return Err(Error::Config(format!(
+                                    "unknown sslnegotiation {other:?}; use postgres or direct"
+                                )))
+                            }
+                        }
                     }
                     "application_name" => cfg.application_name = Some(v),
                     "connect_timeout" => cfg.connect_timeout = Some(secs(&k, &v)?),

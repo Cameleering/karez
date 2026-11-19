@@ -1,0 +1,70 @@
+[package]
+name = "karez-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Coverage-guided fuzz targets (cargo-fuzz) for karez's parsers. Not part of the workspace: the core keeps no dependency."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+karez-chunk = { path = "../crates/karez-chunk" }
+karez-proto-pg = { path = "../crates/karez-proto-pg" }
+karez-pg = { path = "../crates/karez-pg" }
+
+# This crate is its own workspace so that the libFuzzer dependency never reaches the main one.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message"
+path = "fuzz_targets/message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "row"
+path = "fuzz_targets/row.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scram"
+path = "fuzz_targets/scram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oauth"
+path = "fuzz_targets/oauth.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cert"
+path = "fuzz_targets/cert.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_url"
+path = "fuzz_targets/config_url.rs"
+test = false
+doc = false
+bench = false

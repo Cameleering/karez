@@ -1,0 +1,1 @@
+postgres://u@h/d?sslcert=/c.crt&sslkey=/c.key&sslnegotiation=direct

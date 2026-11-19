@@ -739,7 +739,11 @@ impl Connection {
             };
             match step {
                 Step::AuthOk => {
-                    if !exchanged && !cfg.auth.trust {
+                    // A server that checked our client certificate (`sslcert`) over TLS says
+                    // AuthenticationOk with no exchange: that is the login the user asked for, not
+                    // a downgrade. Without a certificate it is `trust`, which must be allowed.
+                    let by_certificate = cfg.ssl_cert.is_some() && self.io.stream.is_tls();
+                    if !exchanged && !cfg.auth.trust && !by_certificate {
                         return Err(Error::Auth(
                             "the server did not ask for authentication; allow that explicitly with auth=trust"
                                 .into(),

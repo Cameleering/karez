@@ -11,6 +11,9 @@ members = [
     "crates/karez",
 ]
 
+# the fuzz targets live in fuzz/, which is its own workspace (it has a dependency on libFuzzer)
+exclude = ["fuzz"]
+
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
