@@ -661,3 +661,144 @@ fn every_owned_parameter_type_reaches_the_server_intact() -> R {
     c.close();
     Ok(())
 }
+
+fn first_col_i64(f: &karez_rt::Fetched) -> Vec<i64> {
+    let mut v = Vec::new();
+    for ch in &f.chunks {
+        for r in 0..ch.rows() {
+            v.push(ch.row(r).unwrap().get::<i64>(0).unwrap());
+        }
+    }
+    v
+}
+
+#[test]
+fn portals_on_a_shared_connection_interleave_with_other_commands_and_threads() -> R {
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    // outside a transaction a portal is refused, and the connection carries on
+    match c.portal("SELECT 1::int8", &[]) {
+        Err(Error::Pg(PgError::Usage(m))) => assert!(m.contains("transaction"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(one_i64(&c, "SELECT 1::int8", &[])?, 1);
+
+    c.exec("BEGIN", &[])?;
+    let a = c.portal("SELECT g::int8 FROM generate_series(1, 1000) g", &[])?;
+    let b = c.portal(
+        "SELECT g::int8 * 10 FROM generate_series(1, $1::int4) g",
+        &[Value::i32(250)],
+    )?;
+    // a second thread keeps issuing commands on the same session while this one fetches
+    let other = {
+        let c = c.clone();
+        thread::spawn(move || -> Result<i64, Error> {
+            let mut sum = 0;
+            for i in 0..30 {
+                sum += one_i64(&c, "SELECT $1::int8", &[Value::i64(i)])?;
+            }
+            Ok(sum)
+        })
+    };
+    let (mut got_a, mut got_b) = (Vec::new(), Vec::new());
+    while !a.is_done() || !b.is_done() {
+        got_a.extend(first_col_i64(&c.fetch(&a, 100)?));
+        got_b.extend(first_col_i64(&c.fetch(&b, 60)?));
+    }
+    assert_eq!(other.join().unwrap()?, (0..30).sum::<i64>());
+    assert_eq!(got_a, (1..=1000).collect::<Vec<i64>>());
+    assert_eq!(got_b, (1..=250).map(|g| g * 10).collect::<Vec<i64>>());
+    assert_eq!(a.rows_fetched(), 1000);
+    // a finished portal returns nothing, and queuing a fetch on it is a usage error
+    let again = c.fetch(&a, 10)?;
+    assert!(again.done && again.rows() == 0);
+    assert!(matches!(
+        c.submit_fetch(&a, 10),
+        Err(Error::Pg(PgError::Usage(_)))
+    ));
+    c.exec("COMMIT", &[])?;
+    Ok(())
+}
+
+#[test]
+fn queued_fetches_are_answered_in_order_and_futures_work() -> R {
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    c.exec("BEGIN", &[])?;
+    let p = c.portal("SELECT g::int8 FROM generate_series(1, 25) g", &[])?;
+    // four fetches queued before any answer: the last ones may find the portal already finished
+    let p1 = c.submit_fetch(&p, 10)?;
+    let p2 = c.submit_fetch(&p, 10)?;
+    let p3 = c.submit_fetch(&p, 10)?;
+    let p4 = c.submit_fetch(&p, 10)?;
+    let (r1, r2, r3, r4) = (p1.wait()?, p2.wait()?, p3.wait()?, p4.wait());
+    assert_eq!(first_col_i64(&r1), (1..=10).collect::<Vec<_>>());
+    assert_eq!(first_col_i64(&r2), (11..=20).collect::<Vec<_>>());
+    assert_eq!(first_col_i64(&r3), (21..=25).collect::<Vec<_>>());
+    assert!(r3.done && !r1.done);
+    // the fourth fetch ran on a portal the server had finished: no rows, done
+    let r4 = r4?;
+    assert!(r4.done && r4.rows() == 0);
+    assert!(p.is_done());
+    // `.await`
+    let q = c.portal("SELECT g::int8 FROM generate_series(1, 7) g", &[])?;
+    let rows = block_on(async {
+        let mut all = Vec::new();
+        while !q.is_done() {
+            all.extend(first_col_i64(&c.submit_fetch(&q, 3)?.await?));
+        }
+        Ok::<_, Error>(all)
+    })?;
+    assert_eq!(rows, (1..=7).collect::<Vec<_>>());
+    c.exec("COMMIT", &[])?;
+    Ok(())
+}
+
+#[test]
+fn shared_portals_report_errors_and_end_with_the_transaction() -> R {
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    // an error in a later row fails that fetch and the transaction, not the connection
+    c.exec("BEGIN", &[])?;
+    let p = c.portal(
+        "SELECT (100 / (6 - g))::int8 FROM generate_series(1, 10) g",
+        &[],
+    )?;
+    assert_eq!(c.fetch(&p, 3)?.rows(), 3);
+    match c.fetch(&p, 5) {
+        Err(Error::Pg(PgError::Server(e))) => assert_eq!(e.sqlstate(), "22012"),
+        other => panic!("{other:?}"),
+    }
+    assert!(p.is_done());
+    c.exec("ROLLBACK", &[])?;
+    assert_eq!(one_i64(&c, "SELECT 2::int8", &[])?, 2);
+    // after COMMIT the server has dropped the portal
+    c.exec("BEGIN", &[])?;
+    let p = c.portal("SELECT g::int8 FROM generate_series(1, 100) g", &[])?;
+    assert_eq!(c.fetch(&p, 10)?.rows(), 10);
+    c.exec("COMMIT", &[])?;
+    match c.fetch(&p, 10) {
+        Err(Error::Pg(PgError::Server(e))) => assert_eq!(e.sqlstate(), "34000"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(one_i64(&c, "SELECT 3::int8", &[])?, 3);
+    // close_portal frees it early; a large result in windows adds up
+    c.exec("BEGIN", &[])?;
+    let q = c.portal("SELECT g::int8 FROM generate_series(1, 50) g", &[])?;
+    c.close_portal(q);
+    let big = c.portal("SELECT id::int8 FROM audit_log ORDER BY id", &[])?;
+    let (mut rows, mut sum) = (0i64, 0i64);
+    while !big.is_done() {
+        for v in first_col_i64(&c.fetch(&big, 20_000)?) {
+            rows += 1;
+            sum += v;
+        }
+    }
+    assert_eq!(rows, 400_000);
+    assert_eq!(
+        sum,
+        one_i64(&c, "SELECT sum(id)::int8 FROM audit_log", &[])?
+    );
+    c.exec("COMMIT", &[])?;
+    Ok(())
+}

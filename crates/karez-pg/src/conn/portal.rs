@@ -271,3 +271,116 @@ impl Connection {
         }
     }
 }
+
+/// A row-by-row reader over a [`Portal`], like [`Cursor`] but **without holding the connection**.
+///
+/// A `Cursor` streams the result from the socket, so the connection is busy, and borrowed, until it
+/// ends. A `PortalCursor` fetches `fetch_size` rows at a time and takes the connection as an
+/// argument of each call, so between two calls the connection is free: run other statements, or read
+/// other cursors, in the same transaction. It needs a transaction, like any portal.
+#[derive(Debug)]
+pub struct PortalCursor {
+    portal: Portal,
+    fetch_size: usize,
+    pending: std::collections::VecDeque<Chunk>,
+    current: Option<Chunk>,
+    pos: usize,
+}
+
+impl PortalCursor {
+    /// The result columns.
+    pub fn fields(&self) -> &[Field] {
+        self.portal.fields()
+    }
+
+    /// True when every row has been returned.
+    pub fn is_done(&self) -> bool {
+        self.portal.is_done()
+            && self.pending.is_empty()
+            && self.current.as_ref().is_none_or(|c| self.pos >= c.rows())
+    }
+
+    /// Rows read from the server so far (some may not have been returned by `next` yet).
+    pub fn rows_fetched(&self) -> u64 {
+        self.portal.rows_fetched()
+    }
+
+    /// The next row, or `None` at the end. Reads another `fetch_size` rows from the server when the
+    /// rows already fetched are used up. The row borrows this cursor, not the connection.
+    #[allow(clippy::should_implement_trait)] // a lending iterator that also needs the connection
+    pub fn next(&mut self, conn: &mut Connection) -> Result<Option<RowRef<'_>>> {
+        loop {
+            if self.current.as_ref().is_some_and(|c| self.pos < c.rows()) {
+                break;
+            }
+            self.current = None;
+            self.pos = 0;
+            match self.pending.pop_front() {
+                Some(ch) => self.current = Some(ch),
+                None if self.portal.is_done() => return Ok(None),
+                None => {
+                    let f = conn.fetch(&mut self.portal, self.fetch_size)?;
+                    self.pending.extend(f.chunks);
+                }
+            }
+        }
+        let i = self.pos;
+        self.pos += 1;
+        Ok(Some(self.current.as_ref().expect("checked above").row(i)?))
+    }
+
+    /// The next whole chunk, or `None` at the end. Use it instead of [`PortalCursor::next`], not
+    /// after it has started a chunk: a chunk that `next` has partly read is an
+    /// [`Error::Usage`] here, since the rows already returned would be repeated or dropped.
+    pub fn next_chunk(&mut self, conn: &mut Connection) -> Result<Option<Chunk>> {
+        if let Some(ch) = self.current.take() {
+            if self.pos == 0 {
+                return Ok(Some(ch));
+            }
+            if self.pos < ch.rows() {
+                self.current = Some(ch);
+                return Err(Error::Usage(
+                    "next_chunk after next: the current chunk is partly read",
+                ));
+            }
+            self.pos = 0;
+        }
+        if let Some(ch) = self.pending.pop_front() {
+            return Ok(Some(ch));
+        }
+        if self.portal.is_done() {
+            return Ok(None);
+        }
+        let f = conn.fetch(&mut self.portal, self.fetch_size)?;
+        self.pending.extend(f.chunks);
+        Ok(self.pending.pop_front())
+    }
+
+    /// Close the portal on the server now; see [`Connection::close_portal`].
+    pub fn close(self, conn: &mut Connection) -> Result<()> {
+        conn.close_portal(self.portal)
+    }
+}
+
+impl Connection {
+    /// Open a portal and return a [`PortalCursor`] that reads it `fetch_size` rows at a time
+    /// (`fetch_size` must be at least 1). Needs a transaction block, like [`Connection::portal`].
+    pub fn portal_cursor(
+        &mut self,
+        sql: &str,
+        params: &[Value<'_>],
+        fetch_size: usize,
+    ) -> Result<PortalCursor> {
+        if fetch_size == 0 {
+            return Err(Error::Usage("fetch_size must be at least 1"));
+        }
+        let portal = self.portal(sql, params)?;
+        Ok(PortalCursor {
+            portal,
+            fetch_size,
+            pending: std::collections::VecDeque::new(),
+            current: None,
+            pos: 0,
+        })
+    }
+}

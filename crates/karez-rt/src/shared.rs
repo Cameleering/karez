@@ -10,7 +10,8 @@ use crate::engine::{Class, CommandId, Done, Engine, Event, Prepared, RawPrepared
 use crate::error::{Error, Result};
 use karez_chunk::{Chunk, Date, Decimal128, Interval, Time, Timestamp};
 use karez_pg::{
-    CancelToken, Config, Connection, Error as PgError, Notification, RawParts, UnsupportedTypes,
+    CancelToken, Config, Connection, Error as PgError, Fetched, Notification, RawParts,
+    UnsupportedTypes,
 };
 use karez_proto_pg::{Array, ResultPlan, TxStatus, Value};
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +19,7 @@ use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -551,6 +553,98 @@ impl SharedConnection {
         })
     }
 
+    /// Open a server-side cursor on `sql`. Blocks for the round trip (and for preparing the
+    /// statement the first time).
+    ///
+    /// A portal exists only inside a transaction block, and a shared connection has **one session
+    /// for everyone**: the transaction is the connection's, so `BEGIN` it first (with
+    /// [`SharedConnection::exec`]) and keep other threads' statements out of it, or they run inside
+    /// it too. Outside a transaction this returns a usage error. Fetches are ordinary commands: they
+    /// queue with everything else and are answered in order, so while one portal is half read other
+    /// commands, and other portals, run between its fetches.
+    pub fn portal(&self, sql: &str, params: &[Value<'_>]) -> Result<Portal> {
+        let stmt = self.prepared(sql, params)?;
+        let inner = &self.inner;
+        let (pending, name) = {
+            let mut st = inner.admit(false)?;
+            let (id, name) = st.engine.open_portal(&stmt, params)?;
+            let slot = Slot::new(false);
+            st.slots.insert(id, slot.clone());
+            inner.ensure_pump(&mut st);
+            inner.flush(st);
+            (
+                Pending {
+                    slot,
+                    inner: inner.clone(),
+                    id,
+                },
+                name,
+            )
+        };
+        pending.wait()?;
+        if self.tx_status() != TxStatus::InTransaction {
+            return Err(Error::Pg(PgError::Usage(
+                "a portal needs an open transaction (exec BEGIN first): the server destroys portals when a transaction ends",
+            )));
+        }
+        Ok(Portal {
+            name,
+            stmt,
+            flags: Arc::new(PortalFlags::default()),
+        })
+    }
+
+    /// Queue a fetch of up to `max_rows` more rows from a portal (`0` for all the rest) without
+    /// waiting. Wait for it, or `.await` it; the result is the rows as chunks.
+    pub fn submit_fetch(&self, portal: &Portal, max_rows: usize) -> Result<PendingFetch> {
+        if portal.is_done() {
+            return Err(Error::Pg(PgError::Usage("the portal has no more rows")));
+        }
+        let limit = i32::try_from(max_rows).map_err(|_| {
+            Error::Pg(PgError::Usage(
+                "max_rows does not fit the protocol's 32-bit limit",
+            ))
+        })?;
+        let inner = &self.inner;
+        let mut st = inner.admit(false)?;
+        let id = st.engine.fetch_portal(&portal.stmt, &portal.name, limit)?;
+        let slot = Slot::new(false);
+        st.slots.insert(id, slot.clone());
+        inner.ensure_pump(&mut st);
+        inner.flush(st);
+        Ok(PendingFetch {
+            pending: Pending {
+                slot,
+                inner: inner.clone(),
+                id,
+            },
+            flags: portal.flags.clone(),
+        })
+    }
+
+    /// Read up to `max_rows` more rows from a portal (`0` for all the rest). Blocks the calling
+    /// thread. A finished portal returns no rows and `done`.
+    pub fn fetch(&self, portal: &Portal, max_rows: usize) -> Result<Fetched> {
+        if portal.is_done() {
+            return Ok(Fetched {
+                chunks: Vec::new(),
+                done: true,
+            });
+        }
+        self.submit_fetch(portal, max_rows)?.wait()
+    }
+
+    /// Close a portal on the server now instead of at the end of the transaction.
+    pub fn close_portal(&self, portal: Portal) {
+        if portal.is_done() {
+            return;
+        }
+        let mut st = self.inner.state();
+        st.engine.close_portal(&portal.name);
+        self.inner.ensure_pump(&mut st);
+        self.inner.flush(st);
+    }
+
     /// Start a batch of statements that share one Sync: it is atomic, and an error skips the rest.
     pub fn pipeline(&self) -> Pipeline<'_> {
         Pipeline {
@@ -717,6 +811,99 @@ impl Drop for Inner {
         let w = self.writer.get_mut().unwrap_or_else(|e| e.into_inner());
         let _ = w.write_all(&bye);
         let _ = w.shutdown(Shutdown::Both);
+    }
+}
+
+#[derive(Debug, Default)]
+struct PortalFlags {
+    done: AtomicBool,
+    rows: AtomicU64,
+}
+
+/// A server-side cursor on a [`SharedConnection`]. See [`SharedConnection::portal`].
+///
+/// Dropping it sends nothing: the server drops the portal when the transaction ends.
+#[derive(Debug)]
+pub struct Portal {
+    name: String,
+    stmt: Arc<Prepared>,
+    flags: Arc<PortalFlags>,
+}
+
+impl Portal {
+    /// The result columns.
+    pub fn fields(&self) -> &[karez_chunk::Field] {
+        self.stmt.plan.fields()
+    }
+
+    /// True once every row has been read, or an error made the portal unusable.
+    pub fn is_done(&self) -> bool {
+        self.flags.done.load(Ordering::Acquire)
+    }
+
+    /// Rows fetched so far.
+    pub fn rows_fetched(&self) -> u64 {
+        self.flags.rows.load(Ordering::Acquire)
+    }
+}
+
+/// A queued portal fetch. Wait for it with [`PendingFetch::wait`], or `.await` it.
+pub struct PendingFetch {
+    pending: Pending,
+    flags: Arc<PortalFlags>,
+}
+
+impl std::fmt::Debug for PendingFetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingFetch").finish()
+    }
+}
+
+impl PendingFetch {
+    fn finish(flags: &PortalFlags, r: Result<Done>) -> Result<Fetched> {
+        match r {
+            Ok(d) => {
+                let rows: usize = d.chunks.iter().map(Chunk::rows).sum();
+                flags.rows.fetch_add(rows as u64, Ordering::AcqRel);
+                if !d.suspended {
+                    flags.done.store(true, Ordering::Release);
+                }
+                Ok(Fetched {
+                    chunks: d.chunks,
+                    done: !d.suspended,
+                })
+            }
+            Err(e) => {
+                // a timeout leaves the portal where it was; any other error ends it
+                if !matches!(e, Error::Timeout) {
+                    flags.done.store(true, Ordering::Release);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Block until the fetch finishes.
+    pub fn wait(self) -> Result<Fetched> {
+        let flags = self.flags;
+        Self::finish(&flags, self.pending.wait())
+    }
+
+    /// Block until the fetch finishes or `timeout` passes (see [`Pending::wait_timeout`]).
+    pub fn wait_timeout(self, timeout: Duration) -> Result<Fetched> {
+        let flags = self.flags;
+        Self::finish(&flags, self.pending.wait_timeout(timeout))
+    }
+}
+
+impl Future for PendingFetch {
+    type Output = Result<Fetched>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.pending).poll(cx) {
+            Poll::Ready(r) => Poll::Ready(Self::finish(&self.flags, r)),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 

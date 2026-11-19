@@ -329,3 +329,131 @@ fn many_portals_on_one_connection() -> R {
     c.execute("COMMIT", &[])?;
     Ok(())
 }
+
+#[test]
+fn portal_cursors_interleave_row_by_row_and_match_a_plain_query() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    // the rows a plain cursor returns, to compare with
+    let mut want = Vec::new();
+    {
+        let mut cur = c.query(
+            "SELECT id, action FROM audit_log ORDER BY id LIMIT 5000",
+            &[],
+        )?;
+        while let Some(r) = cur.next()? {
+            want.push((r.get::<i64>(0)?, r.get::<String>(1)?));
+        }
+    }
+    assert_eq!(want.len(), 5000);
+    for fetch_size in [1usize, 7, 1000, 100_000] {
+        c.execute("BEGIN", &[])?;
+        let mut a = c.portal_cursor(
+            "SELECT id, action FROM audit_log ORDER BY id LIMIT 5000",
+            &[],
+            fetch_size,
+        )?;
+        let mut b = c.portal_cursor(
+            "SELECT g::int8, 'x' FROM generate_series(1, 300) g",
+            &[],
+            fetch_size,
+        )?;
+        let (mut got_a, mut got_b) = (Vec::new(), Vec::new());
+        let mut side = 0i64;
+        // alternate between the two cursors, running another statement in between: the connection
+        // is not held by either cursor
+        loop {
+            let ra = a
+                .next(&mut c)?
+                .map(|r| (r.get::<i64>(0).unwrap(), r.get::<String>(1).unwrap()));
+            let more_a = ra.is_some();
+            got_a.extend(ra);
+            if got_b.len() < 300 {
+                let rb = b.next(&mut c)?.map(|r| r.get::<i64>(0).unwrap());
+                got_b.extend(rb);
+            }
+            if got_a.len() % 500 == 0 {
+                side += one_i64(&mut c, "SELECT $1::int8", &[Value::I64(1)])?;
+            }
+            if !more_a {
+                break;
+            }
+        }
+        assert_eq!(got_a, want, "fetch_size {fetch_size}");
+        assert_eq!(got_b, (1..=300).collect::<Vec<i64>>());
+        assert!(a.is_done() && a.next(&mut c)?.is_none(), "stays at the end");
+        assert!(side > 0);
+        a.close(&mut c)?;
+        b.close(&mut c)?;
+        c.execute("COMMIT", &[])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn portal_cursors_by_chunk_in_a_transaction_value_and_misuse() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    // not in a transaction, and a zero fetch size
+    assert!(matches!(
+        c.portal_cursor("SELECT 1::int8", &[], 10),
+        Err(Error::Usage(_))
+    ));
+    c.execute("BEGIN", &[])?;
+    assert!(matches!(
+        c.portal_cursor("SELECT 1::int8", &[], 0),
+        Err(Error::Usage(_))
+    ));
+    // whole chunks, in order, with a window smaller than a chunk
+    let mut p = c.portal_cursor("SELECT g::int8 FROM generate_series(1, 3000) g", &[], 700)?;
+    let mut total = 0;
+    let mut sizes = Vec::new();
+    while let Some(ch) = p.next_chunk(&mut c)? {
+        sizes.push(ch.rows());
+        for r in 0..ch.rows() {
+            total += 1;
+            assert_eq!(ch.row(r)?.get::<i64>(0)?, total);
+        }
+    }
+    assert_eq!(total, 3000);
+    assert_eq!(sizes, [700, 700, 700, 700, 200]);
+    assert!(p.is_done());
+    // next_chunk after next has started a chunk is refused, and nothing is lost
+    let mut q = c.portal_cursor("SELECT g::int8 FROM generate_series(1, 20) g", &[], 10)?;
+    assert_eq!(q.next(&mut c)?.unwrap().get::<i64>(0)?, 1);
+    assert!(matches!(q.next_chunk(&mut c), Err(Error::Usage(_))));
+    assert_eq!(q.next(&mut c)?.unwrap().get::<i64>(0)?, 2);
+    let mut rest = 2;
+    while q.next(&mut c)?.is_some() {
+        rest += 1;
+    }
+    assert_eq!(rest, 20);
+    // an error in a later row surfaces from next, and the connection is fine after ROLLBACK
+    let mut e = c.portal_cursor(
+        "SELECT (10 / (4 - g))::int8 FROM generate_series(1, 6) g",
+        &[],
+        2,
+    )?;
+    let mut n = 0;
+    let err = loop {
+        match e.next(&mut c) {
+            Ok(Some(_)) => n += 1,
+            Ok(None) => panic!("expected an error"),
+            Err(x) => break x,
+        }
+    };
+    assert_eq!(n, 2, "the fetch that reached row 4 failed as a whole");
+    assert_eq!(err.sqlstate(), Some("22012"));
+    c.execute("ROLLBACK", &[])?;
+    assert_eq!(one_i64(&mut c, "SELECT 8::int8", &[])?, 8);
+    // the same through Transaction
+    let mut tx = c.begin(Isolation::ReadCommitted)?;
+    let mut t = tx.portal_cursor("SELECT g::int8 FROM generate_series(1, 5) g", &[], 2)?;
+    let mut got = Vec::new();
+    while let Some(r) = tx.cursor_next(&mut t)? {
+        got.push(r.get::<i64>(0)?);
+    }
+    assert_eq!(got, [1, 2, 3, 4, 5]);
+    tx.commit()?;
+    Ok(())
+}

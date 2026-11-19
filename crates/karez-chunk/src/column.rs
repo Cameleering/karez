@@ -189,6 +189,16 @@ impl Column {
         self.push_fixed(ColumnType::Int64, &v.to_le_bytes())
     }
 
+    /// Append a `u32`.
+    pub fn push_u32(&mut self, v: u32) -> Result<()> {
+        self.push_fixed(ColumnType::UInt32, &v.to_le_bytes())
+    }
+
+    /// Append a `u64`.
+    pub fn push_u64(&mut self, v: u64) -> Result<()> {
+        self.push_fixed(ColumnType::UInt64, &v.to_le_bytes())
+    }
+
     /// Append an `f32`.
     pub fn push_f32(&mut self, v: f32) -> Result<()> {
         self.push_fixed(ColumnType::Float32, &v.to_le_bytes())
@@ -515,6 +525,8 @@ macro_rules! fixed_impl {
 fixed_impl!(i16, ColumnType::Int16, 2, i16::from_le_bytes);
 fixed_impl!(i32, ColumnType::Int32, 4, i32::from_le_bytes);
 fixed_impl!(i64, ColumnType::Int64, 8, i64::from_le_bytes);
+fixed_impl!(u32, ColumnType::UInt32, 4, u32::from_le_bytes);
+fixed_impl!(u64, ColumnType::UInt64, 8, u64::from_le_bytes);
 fixed_impl!(f32, ColumnType::Float32, 4, f32::from_le_bytes);
 fixed_impl!(f64, ColumnType::Float64, 8, f64::from_le_bytes);
 fixed_impl!(Date, ColumnType::Date32, 4, |r| Date(i32::from_le_bytes(r)));
@@ -890,6 +902,30 @@ mod tests {
         c.validate().unwrap();
         i.truncate(1);
         i.validate().unwrap();
+    }
+
+    #[test]
+    fn unsigned_columns_round_trip_their_full_range() {
+        let mut a = Column::new(ColumnType::UInt32);
+        let mut b = Column::new(ColumnType::UInt64);
+        for v in [0u32, 1, u32::MAX, 0x8000_0000] {
+            a.push_u32(v).unwrap();
+        }
+        for v in [0u64, 1, u64::MAX, 1 << 63] {
+            b.push_u64(v).unwrap();
+        }
+        a.push_null().unwrap();
+        b.push_null().unwrap();
+        a.validate().unwrap();
+        b.validate().unwrap();
+        assert_eq!(a.get::<u32>(2).unwrap(), u32::MAX);
+        assert_eq!(b.get::<u64>(2).unwrap(), u64::MAX);
+        assert_eq!(b.get::<u64>(3).unwrap(), 1 << 63);
+        assert_eq!(a.get::<Option<u32>>(4).unwrap(), None);
+        assert!(a.get::<u64>(0).is_err() && b.get::<u32>(0).is_err());
+        assert!(a.push_u64(1).is_err());
+        assert_eq!(ColumnType::UInt32.fixed_width(), Some(4));
+        assert_eq!(ColumnType::UInt64.fixed_width(), Some(8));
     }
 
     #[test]

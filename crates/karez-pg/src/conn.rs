@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod portal;
-pub use portal::{Fetched, Portal};
+pub use portal::{Fetched, Portal, PortalCursor};
 
 const READ_BUF: usize = 64 * 1024;
 const MAX_NOTICES: usize = 64;
@@ -1689,6 +1689,12 @@ impl Drop for Connection {
 ///
 /// Dropping a cursor before the end reads and discards the rest of the result so the connection
 /// stays usable.
+///
+/// A `Cursor` reads the result from the socket as it goes, so it **owns the connection until it
+/// ends**: this is how the protocol delivers one result, and no other statement can run meanwhile.
+/// To read a large result while the connection serves other statements, or to read several results
+/// in turn, use a [`PortalCursor`] (`Connection::portal_cursor`), which fetches a few rows at a time
+/// and takes the connection per call, inside a transaction.
 pub struct Cursor<'c> {
     conn: &'c mut Connection,
     stmt: Statement,

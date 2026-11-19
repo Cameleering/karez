@@ -9,6 +9,10 @@ pub enum ColumnType {
     Int32,
     /// 64-bit signed integer.
     Int64,
+    /// 32-bit unsigned integer (ADBC's `info_name`).
+    UInt32,
+    /// 64-bit unsigned integer (ADBC's `uint64` statistic value).
+    UInt64,
     /// 32-bit IEEE float.
     Float32,
     /// 64-bit IEEE float.
@@ -46,8 +50,11 @@ impl ColumnType {
     pub fn fixed_width(self) -> Option<usize> {
         match self {
             ColumnType::Int16 => Some(2),
-            ColumnType::Int32 | ColumnType::Float32 | ColumnType::Date32 => Some(4),
+            ColumnType::Int32 | ColumnType::UInt32 | ColumnType::Float32 | ColumnType::Date32 => {
+                Some(4)
+            }
             ColumnType::Int64
+            | ColumnType::UInt64
             | ColumnType::Float64
             | ColumnType::TimestampMicros { .. }
             | ColumnType::Time64Micros => Some(8),

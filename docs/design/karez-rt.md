@@ -98,6 +98,15 @@ PostgreSQL answers commands in the order sent; an error skips to the next `Sync`
 - Deadlock rule: a thread must not wait on a later command while it holds an unread full stream
   from an earlier one. The API makes `Stream` borrow the handle, so the compiler enforces it.
 
+### 5.1 Portals (added 2026-11-19, M1 step 5)
+
+`SharedConnection::portal(sql, params)` binds a named portal (`Bind` and `Sync`, command kind `OpenPortal`); `fetch` and `submit_fetch` queue `Execute` with a row limit and `Sync` (a `Run` command that
+reports `suspended` when the server answers `PortalSuspended`); `close_portal` queues `Close`. They are ordinary commands: they queue and are answered in order with everything else, so other commands and other
+portals run between the fetches of one portal, and several fetches of one portal can be queued before the first answer (the later ones may find it finished and return no rows). A portal lives only inside a transaction block,
+and a shared connection has **one session for all its users**, so that transaction is the connection's: the caller `BEGIN`s it, and commands from other threads run inside it until it ends. Opening one outside a transaction is a usage error (the
+engine's transaction status after the `Sync` says so). Real-server tests: `shared_pg.rs`, three portal tests (interleaving with another thread, queued fetches and `.await`, errors, the end of the transaction, 400,000 rows in windows); ignoring
+`PortalSuspended` fails three of them.
+
 ## 6. Failure, cancellation, replay
 
 - **Not sent versus sent.** Every error carries `retry_safe()`: true when the command never

@@ -53,3 +53,36 @@
 | Field Name     | Field Type |
 | ---------------|-------------- |
 | table_type     | utf8 not null |
+# GetInfo: the result and INFO_SCHEMA, the dense union of info_value
+| Field Name | Field Type |
+| info_name | uint32 not null |
+| info_value | INFO_SCHEMA |
+| Field Name | Field Type |
+| string_value | utf8 |
+| bool_value | bool |
+| int64_value | int64 |
+| int32_bitmask | int32 |
+| string_list | list<utf8> |
+| int32_to_int32_list_map | map<int32, list<int32>> |
+# GetStatistics: the result, DB_SCHEMA_SCHEMA, STATISTICS_SCHEMA, VALUE_SCHEMA
+| Field Name | Field Type |
+| catalog_name | utf8 |
+| catalog_db_schemas | list<DB_SCHEMA_SCHEMA> not null |
+| Field Name | Field Type |
+| db_schema_name | utf8 |
+| db_schema_statistics | list<STATISTICS_SCHEMA> not null |
+| Field Name | Field Type |
+| table_name | utf8 not null |
+| column_name | utf8 |
+| statistic_key | int16 not null |
+| statistic_value | VALUE_SCHEMA not null |
+| statistic_is_approximate | bool not null |
+| Field Name | Field Type |
+| int64 | int64 |
+| uint64 | uint64 |
+| float64 | float64 |
+| binary | binary |
+# GetStatisticNames
+| Field Name | Field Type |
+| statistic_name | utf8 not null |
+| statistic_key | int16 not null |

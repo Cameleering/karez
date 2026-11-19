@@ -64,6 +64,8 @@ pub struct Done {
     pub chunks: Vec<Chunk>,
     /// Set for a prepare command.
     pub prepared: Option<RawPrepared>,
+    /// A portal fetch that stopped at its row limit: the portal has more rows.
+    pub suspended: bool,
 }
 
 /// Something the engine learnt from server bytes.
@@ -92,6 +94,8 @@ enum Kind {
         fields: Option<Vec<FieldDescription>>,
     },
     Close,
+    /// Bind to a named portal and Sync: the answer is BindComplete and ReadyForQuery.
+    OpenPortal,
     Run {
         stmt: Arc<Prepared>,
         class: Class,
@@ -99,6 +103,8 @@ enum Kind {
         rows: u64,
         chunks: Vec<Chunk>,
         collected: usize,
+        /// The server answered PortalSuspended: a fetch that left rows in the portal.
+        suspended: bool,
     },
 }
 
@@ -126,6 +132,7 @@ struct Core {
     events: VecDeque<Event>,
     next_id: CommandId,
     next_stmt: u64,
+    next_portal: u64,
     tx_status: TxStatus,
     cache: HashMap<(String, Vec<u32>), CacheEntry>,
     cache_cap: usize,
@@ -187,6 +194,7 @@ impl Engine {
                 events: VecDeque::new(),
                 next_id: 1,
                 next_stmt: 0,
+                next_portal: 0,
                 tx_status,
                 cache: HashMap::new(),
                 cache_cap: cache_cap.max(1),
@@ -352,7 +360,7 @@ impl Engine {
     ) -> Result<Vec<CommandId>, Error> {
         let mark = self.core.out.len();
         for (stmt, params, _) in items {
-            if let Err(e) = self.core.encode_run(stmt, params) {
+            if let Err(e) = self.core.encode_run(stmt, params, "", true) {
                 self.core.out.truncate(mark);
                 return Err(e);
             }
@@ -371,11 +379,71 @@ impl Engine {
                     rows: 0,
                     chunks: Vec::new(),
                     collected: 0,
+                    suspended: false,
                 },
                 i + 1 == n,
             ));
         }
         Ok(ids)
+    }
+
+    /// Queue Bind to a new named portal and Sync. The portal lives until the end of the transaction
+    /// the session is in (none: it is gone at the Sync), so the caller checks [`Engine::tx_status`]
+    /// when the command completes. Returns the command and the portal's name.
+    pub fn open_portal(
+        &mut self,
+        stmt: &Arc<Prepared>,
+        params: &[Value<'_>],
+    ) -> Result<(CommandId, String), Error> {
+        let name = format!("karez_rp{}", self.core.next_portal);
+        let mark = self.core.out.len();
+        if let Err(e) = self.core.encode_run(stmt, params, &name, false) {
+            self.core.out.truncate(mark);
+            return Err(e);
+        }
+        self.core.next_portal += 1;
+        frontend::sync(&mut self.core.out);
+        Ok((self.core.push(Kind::OpenPortal, true), name))
+    }
+
+    /// Queue Execute with a row limit on a named portal, and Sync. The command's [`Done`] has
+    /// `suspended` set when the portal has more rows.
+    pub fn fetch_portal(
+        &mut self,
+        stmt: &Arc<Prepared>,
+        portal: &str,
+        max_rows: i32,
+    ) -> Result<CommandId, Error> {
+        let mark = self.core.out.len();
+        if let Err(e) = frontend::execute(&mut self.core.out, portal, max_rows) {
+            self.core.out.truncate(mark);
+            return Err(Error::Pg(PgError::Proto(e)));
+        }
+        frontend::sync(&mut self.core.out);
+        let builder = Some(ChunkBuilder::new(stmt.plan.fields().to_vec()));
+        Ok(self.core.push(
+            Kind::Run {
+                stmt: stmt.clone(),
+                class: Class::Collect,
+                builder,
+                rows: 0,
+                chunks: Vec::new(),
+                collected: 0,
+                suspended: false,
+            },
+            true,
+        ))
+    }
+
+    /// Queue Close for a portal the caller no longer needs (the server also drops it at the end of
+    /// the transaction).
+    pub fn close_portal(&mut self, name: &str) {
+        let c = &mut self.core;
+        if frontend::close_portal(&mut c.out, name).is_err() {
+            return;
+        }
+        frontend::sync(&mut c.out);
+        c.push(Kind::Close, true);
     }
 
     /// Queue the Terminate message (not a command: nothing answers it).
@@ -437,7 +505,13 @@ impl Core {
         id
     }
 
-    fn encode_run(&mut self, stmt: &Prepared, params: &[Value<'_>]) -> Result<(), Error> {
+    fn encode_run(
+        &mut self,
+        stmt: &Prepared,
+        params: &[Value<'_>],
+        portal: &str,
+        execute: bool,
+    ) -> Result<(), Error> {
         if params.len() != stmt.param_oids.len() {
             return Err(Error::Pg(PgError::Usage(
                 "wrong number of parameters for the statement",
@@ -465,13 +539,19 @@ impl Core {
         let formats: Vec<i16> = params.iter().map(Value::format).collect();
         frontend::bind(
             &mut self.out,
-            "",
+            portal,
             &stmt.name,
             &formats,
             &slices,
             stmt.plan.result_formats(),
         )
-        .and_then(|()| frontend::execute(&mut self.out, "", 0))
+        .and_then(|()| {
+            if execute {
+                frontend::execute(&mut self.out, portal, 0)
+            } else {
+                Ok(())
+            }
+        })
         .map_err(|e| Error::Pg(PgError::Proto(e)))
     }
 
@@ -528,7 +608,19 @@ impl Core {
                 self.tx_status = s;
                 self.queue.pop_front();
             }
-            (Kind::Run { .. }, BackendMessage::BindComplete | BackendMessage::PortalSuspended) => {}
+            (Kind::OpenPortal, BackendMessage::BindComplete) => head.replied = true,
+            (Kind::OpenPortal, BackendMessage::ErrorResponse(f)) => {
+                head.err = Some(Error::Pg(PgError::Server(ServerError::from_fields(f))));
+            }
+            (Kind::OpenPortal, BackendMessage::ReadyForQuery(s)) => {
+                self.tx_status = s;
+                self.finish_group();
+            }
+            (Kind::Run { .. }, BackendMessage::BindComplete) => {}
+            (Kind::Run { suspended, .. }, BackendMessage::PortalSuspended) => {
+                *suspended = true;
+                head.replied = true;
+            }
             (
                 Kind::Run {
                     stmt,
@@ -648,8 +740,15 @@ impl Core {
                     param_oids,
                     fields: fields.unwrap_or_default(),
                 }),
+                suspended: false,
             }),
             (None, Kind::Close) => return,
+            (None, Kind::OpenPortal) => Ok(Done {
+                rows: 0,
+                chunks: Vec::new(),
+                prepared: None,
+                suspended: false,
+            }),
             (
                 None,
                 Kind::Run {
@@ -657,6 +756,7 @@ impl Core {
                     builder,
                     rows,
                     mut chunks,
+                    suspended,
                     ..
                 },
             ) => {
@@ -672,6 +772,7 @@ impl Core {
                     rows,
                     chunks,
                     prepared: None,
+                    suspended,
                 })
             }
         };

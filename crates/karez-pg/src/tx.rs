@@ -1,5 +1,6 @@
-use crate::conn::{quote_ident, Connection, Cursor, Fetched, Portal, Statement};
+use crate::conn::{quote_ident, Connection, Cursor, Fetched, Portal, PortalCursor, Statement};
 use crate::error::Result;
+use karez_chunk::RowRef;
 use karez_proto_pg::{TxStatus, Value};
 
 /// Transaction isolation level.
@@ -82,6 +83,22 @@ impl<'c> Transaction<'c> {
     /// Close a portal before the transaction ends; see [`Connection::close_portal`].
     pub fn close_portal(&mut self, portal: Portal) -> Result<()> {
         self.conn.close_portal(portal)
+    }
+
+    /// Open a [`PortalCursor`]: a row-by-row reader that holds neither this transaction nor the
+    /// connection between calls. Read it with [`Transaction::cursor_next`].
+    pub fn portal_cursor(
+        &mut self,
+        sql: &str,
+        params: &[Value<'_>],
+        fetch_size: usize,
+    ) -> Result<PortalCursor> {
+        self.conn.portal_cursor(sql, params, fetch_size)
+    }
+
+    /// The next row of a [`PortalCursor`] opened in this transaction, or `None` at the end.
+    pub fn cursor_next<'a>(&mut self, cursor: &'a mut PortalCursor) -> Result<Option<RowRef<'a>>> {
+        cursor.next(self.conn)
     }
 
     /// Transaction state as the server last reported it (`Failed` after an error until rollback).

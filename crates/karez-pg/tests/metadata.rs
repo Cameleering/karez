@@ -6,8 +6,9 @@
 //! print `SKIPPED` without it, unless `KAREZ_REQUIRE_SERVER=1`.
 
 use karez_pg::metadata::{
-    self, columns_fields, constraints_fields, db_schemas_fields, table_types_fields, tables_fields,
-    Depth, ObjectFilter, Rows,
+    self, columns_fields, constraints_fields, db_schemas_fields, info_fields,
+    statistic_names_fields, statistics_fields, table_types_fields, tables_fields, Depth,
+    ObjectFilter, Rows,
 };
 use karez_pg::{Chunk, ColumnType, Connection, Error, Field};
 use std::collections::BTreeSet;
@@ -87,8 +88,13 @@ fn arrow_type(t: &str) -> Option<ColumnType> {
         "utf8" => Some(ColumnType::Utf8),
         "int16" => Some(ColumnType::Int16),
         "int32" => Some(ColumnType::Int32),
+        "int64" => Some(ColumnType::Int64),
         "bool" => Some(ColumnType::Bool),
-        _ => None, // a list or a struct
+        "uint32" => Some(ColumnType::UInt32),
+        "uint64" => Some(ColumnType::UInt64),
+        "float64" => Some(ColumnType::Float64),
+        "binary" => Some(ColumnType::Binary),
+        _ => None, // a list, a map, a union or a struct
     }
 }
 
@@ -99,7 +105,7 @@ fn split(spec: &[SpecField]) -> (Vec<(String, ColumnType, bool)>, Vec<String>) {
         match arrow_type(&f.ty) {
             Some(t) => scalars.push((f.name.clone(), t, f.not_null)),
             None => {
-                assert!(f.ty.starts_with("list<"), "{f:?}");
+                // a list, a map, or a union or struct named by its schema
                 lists.push(f.name.clone());
             }
         }
@@ -116,8 +122,9 @@ fn ours(consts: &[metadata::AdbcField]) -> Vec<(String, ColumnType, bool)> {
 
 #[test]
 fn the_schemas_equal_adbc_1_1_0_field_by_field() {
+    let names = |f: &[Field]| f.iter().map(|x| x.name.clone()).collect::<Vec<_>>();
     let t = spec_tables();
-    assert_eq!(t.len(), 7, "the specification excerpt has seven tables");
+    assert_eq!(t.len(), 14, "the specification excerpt has fourteen tables");
 
     // GetObjects: catalog_name, then the list of schemas
     let (s, l) = split(&t[0]);
@@ -159,7 +166,68 @@ fn the_schemas_equal_adbc_1_1_0_field_by_field() {
         vec![Field::new("table_type", ColumnType::Utf8)]
     );
 
+    // GetInfo: info_name, then the union of values
+    let (s, l) = split(&t[7]);
+    assert_eq!(s, vec![("info_name".to_string(), ColumnType::UInt32, true)]);
+    assert_eq!(s, ours(&[metadata::INFO_NAME_FIELD]));
+    assert_eq!(l, ["info_value"]);
+    // INFO_SCHEMA: four scalar members, then a list and a map that no reported code uses
+    let (s, l) = split(&t[8]);
+    assert_eq!(s, ours(metadata::INFO_VALUE_FIELDS));
+    assert_eq!(l, ["string_list", "int32_to_int32_list_map"]);
+    // GetStatistics: catalog, then the schemas; the schema level; STATISTICS_SCHEMA; VALUE_SCHEMA
+    let (s, l) = split(&t[9]);
+    assert_eq!(
+        s,
+        vec![("catalog_name".to_string(), ColumnType::Utf8, false)]
+    );
+    assert_eq!(l, ["catalog_db_schemas"]);
+    let (s, l) = split(&t[10]);
+    assert_eq!(
+        s,
+        vec![("db_schema_name".to_string(), ColumnType::Utf8, false)]
+    );
+    assert_eq!(l, ["db_schema_statistics"]);
+    let (s, l) = split(&t[11]);
+    let mut want = ours(metadata::STATISTICS_FIELDS);
+    want.push(ours(&[metadata::STATISTIC_IS_APPROXIMATE_FIELD]).remove(0));
+    assert_eq!(s, want, "the scalars around statistic_value");
+    assert_eq!(l, ["statistic_value"]);
+    assert!(t[11][3].not_null, "statistic_value is `not null`");
+    let (s, l) = split(&t[12]);
+    assert!(l.is_empty());
+    assert_eq!(s, ours(metadata::STATISTIC_VALUE_FIELDS));
+    // GetStatisticNames
+    let (s, l) = split(&t[13]);
+    assert!(l.is_empty());
+    assert_eq!(s, ours(metadata::STATISTIC_NAMES_FIELDS));
+    assert_eq!(statistic_names_fields().len(), 2);
     // the flat results: keys first, then the specification's fields in its order
+    assert_eq!(
+        names(&info_fields()),
+        [
+            "info_name",
+            "string_value",
+            "bool_value",
+            "int64_value",
+            "int32_bitmask"
+        ]
+    );
+    assert_eq!(
+        names(&statistics_fields()),
+        [
+            "catalog_name",
+            "db_schema_name",
+            "table_name",
+            "column_name",
+            "statistic_key",
+            "int64",
+            "uint64",
+            "float64",
+            "binary",
+            "statistic_is_approximate"
+        ]
+    );
     let names = |f: &[Field]| f.iter().map(|x| x.name.clone()).collect::<Vec<_>>();
     assert_eq!(
         names(&db_schemas_fields()),
@@ -209,6 +277,16 @@ fn cell(ch: &Chunk, row: usize, col: usize) -> Option<String> {
         ColumnType::Utf8 => r.get::<String>(col).unwrap(),
         ColumnType::Int16 => r.get::<i16>(col).unwrap().to_string(),
         ColumnType::Int32 => r.get::<i32>(col).unwrap().to_string(),
+        ColumnType::Int64 => r.get::<i64>(col).unwrap().to_string(),
+        ColumnType::UInt32 => r.get::<u32>(col).unwrap().to_string(),
+        ColumnType::UInt64 => r.get::<u64>(col).unwrap().to_string(),
+        ColumnType::Float64 => r.get::<f64>(col).unwrap().to_string(),
+        ColumnType::Binary => r
+            .get::<Vec<u8>>(col)
+            .unwrap()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
         ColumnType::Bool => r.get::<bool>(col).unwrap().to_string(),
         other => panic!("{other:?}"),
     })
@@ -249,6 +327,23 @@ fn s(v: &str) -> Option<String> {
 
 // ---- a fixture with awkward columns -----------------------------------------------------------
 
+/// Drops the named statements' objects on a new connection when it goes out of scope, so a failed
+/// assertion does not leave tables behind for the tests that run next to this one.
+struct Cleanup {
+    addr: String,
+    sql: &'static [&'static str],
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if let Ok(mut c) = connect(&self.addr) {
+            for q in self.sql {
+                let _ = c.execute(q, &[]);
+            }
+        }
+    }
+}
+
 const DROP_FIXTURE: &[&str] = &[
     "DROP MATERIALIZED VIEW IF EXISTS kmeta_mv",
     "DROP VIEW IF EXISTS kmeta_v",
@@ -263,6 +358,10 @@ fn a_fixture_with_awkward_columns_is_described_exactly() -> R {
     for sql in DROP_FIXTURE {
         c.execute(sql, &[])?;
     }
+    let _cleanup = Cleanup {
+        addr: addr.clone(),
+        sql: DROP_FIXTURE,
+    };
     for sql in [
         "CREATE DOMAIN kmeta_dom AS varchar(12)",
         "CREATE TABLE kmeta_parent (a int, b int, c numeric(12,3) NOT NULL, d varchar(20), e char(5), \
@@ -384,9 +483,25 @@ fn a_fixture_with_awkward_columns_is_described_exactly() -> R {
         assert_eq!(get("p", "xdbc_data_type"), s("1111"));
         assert_eq!(get("p", "xdbc_decimal_digits"), s("6"));
         // the unused fields are NULL
+        // the datetime subcode (ODBC's SQL_CODE_DATE, _TIME, _TIMESTAMP) and the octet length
+        // (the character length times the encoding's widest character; 1 GiB for unbounded text)
+        assert_eq!(get("j", "xdbc_datetime_sub"), s("3"));
+        assert_eq!(get("l", "xdbc_datetime_sub"), s("2"));
+        assert_eq!(get("a", "xdbc_datetime_sub"), None);
+        assert_eq!(
+            get("d", "xdbc_char_octet_length"),
+            s("80"),
+            "varchar(20) in UTF8"
+        );
+        assert_eq!(
+            get("e", "xdbc_char_octet_length"),
+            s("20"),
+            "char(5) in UTF8"
+        );
+        assert_eq!(get("f", "xdbc_char_octet_length"), s("1073741824"));
+        assert_eq!(get("a", "xdbc_char_octet_length"), None);
+        // PostgreSQL has no REF types, so the scope fields are NULL by definition
         for f in [
-            "xdbc_datetime_sub",
-            "xdbc_char_octet_length",
             "xdbc_scope_catalog",
             "xdbc_scope_schema",
             "xdbc_scope_table",
@@ -590,7 +705,7 @@ fn a_fixture_with_awkward_columns_is_described_exactly() -> R {
 // ---- the seeded database, against information_schema ----------------------------------------
 
 fn not_fixture(name: &str) -> bool {
-    !name.starts_with("kmeta")
+    !name.starts_with("kmeta") && !name.starts_with("kmstat")
 }
 
 #[test]
@@ -624,8 +739,9 @@ fn columns_agree_with_information_schema_for_the_seeded_database() -> R {
     let mut cur = c.query(
         "SELECT table_name::text, column_name::text, ordinal_position::int4, is_nullable::text, \
          column_default::text, udt_name::text, character_maximum_length::int4, numeric_precision::int4, \
-         numeric_scale::int4, datetime_precision::int4, is_identity::text, is_generated::text \
-         FROM information_schema.columns WHERE table_schema = 'public' AND table_name NOT LIKE 'kmeta%' \
+         numeric_scale::int4, datetime_precision::int4, is_identity::text, is_generated::text, \
+         character_octet_length::int4 \
+         FROM information_schema.columns WHERE table_schema = 'public' AND table_name NOT LIKE 'kmeta%' AND table_name NOT LIKE 'kmstat%' \
          ORDER BY 1, 3",
         &[],
     )?;
@@ -646,6 +762,7 @@ fn columns_agree_with_information_schema_for_the_seeded_database() -> R {
             int(9)?,
             text(10)?,
             text(11)?,
+            int(12)?,
         ]);
     }
     drop(cur);
@@ -681,6 +798,13 @@ fn columns_agree_with_information_schema_for_the_seeded_database() -> R {
                 o[i("xdbc_decimal_digits")],
                 t[9],
                 "{what}: datetime precision"
+            );
+        }
+        if matches!(ty, "varchar" | "bpchar" | "text") {
+            assert_eq!(
+                o[i("xdbc_char_octet_length")],
+                t[12],
+                "{what}: octet length"
             );
         }
         if t[10].as_deref() == Some("YES") {
@@ -737,7 +861,7 @@ fn constraints_agree_with_information_schema_for_the_seeded_database() -> R {
              ON tgt.constraint_schema = rc.unique_constraint_schema \
             AND tgt.constraint_name = rc.unique_constraint_name \
             AND tgt.ordinal_position = kcu.position_in_unique_constraint \
-          WHERE kcu.table_schema = 'public' AND kcu.table_name NOT LIKE 'kmeta%' \
+          WHERE kcu.table_schema = 'public' AND kcu.table_name NOT LIKE 'kmeta%' AND kcu.table_name NOT LIKE 'kmstat%' \
             AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY')",
         &[],
     )?;
@@ -866,4 +990,199 @@ fn objects_by_depth_and_the_catalog_helpers() -> R {
         );
     }
     Ok(())
+}
+
+#[test]
+fn info_reports_the_server_and_the_driver() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let version = {
+        let mut cur = c.query("SHOW server_version", &[])?;
+        cur.next()?.unwrap().get::<String>(0)?
+    };
+    let info = c.metadata().info(None)?;
+    assert_eq!(info.fields, info_fields());
+    // (info_name, string, bool, int64, bitmask) per row: exactly one value, or none for a null
+    let rows = table(&info);
+    let by = |code: u32| -> Vec<Option<String>> {
+        rows.iter()
+            .find(|r| r[0].as_deref() == Some(&code.to_string()))
+            .unwrap_or_else(|| panic!("no row for code {code}"))[1..]
+            .to_vec()
+    };
+    assert_eq!(by(0), [s("PostgreSQL"), None, None, None]);
+    assert_eq!(by(1), [Some(version.clone()), None, None, None]);
+    assert_eq!(by(3), [None, s("true"), None, None]);
+    assert_eq!(by(4), [None, s("false"), None, None]);
+    assert_eq!(
+        by(5),
+        [None, None, None, None],
+        "Substrait is not supported: null"
+    );
+    assert_eq!(by(6), [None, None, None, None]);
+    assert_eq!(by(100), [s("karez-pg"), None, None, None]);
+    assert!(by(101)[0].as_deref().is_some_and(|v| v.contains('.')));
+    assert_eq!(
+        by(103),
+        [None, None, s("1001000"), None],
+        "ADBC_VERSION_1_1_0"
+    );
+    for r in &rows {
+        assert!(r[1..].iter().filter(|v| v.is_some()).count() <= 1, "{r:?}");
+    }
+    let codes: Vec<String> = rows.iter().map(|r| r[0].clone().unwrap()).collect();
+    assert!(!codes.contains(&"2".to_string()) && !codes.contains(&"102".to_string()));
+    // a selection, in the driver's order, with a code nobody knows left out
+    let some = c.metadata().info(Some(&[103, 0, 9999]))?;
+    let got: Vec<String> = table(&some).iter().map(|r| r[0].clone().unwrap()).collect();
+    assert_eq!(got, ["0", "103"]);
+    assert_eq!(c.metadata().info(Some(&[]))?.rows(), 0);
+    // the full u32 range is a column value
+    assert_eq!(metadata::info_fields()[0].ty, ColumnType::UInt32);
+    Ok(())
+}
+
+#[test]
+fn statistics_exact_and_approximate_agree_with_the_data_and_the_planner() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    c.execute("DROP TABLE IF EXISTS kmstat", &[])?;
+    let _cleanup = Cleanup {
+        addr: addr.clone(),
+        sql: &["DROP TABLE IF EXISTS kmstat"],
+    };
+    c.execute(
+        "CREATE TABLE kmstat (id int4 PRIMARY KEY, name text, f float8, b bytea, n int8)",
+        &[],
+    )?;
+    c.execute(
+        "INSERT INTO kmstat SELECT g, CASE WHEN g % 10 = 0 THEN NULL ELSE 'n' || (g % 7) END, \
+         g * 0.5, decode(repeat('ab', g % 5), 'hex'), CASE WHEN g <= 100 THEN g END \
+         FROM generate_series(1, 1000) g",
+        &[],
+    )?;
+    c.execute("ANALYZE kmstat", &[])?;
+    let r = (|| -> R {
+        let mut m = c.metadata();
+        let f = ObjectFilter {
+            db_schema: Some("public"),
+            table_name: Some("kmstat"),
+            ..Default::default()
+        };
+        assert_eq!(m.statistic_names()?.fields, statistic_names_fields());
+        assert_eq!(m.statistic_names()?.rows(), 0);
+
+        // exact: int64 values, flagged not approximate
+        let ex = m.statistics(&f, false)?;
+        assert_eq!(ex.fields, statistics_fields());
+        let rows = table(&ex);
+        let get = |col: Option<&str>, key: i16| -> Vec<Option<String>> {
+            rows.iter()
+                .find(|r| r[3].as_deref() == col && r[4].as_deref() == Some(&key.to_string()))
+                .unwrap_or_else(|| panic!("no statistic {key} for {col:?}"))[5..]
+                .to_vec()
+        };
+        let (i64c, f64c, binc) = (0usize, 2usize, 3usize);
+        assert_eq!(get(None, 6)[i64c], s("1000"), "row count");
+        assert!(rows.iter().all(|r| r[9].as_deref() == Some("false")));
+        assert_eq!(get(Some("id"), 5)[i64c], s("0"), "null count");
+        assert_eq!(get(Some("name"), 5)[i64c], s("100"));
+        assert_eq!(get(Some("n"), 5)[i64c], s("900"));
+        assert_eq!(get(Some("id"), 1)[i64c], s("1000"), "distinct count");
+        assert_eq!(get(Some("name"), 1)[i64c], s("7"));
+        assert_eq!(get(Some("id"), 4)[i64c], s("1"), "min");
+        assert_eq!(get(Some("id"), 3)[i64c], s("1000"), "max");
+        assert_eq!(get(Some("f"), 3)[f64c], s("500"));
+        assert_eq!(get(Some("f"), 4)[f64c], s("0.5"));
+        assert_eq!(
+            get(Some("name"), 4)[binc].as_deref().map(|_| ()),
+            Some(()),
+            "text minimum is bytes"
+        );
+        // the text extremes, read as bytes: compare with the server's own min and max
+        let mut cur = m_query_min_max(&mut c)?;
+        let (mn, mx) = (cur.0.take().unwrap(), cur.1.take().unwrap());
+        let mut m = c.metadata();
+        let ex_chunks = &ex.chunks;
+        let bytes_of = |key: i16| -> Vec<u8> {
+            for ch in ex_chunks {
+                for r in 0..ch.rows() {
+                    let row = ch.row(r).unwrap();
+                    if row.get::<String>(3).ok().as_deref() == Some("name")
+                        && row.get::<i16>(4).unwrap() == key
+                    {
+                        return row.get::<Vec<u8>>(8).unwrap();
+                    }
+                }
+            }
+            panic!("no binary statistic {key}")
+        };
+        assert_eq!(bytes_of(4), mn.as_bytes());
+        assert_eq!(bytes_of(3), mx.as_bytes());
+        // widths: the server's pg_column_size
+        assert_eq!(get(Some("id"), 0)[f64c], s("4"), "average width of an int4");
+        assert_eq!(get(Some("id"), 2)[i64c], s("4"), "largest width");
+        // exactly one union member is set on every row
+        for r in &rows {
+            assert_eq!(r[5..9].iter().filter(|v| v.is_some()).count(), 1, "{r:?}");
+        }
+
+        // approximate: float64 values from the planner, flagged approximate
+        let ap = m.statistics(&f, true)?;
+        let rows = table(&ap);
+        assert!(rows.iter().all(|r| r[9].as_deref() == Some("true")));
+        let getf = |col: Option<&str>, key: i16| -> f64 {
+            rows.iter()
+                .find(|r| r[3].as_deref() == col && r[4].as_deref() == Some(&key.to_string()))
+                .unwrap_or_else(|| panic!("no statistic {key} for {col:?}"))[7]
+                .as_deref()
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(getf(None, 6), 1000.0);
+        assert_eq!(getf(Some("id"), 1), 1000.0, "n_distinct -1 means every row");
+        assert_eq!(getf(Some("name"), 1), 7.0);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        assert!(
+            near(getf(Some("name"), 5), 100.0),
+            "null_frac 0.1 of 1000 rows"
+        );
+        assert!(near(getf(Some("n"), 5), 900.0));
+        assert_eq!(getf(Some("id"), 0), 4.0);
+        assert!(rows
+            .iter()
+            .all(|r| r[5].is_none() && r[6].is_none() && r[8].is_none()));
+        // a table nobody analysed has no approximate statistics
+        // (a pattern that matches nothing gives an empty result with the schema)
+        let none = m.statistics(
+            &ObjectFilter {
+                table_name: Some("no_such_%"),
+                ..Default::default()
+            },
+            true,
+        )?;
+        assert_eq!(none.rows(), 0);
+        assert_eq!(none.fields, statistics_fields());
+        // an unreadable table (owned by another role) is skipped, not an error
+        let all = m.statistics(
+            &ObjectFilter {
+                db_schema: Some("public"),
+                table_name: Some("seed_%"),
+                ..Default::default()
+            },
+            false,
+        )?;
+        assert_eq!(all.rows(), 0);
+        Ok(())
+    })();
+    c.execute("DROP TABLE IF EXISTS kmstat", &[])?;
+    r
+}
+
+/// The server's own minimum and maximum of `kmstat.name`.
+fn m_query_min_max(c: &mut Connection) -> Result<(Option<String>, Option<String>), Error> {
+    let mut cur = c.query("SELECT min(name), max(name) FROM kmstat", &[])?;
+    let r = cur.next()?.unwrap();
+    Ok((r.get(0)?, r.get(1)?))
 }
