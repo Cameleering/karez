@@ -1,0 +1,6 @@
+S1 SELECT 1: floor p50 147.6 us p99 193.6 us | karez-blocking p50 142.7 us p99 184.0 us | karez/floor p50 0.967
+S2 point select, 10 columns: floor p50 150.0 us p99 190.7 us | karez-blocking p50 152.6 us p99 197.1 us | karez/floor p50 1.017
+S1 SELECT 1: floor p50 141.0 us p99 187.6 us | karez-blocking p50 143.8 us p99 193.3 us | karez/floor p50 1.020
+S2 point select, 10 columns: floor p50 147.9 us p99 197.6 us | karez-blocking p50 153.3 us p99 203.2 us | karez/floor p50 1.037
+S1 SELECT 1: floor p50 141.0 us p99 182.8 us | karez-blocking p50 144.8 us p99 180.0 us | karez/floor p50 1.027
+S2 point select, 10 columns: floor p50 150.6 us p99 193.1 us | karez-blocking p50 158.0 us p99 203.8 us | karez/floor p50 1.049

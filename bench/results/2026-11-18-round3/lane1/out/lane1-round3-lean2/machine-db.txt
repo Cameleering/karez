@@ -1,0 +1,14 @@
+host: karez-bench-l1-db  private ip: 10.122.0.6
+kernel: 6.8.0-147-generic  cpus: 4  mem_mb: 7941
+fsync=on
+huge_pages=on
+huge_pages_status=on
+jit=off
+max_connections=1000
+password_encryption=scram-sha-256
+shared_buffers=262144
+ssl=on
+synchronous_commit=on
+wal_level=replica
+PostgreSQL 18.7 (Ubuntu 18.7-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+taxi_trips rows=13069067 size=2120 MB

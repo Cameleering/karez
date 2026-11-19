@@ -1,0 +1,13 @@
+{
+ "host": "karez-bench-l1-cl",
+ "kernel": "6.8.0-147-generic",
+ "python": "3.12.3",
+ "cpus": 4,
+ "cpu_model": "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz",
+ "mem_mb": 7941,
+ "lane": "lane1",
+ "round": "1",
+ "profile": "lean",
+ "url_host": "10.122.0.3:5432",
+ "started": "2026-11-14T10:11:10Z"
+}

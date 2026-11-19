@@ -1,0 +1,12 @@
+[package]
+name = "karez-chunk"
+description = "Arrow-layout columnar chunk for karez: validity bitmaps, fixed-width data, offsets plus bytes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

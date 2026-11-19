@@ -1,0 +1,130 @@
+2026-11-16T02:44:58Z network: iperf3 (client to database host, private network)
+2026-11-16T02:45:48Z latency floor (trust role 'floor', one connection, closed loop)
+2026-11-16T02:47:30Z COPY binary versus row messages (S4 table)
+2026-11-16T02:47:40Z single-connection scans, interleaved three rounds (A B C A B C ...) so a slow minute does not land on one client
+2026-11-16T02:47:40Z bulk s4-karez-blocking-r1 (karez-blocking s4)
+[karez-blocking] bulk s4 rows=1000000
+    median 0.788s rows 1000000
+2026-11-16T02:47:44Z bulk s4-karez-blocking-chunk-r1 (karez-blocking-chunk s4)
+[karez-blocking-chunk] bulk s4 rows=1000000
+    median 0.737s rows 1000000
+2026-11-16T02:47:47Z bulk s4-tokio-postgres-r1 (tokio-postgres s4)
+[tokio-postgres] bulk s4 rows=1000000
+    median 0.579s rows 1000000
+2026-11-16T02:47:51Z bulk s4-pgx-r1 (pgx s4)
+[pgx] bulk s4 rows=1000000
+    median 0.657s rows 1000000
+2026-11-16T02:47:54Z bulk s4-sqlx-r1 (sqlx s4)
+[sqlx] bulk s4 rows=1000000
+    median 0.741s rows 1000000
+2026-11-16T02:47:58Z bulk s4-libpq-r1 (libpq s4)
+[libpq] bulk s4 rows=1000000
+    median 0.744s rows 1000000
+2026-11-16T02:48:02Z bulk s8-karez-blocking-chunk-r1 (karez-blocking-chunk s8)
+[karez-blocking-chunk] bulk s8 rows=13069067
+    median 15.537s rows 13069067
+2026-11-16T02:48:45Z bulk s8-pgx-r1 (pgx s8)
+[pgx] bulk s8 rows=13069067
+    median 13.768s rows 13069067
+2026-11-16T02:49:13Z bulk s8-tokio-postgres-r1 (tokio-postgres s8)
+[tokio-postgres] bulk s8 rows=13069067
+    median 12.641s rows 13069067
+2026-11-16T02:49:52Z bulk s4-karez-blocking-r2 (karez-blocking s4)
+[karez-blocking] bulk s4 rows=1000000
+    median 0.810s rows 1000000
+2026-11-16T02:49:56Z bulk s4-karez-blocking-chunk-r2 (karez-blocking-chunk s4)
+[karez-blocking-chunk] bulk s4 rows=1000000
+    median 0.693s rows 1000000
+2026-11-16T02:49:59Z bulk s4-tokio-postgres-r2 (tokio-postgres s4)
+[tokio-postgres] bulk s4 rows=1000000
+    median 0.705s rows 1000000
+2026-11-16T02:50:03Z bulk s4-pgx-r2 (pgx s4)
+[pgx] bulk s4 rows=1000000
+    median 0.600s rows 1000000
+2026-11-16T02:50:06Z bulk s4-sqlx-r2 (sqlx s4)
+[sqlx] bulk s4 rows=1000000
+    median 0.886s rows 1000000
+2026-11-16T02:50:10Z bulk s4-libpq-r2 (libpq s4)
+[libpq] bulk s4 rows=1000000
+    median 0.664s rows 1000000
+2026-11-16T02:50:14Z bulk s8-karez-blocking-chunk-r2 (karez-blocking-chunk s8)
+[karez-blocking-chunk] bulk s8 rows=13069067
+    median 13.825s rows 13069067
+2026-11-16T02:50:55Z bulk s8-pgx-r2 (pgx s8)
+[pgx] bulk s8 rows=13069067
+    median 15.104s rows 13069067
+2026-11-16T02:51:25Z bulk s8-tokio-postgres-r2 (tokio-postgres s8)
+[tokio-postgres] bulk s8 rows=13069067
+    median 12.442s rows 13069067
+2026-11-16T02:52:03Z bulk s4-karez-blocking-r3 (karez-blocking s4)
+[karez-blocking] bulk s4 rows=1000000
+    median 0.686s rows 1000000
+2026-11-16T02:52:06Z bulk s4-karez-blocking-chunk-r3 (karez-blocking-chunk s4)
+[karez-blocking-chunk] bulk s4 rows=1000000
+    median 0.663s rows 1000000
+2026-11-16T02:52:09Z bulk s4-tokio-postgres-r3 (tokio-postgres s4)
+[tokio-postgres] bulk s4 rows=1000000
+    median 0.772s rows 1000000
+2026-11-16T02:52:13Z bulk s4-pgx-r3 (pgx s4)
+[pgx] bulk s4 rows=1000000
+    median 0.804s rows 1000000
+2026-11-16T02:52:17Z bulk s4-sqlx-r3 (sqlx s4)
+[sqlx] bulk s4 rows=1000000
+    median 0.750s rows 1000000
+2026-11-16T02:52:21Z bulk s4-libpq-r3 (libpq s4)
+[libpq] bulk s4 rows=1000000
+    median 0.793s rows 1000000
+2026-11-16T02:52:25Z bulk s8-karez-blocking-chunk-r3 (karez-blocking-chunk s8)
+[karez-blocking-chunk] bulk s8 rows=13069067
+    median 14.598s rows 13069067
+2026-11-16T02:53:08Z bulk s8-pgx-r3 (pgx s8)
+[pgx] bulk s8 rows=13069067
+    median 14.283s rows 13069067
+2026-11-16T02:53:37Z bulk s8-tokio-postgres-r3 (tokio-postgres s8)
+[tokio-postgres] bulk s8 rows=13069067
+    median 13.060s rows 13069067
+2026-11-16T02:54:17Z partitioned scans: S4 and S8, k = 2 4 8 16 (32 on the larger classes), snapshot off; k=8 with snapshot
+2026-11-16T02:54:17Z bulk s4-part2 (karez-blocking-part s4)
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.591s rows 1000000
+2026-11-16T02:54:21Z bulk s4-part4 (karez-blocking-part s4)
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.565s rows 1000000
+2026-11-16T02:54:25Z bulk s4-part8 (karez-blocking-part s4)
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.599s rows 1000000
+2026-11-16T02:54:29Z bulk s4-part16 (karez-blocking-part s4)
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.688s rows 1000000
+2026-11-16T02:54:34Z bulk s4-part32 (karez-blocking-part s4)
+[karez-blocking-part] bulk s4 rows=1000000
+    median 1.019s rows 1000000
+2026-11-16T02:54:41Z bulk s8-part2 (karez-blocking-part s8)
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.891s rows 13069067
+2026-11-16T02:55:22Z bulk s8-part4 (karez-blocking-part s8)
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.718s rows 13069067
+2026-11-16T02:56:01Z bulk s8-part8 (karez-blocking-part s8)
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.723s rows 13069067
+2026-11-16T02:56:41Z bulk s8-part16 (karez-blocking-part s8)
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.660s rows 13069067
+2026-11-16T02:57:20Z bulk s8-part32 (karez-blocking-part s8)
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.649s rows 13069067
+2026-11-16T02:58:00Z bulk s8-part8-snap (karez-blocking-part s8)
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.681s rows 13069067
+2026-11-16T02:58:40Z S5, 100k rows: per-row, multi-row 1000, sqlx
+2026-11-16T02:58:40Z bulk s5-karez-blocking (karez-blocking s5)
+[karez-blocking] bulk s5 rows=100000
+    median 0.726s rows 100000
+2026-11-16T02:58:44Z bulk s5-sqlx (sqlx s5)
+[sqlx] bulk s5 rows=100000
+    median 0.457s rows 100000
+2026-11-16T02:58:47Z bulk s5-mrow1000 (karez-blocking-mrow s5)
+[karez-blocking-mrow] bulk s5 rows=100000
+    median 0.419s rows 100000
+2026-11-16T02:58:49Z done

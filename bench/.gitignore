@@ -1,0 +1,16 @@
+target/
+target-cloud/
+*.class
+karez-bench-go
+libpq_adapter
+__pycache__/
+results/*
+!results/2026-11-14-lean
+results/**/cells.jsonl
+!results/2026-11-16-perf1
+!results/2026-11-16-perf3
+!results/2026-11-16-wsl-nonet
+!results/2026-11-16-perf4
+!results/2026-11-16-campaign2
+!results/2026-11-18-round3
+!results/2026-11-18-round3-tail

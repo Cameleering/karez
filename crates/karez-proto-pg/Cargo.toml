@@ -1,0 +1,15 @@
+[package]
+name = "karez-proto-pg"
+description = "Sans-io PostgreSQL wire protocol 3.0 messages, framing, SCRAM-SHA-256 and binary decoding into karez chunks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+karez-chunk = { path = "../karez-chunk" }
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+s2: OK
+    checksum 4181340182376054073 ok 800 errors 0: karez-blocking, karez-shared, diesel, wtx, libpq, tokio-postgres, pgjdbc, asyncpg
+s3: OK
+    checksum 492800 ok 800 errors 0: karez-blocking, karez-shared, libpq, tokio-postgres, pgjdbc, asyncpg
+r1: OK
+    checksum 1706228206517276571 ok 800 errors 0: karez-blocking, karez-shared, diesel, libpq, tokio-postgres, pgjdbc, asyncpg
+r2: OK
+    checksum 6440589124338694347 ok 800 errors 0: karez-blocking, karez-shared, libpq, tokio-postgres, pgjdbc, asyncpg
+r3: OK
+    checksum 4835636569876318086 ok 80 errors 0: karez-blocking, karez-shared, libpq, tokio-postgres, pgjdbc, asyncpg
+r4: OK
+    checksum 14030470216304704993 ok 800 errors 0: karez-blocking, karez-shared, libpq, tokio-postgres, pgjdbc, asyncpg

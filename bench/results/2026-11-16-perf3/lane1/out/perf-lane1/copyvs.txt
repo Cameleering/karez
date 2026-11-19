@@ -1,0 +1,8 @@
+DataRow (query, rows counted): 0.818 s  rows 1000000 bytes 0  client CPU 0.47 s  all-CPU busy 0.55 s
+DataRow (query, rows counted): 0.649 s  rows 1000000 bytes 0  client CPU 0.42 s  all-CPU busy 0.47 s
+DataRow (query, rows counted): 0.738 s  rows 1000000 bytes 0  client CPU 0.43 s  all-CPU busy 0.55 s
+DataRow (query, rows counted): 0.587 s  rows 1000000 bytes 0  client CPU 0.40 s  all-CPU busy 0.44 s
+COPY binary (bytes counted): 0.949 s  rows 0 bytes 126888917  client CPU 0.23 s  all-CPU busy 0.35 s
+COPY binary (bytes counted): 0.813 s  rows 0 bytes 126888917  client CPU 0.18 s  all-CPU busy 0.29 s
+COPY binary (bytes counted): 1.057 s  rows 0 bytes 126888917  client CPU 0.22 s  all-CPU busy 0.38 s
+COPY binary (bytes counted): 1.157 s  rows 0 bytes 126888917  client CPU 0.16 s  all-CPU busy 0.31 s

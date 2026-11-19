@@ -1,0 +1,57 @@
+# A throwaway primary and a streaming standby, for the target_session_attrs tests (M1 step 2).
+# Test-only: the password is public.
+#
+#   docker compose -f tests/docker/standby.yaml up -d --wait
+#   KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQUIRE_SERVER=1 \
+#     cargo test -p karez-pg --test standby
+#   docker compose -f tests/docker/standby.yaml down -v
+#
+# Ports are bound to 127.0.0.1 only. Containers and volumes are named karez-test-*.
+name: karez-standby
+services:
+  primary:
+    image: postgres:16
+    container_name: karez-test-primary
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+    command: ["postgres", "-c", "wal_level=replica", "-c", "max_wal_senders=5", "-c", "listen_addresses=*"]
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_PRIMARY_PORT:-54361}:5432"
+    mem_limit: 512m
+    volumes:
+      - ./standby-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d karez"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+  standby:
+    image: postgres:16
+    container_name: karez-test-standby
+    depends_on:
+      primary:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: karez_test_only_superuser_pw
+    # Copies the primary's data directory with pg_basebackup -R (which writes standby.signal and the
+    # connection settings), then starts as a hot standby.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        rm -rf /var/lib/postgresql/data/*
+        chown postgres:postgres /var/lib/postgresql/data
+        gosu postgres pg_basebackup -h primary -U postgres -D /var/lib/postgresql/data -R -X stream
+        chmod 700 /var/lib/postgresql/data
+        exec gosu postgres postgres -c hot_standby=on -c listen_addresses=*
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_STANDBY_PORT:-54362}:5432"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -d karez -tAc 'select pg_is_in_recovery()' | grep -q t"]
+      interval: 2s
+      timeout: 5s
+      retries: 60

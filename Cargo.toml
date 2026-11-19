@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/karez-chunk",
+    "crates/karez-proto-pg",
+    "crates/karez-pool",
+    "crates/karez-pg",
+    "crates/karez-rt",
+    "crates/karez-compat-tests",
+    "crates/karez",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/cameleering/karez"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1

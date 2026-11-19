@@ -6,12 +6,13 @@ SQLite, with JDBC, ODBC and ADBC parity and exports, and Arrow-native results.
 
 ## Know the status first
 
-karez is in the **design stage**. There is no library code, no release and no measurement yet.
+karez is in the **design stage with a first working slice**: a PostgreSQL client with optional TLS (feature `tls`), verified against a real server on PostgreSQL 14.25, 16.15 and 17.12 (13, 15 and 18 were not run). There is no release. The measurements are a reduced campaign, a two-round, three-lane campaign and a third round with a tail run (see bench/README.md and docs/design/perf-program.md); they support the figures in the README with their conditions, not a "fastest" claim. Other databases and the exports are not built.
 The repository holds the research, the build plan and the brand assets.
 
 - Do not describe any crate, driver, wheel, JAR or benchmark result as existing. When you write
   about karez, say "planned" or "design target" for anything not built.
-- Do not invent API. The only API is the sketch in [docs/design/plan.md](docs/design/plan.md)
+- Do not invent API. The API that exists is what the crates in `crates/` export (blocking
+  PostgreSQL only); everything else is the sketch in [docs/design/plan.md](docs/design/plan.md)
   section 2.5, and it is a sketch.
 - Read, in this order: [README.md](README.md), [docs/STATUS.md](docs/STATUS.md),
   [docs/design/plan.md](docs/design/plan.md), then the section of
@@ -22,9 +23,10 @@ The repository holds the research, the build plan and the brand assets.
 1. **Evidence tags.** Every number is tagged `[measured here]`, `[vendor]`, `[third party]` or
    `[paper]`, with a URL and a `[checked YYYY-MM-DD]` date. Numbers from different machines are
    never put in one ranking. Do not add an untagged number.
-2. **No unmeasured claims in public text.** Do not write "fastest", "10x faster" or similar in
-   the README, in images, or in the About line until a benchmark that follows the plan's
-   method supports it.
+2. **No unmeasured claims in public text.** Do not write "fastest", "10x faster" or similar unless a
+   benchmark that follows the plan's method supports it. Owner's decision of 2026-11-16: the README and the About line may lead with
+   the strongest *measured* figure, but only with its conditions in the same sentence (hardware, network, data size), the figure
+   from the realistic network next to it, and a note that the full test is pending. Never a bare ratio, never "fastest".
 3. **Hard rules from the plan** (section 1.2): server-side parameter binding only (never inline a
    literal into SQL), binary protocols by default, verified TLS by default, sans-io protocol
    crates with `#![forbid(unsafe_code)]`, no dependency in the core or the protocol crates, and

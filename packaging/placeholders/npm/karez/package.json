@@ -1,0 +1,8 @@
+{
+  "name": "karez",
+  "version": "0.0.1",
+  "description": "Placeholder reserving the name for karez, a planned database connectivity library written in Rust. No code yet.",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "files": ["index.js", "README.md", "LICENSE"]
+}

@@ -1,0 +1,16 @@
+# The benchmark harness. A separate workspace on purpose: the karez core and protocol crates stay
+# dependency-free, and this unpublished crate is where competitors' dependencies live.
+[workspace]
+resolver = "2"
+members = ["rustbench"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+debug = 1

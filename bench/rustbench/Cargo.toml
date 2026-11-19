@@ -1,0 +1,32 @@
+[package]
+name = "rustbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Open-loop load generator and Rust PostgreSQL client adapters for the karez benchmark"
+
+[features]
+default = ["tls", "diesel-client", "wtx-client"]
+wtx-client = ["dep:wtx"]
+diesel-client = ["dep:diesel", "dep:pq-sys", "dep:openssl-sys"]
+tls = ["karez-pg/tls", "karez-rt/tls", "dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-pemfile"]
+
+[dependencies]
+karez-pg = { path = "../../crates/karez-pg" }
+karez-rt = { path = "../../crates/karez-rt" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-postgres = { version = "0.7", features = ["with-time-0_3"] }
+time = "0.3"
+deadpool-postgres = "0.14"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls-ring-webpki", "time"] }
+tokio-postgres-rustls = { version = "0.13", optional = true }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
+rustls-pemfile = { version = "2", optional = true }
+bytes = "1"
+futures-util = { version = "0.3", features = ["sink"] }
+zero-postgres = { version = "0.9", default-features = false, features = ["tokio"] }
+diesel = { version = "2", default-features = false, features = ["postgres", "32-column-tables"], optional = true }
+pq-sys = { version = "0.7", features = ["bundled"], optional = true }
+openssl-sys = { version = "0.9", features = ["vendored"], optional = true }
+wtx = { version = "0.52", default-features = false, features = ["postgres", "std", "getrandom", "crypto-ring"], optional = true }
