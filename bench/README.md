@@ -305,3 +305,11 @@ Limits: the shared droplet class (not comparable with the `c-4` campaigns); one 
 neither met nor ruled out and needs `c-4`.
 Rerun: `gunzip -k` the cells, then `python bench/run.py report <folder>` on the folder that holds them.
 After the run: client `karez-blocking-binary` (S6 through `Connection::copy_in_binary`, same rows) and the `pgbulkinsert` client are in `clients.json`; the binary client has not run on droplets.
+
+### 2026-11-19, the exit measurements again on `c-4` in `nyc1`
+
+Results: `bench/results/2026-11-19-exit-c4/` (gzipped raw cells, `verify.txt`, the generated `report.md` and `REPORT.md`). Same script as the shared-droplet run (`lane-exit.sh`, `LANES=1 DO_REGION=nyc1 campaign.sh "exit"`) with `karez-blocking-binary` added to S6: two `c-4` droplets (PostgreSQL 18.7), 199 minutes, about $0.83, round label `x1`. `[measured here, 2026-11-19]`.
+
+What it supports: S6 binary COPY of karez at 1.36x PgBulkInsert plain and 1.43x over TLS (gate of 1.5x not met; the server's insert backend is the probable limit); S1 to S3 plain and over TLS level among karez, tokio-postgres, pgx, libpq and tuned pgjdbc; TLS bulk reads for nine clients. It found a collapse of `karez-pool` on S8 (512 workers, pool of 32) and a 44% slowdown of the chunk path over TLS.
+
+Limits: another region and droplet pair than the earlier `c-4` campaigns (not comparable with them); one lane; n=3; SLO rates are search steps (differences under about 10% are noise); no taxi scenarios; the S8 wait-time distribution was not attempted. `setup-db.sh` now writes the machine record when the taxi files are not staged, so `up` no longer stops there.
