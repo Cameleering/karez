@@ -56,8 +56,7 @@ Over TLS: karez binary COPY **1,010,121** rows/s (9.2, 9.9, 10.3 s) against PgBu
 ## S8: karez's pool collapses under 512 workers (a finding)
 
 With 512 workers sharing a pool of 32 connections, `karez-blocking` held 10,000 requests a second at a p99 of 0.28 ms and **collapsed above that**: at 10,500 to 16,000 requests a second only 1,100 to 6,800 of the 31,500 to 48,000 requests finished and the p99 was 7 to 8 seconds (S8 over TLS the same, collapsing above 9,500)
-(`bench/results/2026-11-19-exit-c4/lane1/campaign.log`, the S8 probes). libpq's pool and pgx's held 41,000 to 42,000. The cause was **not investigated here**. The likely one is the pool's first-come-first-served hand-off: a released connection is reserved for the longest waiter, which must be scheduled
-before the connection is used again; with 512 threads on 4 vCPUs that wake-up is slow and the connection idles meanwhile. That is a reading from the design (`karez-pool`, M1 step 1b), not a measurement. **The pool needs a fix and a test at this load; it was not in the plan's gate list, and this run found it.**
+(`bench/results/2026-11-19-exit-c4/lane1/campaign.log`, the S8 probes). libpq's pool and pgx's held 41,000 to 42,000. The cause was **not investigated here**. The likely one was thought to be the pool's first-come-first-served hand-off (a released connection is reserved for the longest waiter, which must be scheduled before the connection is used again). **That reading was wrong:** the cause turned out to be a wake-up of every waiter on every release. **The pool needed a fix and a test at this load; it was not in the plan's gate list, and this run found it. Fixed after the run (commit after a90bca2): the cause was `notify_all` on every release (a thundering herd), not the hand-off order; see `docs/design/m1-plan.md` step 9. The numbers above are from before the fix; S8 has not been rerun on `c-4`.**
 
 ## Bulk reads (S4) and batch insert (S5)
 

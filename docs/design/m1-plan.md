@@ -6,7 +6,7 @@ plan it says so._
 
 ## 1. Where M0 left the code
 
-Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a compatibility-test crate; `karez-pool` was added the same day, step 1b).
+Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a compatibility-test crate; `karez-pool` was added the same day, step 1b; its release wake-up was changed on 2026-11-19, see step 9).
 
 | M1 item in plan section 8 | state |
 |---|---|
@@ -187,7 +187,10 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
      - **S6 (10,000,000 rows): karez binary COPY 899,596 rows/s, PgBulkInsert 661,398: 1.36x plain, 1.43x over TLS (1,010,121 against 708,105). The plan's 1.5x gate is not met.** Pass by pass the ratio ran 1.29x to 1.55x plain. karez's text COPY is level with PgBulkInsert (0.99x). karez binary COPY uses 0.16x its CPU and 1/300 of its memory. The database had one busy backend, so the server's insert rate is the probable limit (a reading, not tested).
        Plan section 10 row 4 stays unmet and must be changed or retried (a faster target, such as an unlogged table or a second table in parallel, would show whether the client is the limit); the decision is the owner's.
      - **S1 to S3, plain and over TLS (open loop):** karez, tokio-postgres, pgx, libpq and tuned pgjdbc are level within the noise of the search (karez 0.98x of the best on S1, 1.08x on S2, 0.87x on S3); TLS costs every client about 20% of its S1 rate. sqlx and asyncpg are far below.
-     - **S8, 512 workers on a pool of 32: karez's pool collapses above 10,000 requests a second** (p99 7 to 8 s, most requests dropped) where libpq's and pgx's pools hold 41,000 to 42,000. Cause not investigated; the likely one is the first-come-first-served hand-off of `karez-pool`. **A defect to fix, found by this run.**
+     - **S8, 512 workers on a pool of 32: karez's pool collapses above 10,000 requests a second** (p99 7 to 8 s, most requests dropped) where libpq's and pgx's pools hold 41,000 to 42,000. **Fixed the same day.** Cause (found by a mock-manager reproduction, `crates/karez-pool/examples/contention.rs`): every release did `notify_all` on one condition variable, so all 511 waiting threads woke, took the lock and went back to sleep, on every release; only the waiter at the front could proceed. Now each waiter has its own condition variable and a release wakes only the front one
+       (and the front waiter wakes the next when it leaves, by acquiring or by timeout); with nobody waiting a `get` takes an idle connection without queueing. The first-come-first-served order is unchanged. **Measured here after the fix (WSL, 12 cores, mock pool, 200 us hold):** 512 threads on a pool of 32: 49,258 gets/s and a slowest wait of 13 ms, against 1,150 gets/s and 530 ms before; 2,048 threads: 42,663 gets/s.
+       **Through the bench adapter (`karez-blocking` S2, 512 workers, pool 32, local server, 5 s cells):** before the fix 8,000 requests a second were served and 16,000, 24,000 and 32,000 served none (all dropped); after it all of 8,000, 16,000, 24,000 and 32,000 were served with no drop. Tests: a release wakes one waiter, not all (a count of loop turns for 48 waiters: at most 3 per waiter; the old code needed about 1,100, and a mutation that wakes every waiter gives 621 and fails the test),
+       and a front waiter that times out lets the next one through. Not yet remeasured on `c-4` (S8 there would need another run).
      - **The chunk path over TLS (S4) is 44% slower than plain** (942,418 against 1,677,571 rows/s); the row view over TLS is level with tokio-postgres. Not investigated. S5: karez is fifth of eight.
      - **Not done:** the S8 wait-time distribution against Erlang C (it needs the pool fixed first).
    - **TLS bulk reads (S4), shared-droplet run:** every client loses 3% to 36% of its rate over TLS; karez's row view 24%, its chunk path 5%. karez is not ahead on S4 in this run (pgx and tokio-postgres are 11% and 5% above the row view, plain). S5 batch insert: karez is fifth of eight.

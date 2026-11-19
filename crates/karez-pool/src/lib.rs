@@ -7,7 +7,8 @@
 //! Behaviour:
 //!
 //! * Connections are opened lazily, up to a maximum, and handed out one at a time.
-//! * Waiters are served first come, first served.
+//! * Waiters are served first come, first served. Only the waiter at the front of the queue is woken when a
+//!   connection comes back, so a release costs one wake-up however many threads wait.
 //! * A connection goes back when its guard is dropped, after [`Manager::recycle`] has looked at it.
 //!   `recycle` runs outside the pool's lock, so it may do network I/O (a `ROLLBACK`, say). If it
 //!   returns `false` the connection is discarded and its slot is free again.
@@ -69,20 +70,41 @@ impl<E: std::error::Error + 'static> std::error::Error for PoolError<E> {
     }
 }
 
+/// One thread waiting for a connection. Each waiter has its own condition variable, so that a
+/// release can wake exactly the one that is next in line (a shared one woke every waiter on every
+/// release: with 512 threads on 32 connections that was most of the pool's time, see
+/// bench/results/2026-11-19-exit-c4/REPORT.md).
+struct Waiter {
+    ticket: u64,
+    wake: Arc<Condvar>,
+}
+
 struct State<C> {
     idle: Vec<C>,
     /// Connections that exist: idle, checked out, or being opened.
     total: usize,
-    /// Tickets of the threads waiting for a connection, in arrival order.
-    waiters: VecDeque<u64>,
+    /// The threads waiting for a connection, in arrival order.
+    waiters: VecDeque<Waiter>,
     next_ticket: u64,
+}
+
+impl<C> State<C> {
+    /// Wake the waiter at the front of the queue, if any. Call it after every change that can let
+    /// the front waiter proceed: a connection came back, a slot was freed, or the front left.
+    fn wake_front(&self) {
+        if let Some(w) = self.waiters.front() {
+            w.wake.notify_one();
+        }
+    }
 }
 
 struct Shared<M: Manager> {
     manager: M,
     max: usize,
     state: Mutex<State<M::Connection>>,
-    available: Condvar,
+    /// Loop turns of waiting threads, to test that a release wakes one thread and not all.
+    #[cfg(test)]
+    turns: std::sync::atomic::AtomicUsize,
 }
 
 impl<M: Manager> Shared<M> {
@@ -132,7 +154,8 @@ impl<M: Manager> Pool<M> {
                     waiters: VecDeque::new(),
                     next_ticket: 0,
                 }),
-                available: Condvar::new(),
+                #[cfg(test)]
+                turns: std::sync::atomic::AtomicUsize::new(0),
             }),
         })
     }
@@ -169,54 +192,76 @@ impl<M: Manager> Pool<M> {
 
     fn get_inner(&self, deadline: Option<Instant>) -> Result<Pooled<M>, PoolError<M::Error>> {
         let mut st = self.shared.lock();
-        // First come, first served: a waiter proceeds only when it is at the front of the queue.
+        // Nobody is waiting: take a connection, or a free slot, at once.
+        if st.waiters.is_empty() {
+            if let Some(c) = st.idle.pop() {
+                return Ok(self.guard(c));
+            }
+            if st.total < self.shared.max {
+                st.total += 1;
+                drop(st);
+                return self.open();
+            }
+        }
+        // First come, first served: a waiter proceeds only when it is at the front of the queue,
+        // and it is woken only when something has changed for it (see `State::wake_front`).
         let ticket = st.next_ticket;
         st.next_ticket += 1;
-        st.waiters.push_back(ticket);
+        let wake = Arc::new(Condvar::new());
+        st.waiters.push_back(Waiter {
+            ticket,
+            wake: wake.clone(),
+        });
         loop {
-            if st.waiters.front() == Some(&ticket) {
+            #[cfg(test)]
+            self.shared
+                .turns
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if st.waiters.front().map(|w| w.ticket) == Some(ticket) {
                 if let Some(c) = st.idle.pop() {
                     st.waiters.pop_front();
+                    st.wake_front(); // the next in line may be able to go too
                     drop(st);
-                    self.shared.available.notify_all();
                     return Ok(self.guard(c));
                 }
                 if st.total < self.shared.max {
                     st.total += 1;
                     st.waiters.pop_front();
+                    st.wake_front();
                     drop(st);
-                    self.shared.available.notify_all();
-                    return match self.shared.manager.connect() {
-                        Ok(c) => Ok(self.guard(c)),
-                        Err(e) => {
-                            self.shared.lock().total -= 1;
-                            self.shared.available.notify_all();
-                            Err(PoolError::Connect(e))
-                        }
-                    };
+                    return self.open();
                 }
             }
             st = match deadline {
-                None => self
-                    .shared
-                    .available
-                    .wait(st)
-                    .unwrap_or_else(|e| e.into_inner()),
+                None => wake.wait(st).unwrap_or_else(|e| e.into_inner()),
                 Some(d) => {
                     let now = Instant::now();
                     if now >= d {
-                        st.waiters.retain(|t| *t != ticket);
-                        drop(st);
-                        self.shared.available.notify_all();
+                        let was_front = st.waiters.front().map(|w| w.ticket) == Some(ticket);
+                        st.waiters.retain(|w| w.ticket != ticket);
+                        if was_front {
+                            st.wake_front();
+                        }
                         return Err(PoolError::Timeout);
                     }
-                    self.shared
-                        .available
-                        .wait_timeout(st, d - now)
+                    wake.wait_timeout(st, d - now)
                         .unwrap_or_else(|e| e.into_inner())
                         .0
                 }
             };
+        }
+    }
+
+    /// Open the connection for a slot already counted in `total`. A failure gives the slot back.
+    fn open(&self) -> Result<Pooled<M>, PoolError<M::Error>> {
+        match self.shared.manager.connect() {
+            Ok(c) => Ok(self.guard(c)),
+            Err(e) => {
+                let mut st = self.shared.lock();
+                st.total -= 1;
+                st.wake_front();
+                Err(PoolError::Connect(e))
+            }
         }
     }
 
@@ -283,8 +328,7 @@ impl<M: Manager> Drop for Pooled<M> {
             Some(c) => st.idle.push(c),
             None => st.total -= 1,
         }
-        drop(st);
-        self.shared.available.notify_all();
+        st.wake_front();
     }
 }
 
@@ -424,6 +468,51 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(*order.lock().unwrap(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_release_wakes_one_waiter_not_all_of_them() {
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        let held = pool.get().unwrap();
+        let waiters = 48usize;
+        let hs: Vec<_> = (0..waiters)
+            .map(|_| {
+                let p = pool.clone();
+                thread::spawn(move || drop(p.get().unwrap()))
+            })
+            .collect();
+        // let every thread reach the queue
+        while pool.shared.lock().waiters.len() < waiters {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let before = pool.shared.turns.load(Ordering::SeqCst);
+        drop(held);
+        for h in hs {
+            h.join().unwrap();
+        }
+        let turns = pool.shared.turns.load(Ordering::SeqCst) - before;
+        // each waiter runs its loop once when it is woken for its turn; a shared condition variable
+        // woke every waiter at every release, about waiters * waiters / 2 turns (1,100 here)
+        assert!(
+            turns <= waiters * 3,
+            "{turns} loop turns for {waiters} waiters: releases wake more than one thread"
+        );
+        assert_eq!(pool.size(), pool.idle());
+    }
+
+    #[test]
+    fn a_waiter_that_times_out_in_front_lets_the_next_one_through() {
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        let held = pool.get().unwrap();
+        let p1 = pool.clone();
+        let front = thread::spawn(move || p1.get_timeout(Duration::from_millis(80)).err());
+        thread::sleep(Duration::from_millis(30)); // the first is in the queue
+        let p2 = pool.clone();
+        let second = thread::spawn(move || p2.get_timeout(Duration::from_secs(5)).map(drop));
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(front.join().unwrap(), Some(PoolError::Timeout));
+        drop(held); // the first has left the queue: the second must be woken by this
+        assert!(second.join().unwrap().is_ok());
     }
 
     #[test]
