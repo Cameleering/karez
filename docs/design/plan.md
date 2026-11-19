@@ -7,7 +7,7 @@ _Internal design note, 2026-11-09, for the owner to decide on. Evidence and sour
 The library is named **karez**: an underground channel that carries water from a deep aquifer to
 where it is used, by gravity alone, with no pumps. It joins the Cameleer family next to simoom,
 the HTTP engine. On 2026-11-09 `karez` and every planned `karez-*` sub-crate name were free on
-crates.io, `karez` was free on PyPI and npm, and `pmsudhi/karez` was free on GitHub. The
+crates.io, `karez` was free on PyPI and npm, and `cameleering/karez` was free on GitHub. The
 `karez.dev`, `karez.io` and `karez.com` domains already resolve, so they are probably
 registered. No trademark search has been done.
 
@@ -341,7 +341,7 @@ errors, loading and bridging, async) come from research.md §4.8 and live in
 
 ## 4. Repository layout
 
-A fresh repository, `pmsudhi/karez`, with no code or history from tokio-rs/rdbc.
+A fresh repository, `cameleering/karez`, with no code or history from tokio-rs/rdbc.
 
 ```
 karez/                        workspace
@@ -524,7 +524,7 @@ M2–M5 in parallel compress the calendar to roughly 30 weeks.
 ### 8.1 Project identity and release strategy
 
 karez is a standalone project, not a fork. On 2026-11-09 the owner decided to start fresh: the
-repository `pmsudhi/karez` (private) has no code or history from tokio-rs/rdbc, which is cited in
+repository `cameleering/karez` (private) has no code or history from tokio-rs/rdbc, which is cited in
 the research as prior work. Because no rdbc code is copied, its Apache-2.0 licence places no
 obligations on karez.
 

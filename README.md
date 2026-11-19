@@ -8,7 +8,7 @@
 [![Status: design stage](https://img.shields.io/badge/status-design%20stage-orange.svg)](docs/STATUS.md)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Standards: JDBC, ODBC, ADBC](https://img.shields.io/badge/standards-JDBC%20%C2%B7%20ODBC%20%C2%B7%20ADBC-informational.svg)](docs/design/plan.md#3-standards-parity)
-[![Part of Cameleer](https://img.shields.io/badge/part%20of-Cameleer-d4a017.svg)](https://github.com/pmsudhi/cameleer)
+[![Part of Cameleer](https://img.shields.io/badge/part%20of-Cameleer-d4a017.svg)](https://github.com/cameleering/cameleer)
 
 ### Database connectivity for Rust, shaped like JDBC, ODBC and ADBC.
 
@@ -147,7 +147,7 @@ channel between them: it moves the precious thing a long way in bulk, with no pu
 access shafts along the way. The alternative it replaces is carrying water one bucket at a time,
 which is how row-by-row drivers work.
 
-karez belongs to the [Cameleer](https://github.com/pmsudhi/cameleer) family, a set of Rust
+karez belongs to the [Cameleer](https://github.com/cameleering/cameleer) family, a set of Rust
 projects with a desert and camel naming theme. Its siblings include Cameleer, the integration
 engine, and simoom, the HTTP server engine.
 

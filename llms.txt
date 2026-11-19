@@ -24,29 +24,29 @@ The name: a karez (also kariz, kahriz; qanat in Arabic and Persian contexts, fal
 
 ## Documentation
 
-- [Plan](https://github.com/pmsudhi/karez/blob/main/docs/design/plan.md): decision and options, hard rules, architecture, the planned API, standards parity, size budget, benchmark method, security rules, milestones M0 to M8, risks and open decisions.
-- [Research](https://github.com/pmsudhi/karez/blob/main/docs/design/research.md): the evidence in 13 sections: the Rust field, the JDBC baseline, standards, wire protocols, papers and mathematics, techniques, security, size, bridges, testing, conclusions, and the list of unverified items.
-- [Status](https://github.com/pmsudhi/karez/blob/main/docs/STATUS.md): current state, decisions made and next steps.
+- [Plan](https://github.com/cameleering/karez/blob/main/docs/design/plan.md): decision and options, hard rules, architecture, the planned API, standards parity, size budget, benchmark method, security rules, milestones M0 to M8, risks and open decisions.
+- [Research](https://github.com/cameleering/karez/blob/main/docs/design/research.md): the evidence in 13 sections: the Rust field, the JDBC baseline, standards, wire protocols, papers and mathematics, techniques, security, size, bridges, testing, conclusions, and the list of unverified items.
+- [Status](https://github.com/cameleering/karez/blob/main/docs/STATUS.md): current state, decisions made and next steps.
 
 ## Research notes
 
-- [Rust landscape](https://github.com/pmsudhi/karez/blob/main/docs/research/rust-landscape.md): sqlx, tokio-postgres, diesel, rusqlite, tiberius, mysql_async, odbc-api, ConnectorX, ADBC and the state of tokio-rs/rdbc; TechEmpower Round 23.
-- [Standards](https://github.com/pmsudhi/karez/blob/main/docs/research/standards.md): JDBC 4.3 to 4.5, ODBC 3.8, ADBC 1.1, R2DBC 1.0, PEP 249, Go database/sql, ADO.NET, Flight SQL, and the type and SQLSTATE systems.
-- [Wire protocols](https://github.com/pmsudhi/karez/blob/main/docs/research/wire-protocols.md): PostgreSQL 3.0 and 3.2, MySQL and MariaDB, TDS 7.4 and 8.0, SQLite, Oracle, DuckDB, ClickHouse, Flight SQL; bytes per row.
-- [Papers and mathematics](https://github.com/pmsudhi/karez/blob/main/docs/research/papers-and-math.md): the result-transfer cost model, ConnectorX, vectorised decoding, pool sizing with Little's law and Erlang C, pipelining bounds, benchmarking pitfalls.
-- [JDBC baseline and benchmarks](https://github.com/pmsudhi/karez/blob/main/docs/research/jdbc-baseline-and-benchmarks.md): what native JDBC performance is in 2026 and a benchmark method that survives review.
-- [Security, size and testing](https://github.com/pmsudhi/karez/blob/main/docs/research/security-size-testing.md): authentication, TLS, the CVE record and design rules, binary size, conformance suites.
-- [Consumers and bridges](https://github.com/pmsudhi/karez/blob/main/docs/research/consumers-and-bridges.md): exporting a Rust core as ADBC, ODBC and JDBC, and through Python, Node, Go and .NET.
+- [Rust landscape](https://github.com/cameleering/karez/blob/main/docs/research/rust-landscape.md): sqlx, tokio-postgres, diesel, rusqlite, tiberius, mysql_async, odbc-api, ConnectorX, ADBC and the state of tokio-rs/rdbc; TechEmpower Round 23.
+- [Standards](https://github.com/cameleering/karez/blob/main/docs/research/standards.md): JDBC 4.3 to 4.5, ODBC 3.8, ADBC 1.1, R2DBC 1.0, PEP 249, Go database/sql, ADO.NET, Flight SQL, and the type and SQLSTATE systems.
+- [Wire protocols](https://github.com/cameleering/karez/blob/main/docs/research/wire-protocols.md): PostgreSQL 3.0 and 3.2, MySQL and MariaDB, TDS 7.4 and 8.0, SQLite, Oracle, DuckDB, ClickHouse, Flight SQL; bytes per row.
+- [Papers and mathematics](https://github.com/cameleering/karez/blob/main/docs/research/papers-and-math.md): the result-transfer cost model, ConnectorX, vectorised decoding, pool sizing with Little's law and Erlang C, pipelining bounds, benchmarking pitfalls.
+- [JDBC baseline and benchmarks](https://github.com/cameleering/karez/blob/main/docs/research/jdbc-baseline-and-benchmarks.md): what native JDBC performance is in 2026 and a benchmark method that survives review.
+- [Security, size and testing](https://github.com/cameleering/karez/blob/main/docs/research/security-size-testing.md): authentication, TLS, the CVE record and design rules, binary size, conformance suites.
+- [Consumers and bridges](https://github.com/cameleering/karez/blob/main/docs/research/consumers-and-bridges.md): exporting a Rust core as ADBC, ODBC and JDBC, and through Python, Node, Go and .NET.
 
 ## Brand
 
-- [Brand assets](https://github.com/pmsudhi/karez/blob/main/assets/README.md): SVG and PNG marks, favicons, avatars, and the generator script.
+- [Brand assets](https://github.com/cameleering/karez/blob/main/assets/README.md): SVG and PNG marks, favicons, avatars, and the generator script.
 
 ## Related
 
-- [Cameleer](https://github.com/pmsudhi/cameleer): the integration engine; karez is a sibling project in the same family.
+- [Cameleer](https://github.com/cameleering/cameleer): the integration engine; karez is a sibling project in the same family.
 - [tokio-rs/rdbc](https://github.com/tokio-rs/rdbc): the dormant Rust database connectivity PoC that karez cites as prior work.
 
 ## Contributing
 
-Corrections to the research and reviews of the benchmark method are welcome now. See [CONTRIBUTING.md](https://github.com/pmsudhi/karez/blob/main/CONTRIBUTING.md) and [AGENTS.md](https://github.com/pmsudhi/karez/blob/main/AGENTS.md).
+Corrections to the research and reviews of the benchmark method are welcome now. See [CONTRIBUTING.md](https://github.com/cameleering/karez/blob/main/CONTRIBUTING.md) and [AGENTS.md](https://github.com/cameleering/karez/blob/main/AGENTS.md).

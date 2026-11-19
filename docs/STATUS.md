@@ -5,7 +5,7 @@ _Updated 2026-11-09. Read this first, then [plan.md](design/plan.md)._
 ## State
 
 karez is in the **design stage**. There is no library code, no release and no measurement. The
-repository is private at `github.com/pmsudhi/karez`.
+repository is private at `github.com/cameleering/karez`.
 
 | area | state |
 |---|---|

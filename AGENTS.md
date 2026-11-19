@@ -67,6 +67,6 @@ evidence tags. Corrections to a number or a citation are especially welcome.
 ## Connect your coding agent to the docs
 
 Once the repository is public, the docs are available as an MCP server at
-`https://gitmcp.io/pmsudhi/karez` (Claude Code:
-`claude mcp add --transport http karez-docs https://gitmcp.io/pmsudhi/karez`), and they are
+`https://gitmcp.io/cameleering/karez` (Claude Code:
+`claude mcp add --transport http karez-docs https://gitmcp.io/cameleering/karez`), and they are
 indexed by Context7 through [context7.json](context7.json).
