@@ -18,8 +18,10 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod copy;
 mod pipeline;
 mod portal;
+pub use copy::CopyWriter;
 pub use pipeline::{Batch, BatchOutcome, BatchRows, Pipeline, StepResult};
 pub use portal::{Fetched, Portal, PortalCursor};
 
@@ -1104,13 +1106,41 @@ impl Connection {
     }
 
     fn copy_in_inner(&mut self, sql: &str, data: &mut dyn Read) -> Result<u64> {
+        self.copy_in_begin(sql)?;
+        let mut buf = vec![0u8; READ_BUF];
+        let mut io_err = None;
+        loop {
+            match data.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => self.copy_in_send(&buf[..n])?,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    io_err = Some(e);
+                    break;
+                }
+            }
+        }
+        let fail = io_err.as_ref().map(|e| format!("client read error: {e}"));
+        let (rows, err) = self.copy_in_end(fail.as_deref())?;
+        if let Some(e) = io_err {
+            return Err(Error::Caller(e));
+        }
+        match err {
+            Some(f) => Err(Error::Server(ServerError::new(f))),
+            None => Ok(rows),
+        }
+    }
+
+    /// Send the COPY statement and wait for the server to be ready for data. Returns whether the
+    /// stream is binary and the column count. Pair with [`Connection::copy_in_end`].
+    fn copy_in_begin(&mut self, sql: &str) -> Result<(bool, u16)> {
         self.out.clear();
         frontend::query(&mut self.out, sql)?;
         self.io.send(&self.out)?;
         let mut err = None;
         loop {
             match self.io.next_msg(&mut self.side)? {
-                BackendMessage::CopyInResponse { .. } => break,
+                BackendMessage::CopyInResponse { binary, columns } => return Ok((binary, columns)),
                 BackendMessage::ErrorResponse(f) => err = Some(f),
                 BackendMessage::CopyOutResponse { .. } => {
                     // Wrong direction: stop the stream the server is about to send.
@@ -1133,47 +1163,36 @@ impl Connection {
                 other => return Err(unexpected(&other)),
             }
         }
-        let mut buf = vec![0u8; READ_BUF];
-        let mut io_err = None;
-        loop {
-            match data.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    self.out.clear();
-                    frontend::copy_data(&mut self.out, &buf[..n])?;
-                    self.io.send(&self.out)?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    io_err = Some(e);
-                    break;
-                }
-            }
-        }
+    }
+
+    /// Send one `CopyData` message.
+    fn copy_in_send(&mut self, data: &[u8]) -> Result<()> {
         self.out.clear();
-        match &io_err {
-            Some(e) => frontend::copy_fail(&mut self.out, &format!("client read error: {e}"))?,
+        frontend::copy_data(&mut self.out, data)?;
+        self.io.send(&self.out)
+    }
+
+    /// End the stream (`CopyFail` with the message when `fail` is set, `CopyDone` otherwise) and
+    /// read to `ReadyForQuery`. Returns the row count and the server's error, if it sent one.
+    fn copy_in_end(&mut self, fail: Option<&str>) -> Result<(u64, Option<ErrorFields>)> {
+        self.out.clear();
+        match fail {
+            Some(m) => frontend::copy_fail(&mut self.out, m)?,
             None => frontend::copy_done(&mut self.out),
         }
         self.io.send(&self.out)?;
         let mut rows = 0;
+        let mut err = None;
         loop {
             match self.io.next_msg(&mut self.side)? {
                 BackendMessage::CommandComplete(tag) => rows = rows_from_tag(&tag),
                 BackendMessage::ErrorResponse(f) => err = Some(f),
                 BackendMessage::ReadyForQuery(s) => {
                     self.tx_status = s;
-                    break;
+                    return Ok((rows, err));
                 }
                 other => return Err(unexpected(&other)),
             }
-        }
-        if let Some(e) = io_err {
-            return Err(Error::Caller(e));
-        }
-        match err {
-            Some(f) => Err(Error::Server(ServerError::new(f))),
-            None => Ok(rows),
         }
     }
 

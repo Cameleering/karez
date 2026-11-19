@@ -312,5 +312,16 @@
   "bulk": [
    "s6"
   ]
+ },
+ "karez-blocking-binary": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s6"
+  ]
  }
 }

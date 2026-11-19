@@ -304,3 +304,4 @@ database as the likely limit; TLS costs every client's S4 rate 3% to 36% (karez 
 Limits: the shared droplet class (not comparable with the `c-4` campaigns); one lane; n=3; the open-loop S1 to S3 and S8, plain and over TLS, found no throughput under the 2 ms bound (p99 3.4 to 36 ms down to 16 requests a second) and were stopped, so they are **not measured**; the plan's S6 gate (1.5x) is
 neither met nor ruled out and needs `c-4`.
 Rerun: `gunzip -k` the cells, then `python bench/run.py report <folder>` on the folder that holds them.
+After the run: client `karez-blocking-binary` (S6 through `Connection::copy_in_binary`, same rows) and the `pgbulkinsert` client are in `clients.json`; the binary client has not run on droplets.

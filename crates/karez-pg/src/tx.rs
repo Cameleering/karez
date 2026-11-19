@@ -80,6 +80,11 @@ impl<'c> Transaction<'c> {
         self.conn.batch(stmt)
     }
 
+    /// Start a binary `COPY ... FROM STDIN` inside this transaction; see [`Connection::copy_in_binary`].
+    pub fn copy_in_binary(&mut self, sql: &str) -> Result<crate::CopyWriter<'_>> {
+        self.conn.copy_in_binary(sql)
+    }
+
     /// Open a server-side cursor on `sql`; see [`Connection::portal`]. It lives until the end of
     /// this transaction, and other statements can run between its fetches.
     pub fn portal(&mut self, sql: &str, params: &[Value<'_>]) -> Result<Portal> {
