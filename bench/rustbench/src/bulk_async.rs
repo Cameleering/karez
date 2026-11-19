@@ -29,15 +29,9 @@ fn copy_chunks(rows: i64) -> impl Iterator<Item = Bytes> {
 }
 
 pub fn tokio_pg(cfg: &Cfg) -> (String, Vec<Pass>) {
-    let url = crate::clients::tp_url_pub(&cfg.url);
     let rt = rt();
     let passes = rt.block_on(async {
-        let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
-            .await
-            .unwrap_or_else(|e| die(&format!("connect: {e}")));
-        tokio::spawn(async move {
-            let _ = conn.await;
-        });
+        let client = crate::clients::tp_connect_cfg(cfg).await;
         let scan_st = client.prepare(S4_SQL).await.unwrap();
         let ins_st = client.prepare(INS_SQL).await.unwrap();
         let mut passes = Vec::new();
