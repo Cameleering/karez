@@ -1,0 +1,55 @@
+# The schema tables of AdbcConnectionGetObjects and AdbcConnectionGetTableTypes, copied from
+# c/include/arrow-adbc/adbc.h of apache/arrow-adbc (ADBC API 1.1.0), commit 7f35429e502f3cbe8fd827e288c12dbd8f4cea9f
+# (2026-02-13), read with the GitHub API on 2026-11-19. Used by tests/metadata.rs to compare field by field.
+# The text is the project's (Apache-2.0), reproduced unchanged except for the leading '///'.
+| Field Name               | Field Type              |
+|--------------------------|-------------------------|
+| catalog_name             | utf8                    |
+| catalog_db_schemas       | list<DB_SCHEMA_SCHEMA>  |
+| Field Name               | Field Type              |
+|--------------------------|-------------------------|
+| db_schema_name           | utf8                    |
+| db_schema_tables         | list<TABLE_SCHEMA>      |
+| Field Name               | Field Type              |
+|--------------------------|-------------------------|
+| table_name               | utf8 not null           |
+| table_type               | utf8 not null           |
+| table_columns            | list<COLUMN_SCHEMA>     |
+| table_constraints        | list<CONSTRAINT_SCHEMA> |
+| Field Name               | Field Type              | Comments |
+|--------------------------|-------------------------|----------|
+| column_name              | utf8 not null           |          |
+| ordinal_position         | int32                   | (1)      |
+| remarks                  | utf8                    | (2)      |
+| xdbc_data_type           | int16                   | (3)      |
+| xdbc_type_name           | utf8                    | (3)      |
+| xdbc_column_size         | int32                   | (3)      |
+| xdbc_decimal_digits      | int16                   | (3)      |
+| xdbc_num_prec_radix      | int16                   | (3)      |
+| xdbc_nullable            | int16                   | (3)      |
+| xdbc_column_def          | utf8                    | (3)      |
+| xdbc_sql_data_type       | int16                   | (3)      |
+| xdbc_datetime_sub        | int16                   | (3)      |
+| xdbc_char_octet_length   | int32                   | (3)      |
+| xdbc_is_nullable         | utf8                    | (3)      |
+| xdbc_scope_catalog       | utf8                    | (3)      |
+| xdbc_scope_schema        | utf8                    | (3)      |
+| xdbc_scope_table         | utf8                    | (3)      |
+| xdbc_is_autoincrement    | bool                    | (3)      |
+| xdbc_is_generatedcolumn  | bool                    | (3)      |
+| Field Name               | Field Type              | Comments |
+|--------------------------|-------------------------|----------|
+| constraint_name          | utf8                    |          |
+| constraint_type          | utf8 not null           | (1)      |
+| constraint_column_names  | list<utf8> not null     | (2)      |
+| constraint_column_usage  | list<USAGE_SCHEMA>      | (3)      |
+| Field Name               | Field Type              |
+|--------------------------|-------------------------|
+| fk_catalog               | utf8                    |
+| fk_db_schema             | utf8                    |
+| fk_table                 | utf8 not null           |
+| fk_column_name           | utf8 not null           |
+# GetTableTypes
+| Field Name     | Field Type |
+| ---------------|-------------- |
+| table_type     | utf8 not null |

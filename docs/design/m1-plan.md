@@ -15,8 +15,8 @@ Read from `crates/` on 2026-11-18 (about 14,500 lines in five crates plus a comp
 | COPY | built, in and out |
 | LISTEN | built |
 | cancel | built (`CancelToken`) |
-| portals | **not built**: the cursor streams from the socket (memory stays bounded) but there is no `Execute` with a row limit, so a second statement cannot run on the connection while a cursor is open |
-| metadata chunks | **not built** |
+| portals | was **not built** when M1 began (the cursor streams from the socket, so a second statement cannot run while one is open); built 2026-11-19 as step 5 |
+| metadata chunks | was **not built** when M1 began; built 2026-11-19 as step 5 |
 | TLS with rustls | built (feature `tls`) |
 | GSS/SSPI | **not built** (needs FFI, so `unsafe`) |
 | OAUTHBEARER | **not built** |
@@ -88,6 +88,26 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
 5. **Portals and metadata chunks.** `Execute` with a row limit and `PortalSuspended`, so a cursor can be open while the connection serves another statement in the same transaction;
    `conn.metadata().objects(...)` returning ADBC's fixed schemas from `pg_catalog` (tables, columns, constraints), as chunks. Exit: tests for interleaved cursors, and the metadata schemas
    compared field by field with the ADBC specification.
+   **Built 2026-11-19. Decisions:**
+   - **Portals** (`conn/portal.rs`): `Connection::portal(sql, params)` binds a named portal and returns a `Portal`; `Connection::fetch(&mut portal, max_rows)` sends `Execute` with the limit and `Sync`, reads exactly those rows, and reads on to
+     `ReadyForQuery`, so the connection is idle between fetches (`0` reads all the rest). It returns `Fetched { chunks, done }`: whole chunks of at most 1,024 rows, copied out of the connection's builder. `Transaction` has the same three methods.
+     A portal needs an open transaction block, because PostgreSQL destroys portals when the transaction ends (outside one `portal` returns `Error::Usage`; after COMMIT or ROLLBACK a fetch is a server error, SQLSTATE 34000, and the connection stays
+     usable); `Drop` sends nothing, `close_portal` frees one early. An error in a later row fails that fetch with the server's error and leaves the transaction failed, as in plain SQL; a value this version cannot hold (a timestamp past year 294246) is an
+     `Error::Value`, the portal is then done and the connection is fine. `command_tag()` is the server's tag of the last fetch, whose row count covers that fetch only; `rows_fetched()` is the total. **The existing `Cursor` is unchanged**
+     (it still streams a whole result and owns the connection while open); **`karez-rt` has no portals yet**.
+   - **Metadata** (`metadata.rs`, `conn.metadata()`): `catalogs`, `db_schemas`, `tables`, `columns`, `constraints`, `table_types`, `table_schema` and `objects(depth, filter)`, as flat chunks. **`GetObjects` is nested (`list<struct<...>>`) and a `Chunk` has no list or
+     struct column, so each level is one flat result with one row per leaf, keyed by `catalog_name`, `db_schema_name` and `table_name`; every ADBC field keeps its name, order and type.** The export (M5) groups the rows back. Two ADBC lists are folded into rows:
+     `constraint_column_names` becomes one row per column (`constraint_column_name`, `constraint_column_position`) and `constraint_column_usage` repeats on those rows. Patterns are ADBC's (`%`, `_`, no escape character, so `LIKE ... ESCAPE ''`); `None` is no filter;
+     the catalog is the current database; `pg_toast*` and `pg_temp_*` schemas are left out and `pg_catalog` and `information_schema` are in. Table types: `table`, `partitioned table`, `view`, `materialized view`, `foreign table`.
+     `ordinal_position` counts from 1 without gaps left by dropped columns. The `xdbc_*` fields are filled where PostgreSQL has the answer (JDBC type code, base type name, length, precision, scale, radix, nullability, default, identity or `nextval` as
+     autoincrement, `attgenerated`) and are NULL otherwise (`xdbc_datetime_sub`, `xdbc_char_octet_length`, the three scope fields); a domain reports its base type. **Not built:** `GetInfo` (its `info_value` is a dense union, which a chunk cannot hold) and
+     `GetStatistics` and `GetStatisticNames`.
+   - **Tests:** `tests/portals.rs` (10: two portals and other statements interleaved, 50 portals at once, 200,000 rows in fetches of 5,000, limit 0 and chunk splitting, native types and NULLs, no transaction, COMMIT and ROLLBACK, a failing row, a
+     value error, savepoints, unsupported types; breaking the row limit fails 5) and `tests/metadata.rs` (5): **the schemas compared field by field with `adbc.h`** (`tests/adbc/get_objects_schema.txt` is the specification's tables, copied from
+     apache/arrow-adbc commit 7f35429e, read 2026-11-19, parsed by the test and compared with the constants and the flat result schemas, including `not null`), a fixture table with a dropped column, a domain, an enum, an array, `numeric(12,3)`, `char(5)`, `time(0)`,
+     a comment, identity and generated columns, a composite primary key, a composite foreign key, a unique and a check constraint, a view, a materialized view and a partitioned table, and the seeded database against `information_schema.columns` (122 columns) and
+     `key_column_usage` with its foreign-key targets. Three mutations of the SQL (ordinal position from `attnum`, a foreign key naming the first referenced column only, an inverted nullable flag) each fail the fixture test. All of it passes on PostgreSQL 13.23 to 18.7
+     (plain; portals and metadata also with TLS on 18).
 6. **Pipeline and batch builders** in the blocking API as in plan 2.5 (`conn.pipeline()...run()`, `tx.batch(&stmt).rows(...)`), on top of the pipelining that `karez-rt` already does.
    Exit: S2 pipelined and unpipelined reported separately, as the plan's method requires.
 7. **Authentication.** In this order: OAUTHBEARER (a token callback; PostgreSQL 18; no `unsafe`), SCRAM-SHA-256-PLUS (channel binding from the rustls exporter), then GSS/SSPI in its own crate

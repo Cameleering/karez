@@ -1,4 +1,4 @@
-use crate::conn::{quote_ident, Connection, Cursor, Statement};
+use crate::conn::{quote_ident, Connection, Cursor, Fetched, Portal, Statement};
 use crate::error::Result;
 use karez_proto_pg::{TxStatus, Value};
 
@@ -65,6 +65,23 @@ impl<'c> Transaction<'c> {
     /// Run a prepared statement; returns the affected row count.
     pub fn execute_prepared(&mut self, stmt: &Statement, params: &[Value<'_>]) -> Result<u64> {
         self.conn.execute_prepared(stmt, params)
+    }
+
+    /// Open a server-side cursor on `sql`; see [`Connection::portal`]. It lives until the end of
+    /// this transaction, and other statements can run between its fetches.
+    pub fn portal(&mut self, sql: &str, params: &[Value<'_>]) -> Result<Portal> {
+        self.conn.portal(sql, params)
+    }
+
+    /// Read up to `max_rows` more rows from a portal (`0` for all the rest); see
+    /// [`Connection::fetch`].
+    pub fn fetch(&mut self, portal: &mut Portal, max_rows: usize) -> Result<Fetched> {
+        self.conn.fetch(portal, max_rows)
+    }
+
+    /// Close a portal before the transaction ends; see [`Connection::close_portal`].
+    pub fn close_portal(&mut self, portal: Portal) -> Result<()> {
+        self.conn.close_portal(portal)
     }
 
     /// Transaction state as the server last reported it (`Failed` after an error until rollback).

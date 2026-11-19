@@ -15,6 +15,9 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod portal;
+pub use portal::{Fetched, Portal};
+
 const READ_BUF: usize = 64 * 1024;
 const MAX_NOTICES: usize = 64;
 const MAX_NOTIFICATIONS: usize = 4096;
@@ -179,6 +182,7 @@ pub struct Connection {
     cache_cap: usize,
     tick: u64,
     next_stmt: u64,
+    portal_seq: u64,
     tx_status: TxStatus,
     broken: bool,
     closed: bool,
@@ -524,6 +528,7 @@ impl Connection {
             cache_cap: cfg.statement_cache_size.max(1),
             tick: 0,
             next_stmt: 0,
+            portal_seq: 0,
             tx_status: TxStatus::Idle,
             broken: false,
             closed: false,

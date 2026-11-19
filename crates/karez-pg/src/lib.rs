@@ -21,6 +21,7 @@ mod batch;
 mod config;
 mod conn;
 mod error;
+pub mod metadata;
 mod pool;
 mod scan;
 #[cfg(feature = "tls")]
@@ -29,7 +30,9 @@ mod transport;
 mod tx;
 
 pub use config::{AuthPolicy, Config, LoadBalance, SslMode, TargetSessionAttrs, UnsupportedTypes};
-pub use conn::{CancelToken, Connection, Cursor, Notification, RawParts, Statement};
+pub use conn::{
+    CancelToken, Connection, Cursor, Fetched, Notification, Portal, RawParts, Statement,
+};
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{
     Chunk, Column, ColumnType, Date, Decimal128, Field, Interval, RowRef, Time, Timestamp,
