@@ -1878,6 +1878,44 @@ mod tls {
     }
 
     #[test]
+    fn large_batches_over_tls_go_out_in_windows_and_do_not_stall() -> R {
+        let addr = need_server!();
+        let mut c = Connection::connect(&tls_config_by_name(
+            &addr,
+            SslMode::VerifyFull,
+            Some(ca(&addr)),
+        ))?;
+        assert_encrypted(&mut c)?;
+        // 60 requests of 300 KB, each answered with 1 MB: 18 MB out and 60 MB back.
+        let big = "x".repeat(300_000);
+        let sql = "SELECT repeat('y', 1000000) WHERE length($1) >= 0";
+        let params = [Value::text(&big)];
+        let items: Vec<(&str, &[Value])> = (0..60).map(|_| (sql, &params[..])).collect();
+        let t0 = Instant::now();
+        assert_eq!(c.execute_many(&items)?, vec![1u64; 60]);
+        assert!(t0.elapsed() < Duration::from_secs(60), "{:?}", t0.elapsed());
+        // one statement of 100 KB (a batch of one window), and counts in order across windows
+        let mid = "z".repeat(70_000);
+        let mp = [Value::text(&mid)];
+        let sel = "SELECT length($1)";
+        let items: Vec<(&str, &[Value])> = (0..9).map(|_| (sel, &mp[..])).collect();
+        assert_eq!(c.execute_many(&items)?, vec![1u64; 9]);
+        assert!(!c.is_broken());
+        // a failing statement in the middle of a later window: the error comes back, the rest
+        // is skipped as in the unwindowed path, and the connection is usable
+        let ok = "SELECT repeat('y', 100000) WHERE length($1) >= 0";
+        let bad = "SELECT 1 / (length($1) - length($1))";
+        let mut items: Vec<(&str, &[Value])> = (0..10).map(|_| (ok, &params[..])).collect();
+        items.push((bad, &params[..]));
+        items.extend((0..10).map(|_| (ok, &params[..])));
+        expect_sqlstate(c.execute_many(&items), "22012");
+        assert!(!c.is_broken());
+        assert_eq!(c.tx_status(), karez_pg::TxStatus::Idle);
+        assert_eq!(one_i64(&mut c, "SELECT 5::int8", &[])?, 5);
+        Ok(())
+    }
+
+    #[test]
     fn verify_full_with_the_fixture_ca_is_encrypted_and_fully_usable() -> R {
         let addr = need_server!();
         let mut c = Connection::connect(&tls_config_by_name(
@@ -1915,15 +1953,12 @@ mod tls {
             .wait_for_notification(Some(Duration::from_secs(5)))?
             .expect("a notification");
         assert_eq!(n.payload, "over tls");
-        // Small batches work; a batch over 64 KiB is refused clearly instead of risking a stall.
+        // Small batches and batches over 64 KiB both work (the large one goes out in windows).
         let ok = c.execute_many(&[("SELECT 1", &[]), ("SELECT 2", &[])])?;
         assert_eq!(ok, vec![1, 1]);
         let blob = "x".repeat(100_000);
         let p = [Value::text(&blob)];
-        assert!(matches!(
-            c.execute_many(&[("SELECT length($1)", &p[..])]),
-            Err(Error::Usage(_))
-        ));
+        assert_eq!(c.execute_many(&[("SELECT length($1)", &p[..])])?, vec![1]);
         assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1);
         Ok(())
     }

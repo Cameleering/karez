@@ -991,6 +991,8 @@ impl Connection {
             stmts.push(stmt);
         }
         self.out.clear();
+        // where each statement's Bind and Execute end in `out`, for sending a batch in windows
+        let mut bounds = Vec::with_capacity(items.len());
         for ((_, params), stmt) in items.iter().zip(&stmts) {
             self.scratch.clear();
             let mut ranges = Vec::with_capacity(params.len());
@@ -1011,17 +1013,16 @@ impl Connection {
                 stmt.inner.plan.result_formats(),
             )?;
             frontend::execute(&mut self.out, "", 0)?;
+            bounds.push(self.out.len());
         }
         frontend::sync(&mut self.out);
-        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES || self.io.stream.is_tls() {
-            if self.out.len() > OVERLAP_WRITE_BYTES {
-                self.out.clear();
-                return Err(Error::Usage(
-                    "a batch larger than 64 KiB cannot be sent over TLS yet; split it",
-                ));
-            }
+        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES {
             self.io.send(&self.out)?;
             self.read_batch(items.len())?
+        } else if self.io.stream.is_tls() {
+            // A TLS stream cannot be split between a reader and a writer thread, so the batch goes
+            // out in windows of about 64 KiB, each followed by a Flush and a read of its results.
+            self.send_in_windows(&bounds)?
         } else {
             self.write_while_reading(items.len())?
         };
@@ -1031,6 +1032,80 @@ impl Connection {
             )));
         }
         Ok(counts)
+    }
+
+    /// Send the encoded batch (`self.out`, statement ends in `bounds`, then a Sync) in windows of
+    /// at least [`OVERLAP_WRITE_BYTES`], reading the results of each window before sending the
+    /// next. Never more than about one window is unread by the server, so neither side can block
+    /// the other, and no second thread is needed. The batch still ends in one Sync, so it is one
+    /// implicit transaction, as in the unwindowed path.
+    fn send_in_windows(&mut self, bounds: &[usize]) -> Result<Vec<u64>> {
+        let out = std::mem::take(&mut self.out);
+        let r = self.send_in_windows_inner(&out, bounds);
+        self.out = out;
+        self.out.clear();
+        r
+    }
+
+    fn send_in_windows_inner(&mut self, out: &[u8], bounds: &[usize]) -> Result<Vec<u64>> {
+        let mut counts = Vec::with_capacity(bounds.len());
+        let (mut start, mut in_window) = (0usize, 0usize);
+        for (i, &end) in bounds.iter().enumerate() {
+            in_window += 1;
+            let last = i + 1 == bounds.len();
+            if last || end - start < OVERLAP_WRITE_BYTES {
+                continue;
+            }
+            let mut msg = Vec::new();
+            frontend::flush(&mut msg);
+            self.io.send(&out[start..end])?;
+            self.io.send(&msg)?;
+            self.read_window(in_window, &mut counts)?;
+            start = end;
+            in_window = 0;
+        }
+        // the rest and the Sync
+        self.io.send(&out[start..])?;
+        let mut tail = self.read_batch(in_window)?;
+        counts.append(&mut tail);
+        Ok(counts)
+    }
+
+    /// Read the results of `n` statements sent with a Flush and no Sync. After a server error the
+    /// server skips input until a Sync: send it, read to ReadyForQuery, and return the error.
+    fn read_window(&mut self, n: usize, counts: &mut Vec<u64>) -> Result<()> {
+        let mut seen = 0;
+        while seen < n {
+            match self.io.next_msg(&mut self.side)? {
+                BackendMessage::BindComplete
+                | BackendMessage::DataRow(_)
+                | BackendMessage::PortalSuspended => {}
+                BackendMessage::CommandComplete(tag) => {
+                    counts.push(rows_from_tag(&tag));
+                    seen += 1;
+                }
+                BackendMessage::EmptyQueryResponse => {
+                    counts.push(0);
+                    seen += 1;
+                }
+                BackendMessage::ErrorResponse(f) => {
+                    let mut sync = Vec::new();
+                    frontend::sync(&mut sync);
+                    self.io.send(&sync)?;
+                    loop {
+                        if let BackendMessage::ReadyForQuery(st) =
+                            self.io.next_msg(&mut self.side)?
+                        {
+                            self.tx_status = st;
+                            break;
+                        }
+                    }
+                    return Err(Error::Server(ServerError::new(f)));
+                }
+                other => return Err(unexpected(&other)),
+            }
+        }
+        Ok(())
     }
 
     /// Send the encoded batch from a helper thread while this thread reads the results. A server

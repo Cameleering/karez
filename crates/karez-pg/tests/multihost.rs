@@ -163,10 +163,24 @@ fn start(kind: Kind, pid: i32) -> Mock {
     Mock { port, queries, pid }
 }
 
-/// A port nothing listens on.
-fn dead_port() -> u16 {
+/// A port nothing listens on: the connection is refused. On Windows a refused connect takes about
+/// two seconds (the stack retries), so only the tests that are about refusal use this.
+fn refused_port() -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     l.local_addr().unwrap().port()
+}
+
+/// A host that is up but closes every connection at once, as a server that is shutting down does.
+/// The client sees an I/O error in a few milliseconds on every platform.
+fn dead_port() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for s in l.incoming() {
+            drop(s);
+        }
+    });
+    port
 }
 
 fn cfg(ports: &[u16], attrs: TargetSessionAttrs) -> Config {
@@ -196,7 +210,7 @@ const MODERN_STANDBY: Kind = Kind::Modern {
 #[test]
 fn an_unreachable_first_host_is_skipped() {
     let ok = start(MODERN_RW, 11);
-    let c = Connection::connect(&cfg(&[dead_port(), ok.port], TargetSessionAttrs::Any)).unwrap();
+    let c = Connection::connect(&cfg(&[refused_port(), ok.port], TargetSessionAttrs::Any)).unwrap();
     assert_eq!(c.process_id(), ok.pid);
 }
 
@@ -398,7 +412,7 @@ fn random_order_uses_every_host() {
     let mut c = cfg(&[a.port, b.port], TargetSessionAttrs::Any);
     c.load_balance_hosts = LoadBalance::Random;
     let (mut na, mut nb) = (0, 0);
-    for _ in 0..80 {
+    for _ in 0..200 {
         let conn = Connection::connect(&c).unwrap();
         if conn.process_id() == a.pid {
             na += 1;
@@ -406,8 +420,9 @@ fn random_order_uses_every_host() {
             nb += 1;
         }
     }
-    // each host is first with probability 1/2: all 80 landing on one is a 2^-79 event
-    assert!(na > 0 && nb > 0, "a: {na}, b: {nb}");
+    // each host is first with probability 1/2: Binomial(200, 1/2) has a standard deviation of 7,
+    // so 60..=140 is 4 standard deviations (a false failure about 1 in 15,000 runs)
+    assert!((60..=140).contains(&na), "a: {na}, b: {nb}");
 }
 
 #[test]

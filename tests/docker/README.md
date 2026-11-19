@@ -34,10 +34,21 @@ a verification.
 
 The seed finishes by creating a `seed_done` table; the compose health check waits for it.
 
+## Primary and standby
+
+`standby.yaml` starts a primary (port 54361) and a streaming standby (54362) of PostgreSQL 16, built with `pg_basebackup -R`, for `crates/karez-pg/tests/standby.rs`:
+
+```sh
+docker compose -f tests/docker/standby.yaml up -d --wait
+KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQUIRE_SERVER=1 cargo test -p karez-pg --test standby
+docker compose -f tests/docker/standby.yaml down -v
+```
+
 ## TLS
 
 Every server has TLS on with a throwaway CA generated at start and written to `tests/docker/certs/ca-<port>.crt`
-(git-ignored). The TLS tests run with the `tls` feature:
+(git-ignored). The file is written in the folder the container was *created from*: a container made from another copy of the repository (or another worktree) leaves a stale file here and
+the TLS tests fail with a certificate error. Recreate it with `docker compose -f tests/docker/compose.yaml up -d --wait pg16` from this folder. The TLS tests run with the `tls` feature:
 
 ```sh
 KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 \

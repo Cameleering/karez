@@ -45,8 +45,12 @@ network beyond the local PostgreSQL containers in `tests/docker/`.
    `Error::NoSuitableHost` with one line per host and a `transient` flag (a single host with `any` still returns its own error unchanged). The check uses `in_hot_standby` and `default_transaction_read_only`, which
    PostgreSQL 14 and later report at startup, so it costs no query; older servers are asked once (`pg_is_in_recovery()`, `SHOW transaction_read_only`). `prefer-standby` tries every host for a standby, then every host
    for any. The timeout is per host (`connect_timeout`). 13 tests against scripted servers (dead and refusing hosts, read-only, standby, legacy servers, ordering, random order, the error text; a mutation of the
-   read-write rule makes 5 of them fail) and 1 against the real PostgreSQL 16 container. **Not tested: a real standby** (no replica fixture exists; the standby path is covered by the scripted servers and by the
-   parameter names PostgreSQL documents), and `load_balance_hosts=random` only for the spread, not for evenness.
+   read-write rule makes 5 of them fail), 1 against the real PostgreSQL 16 container, and 4 against **a real primary and a real streaming standby** (`tests/docker/standby.yaml`, PostgreSQL 16, built with
+   `pg_basebackup -R`; `crates/karez-pg/tests/standby.rs`, run 2026-11-19 in WSL on Rust 1.85.0): every attribute picks the right server in either host order, the standby refuses a write, a missing kind of server is a transient
+   `NoSuitableHost`, `prefer-standby` falls back, and 200 connections with `load_balance_hosts=random` split between the two within 60 to 140 (the scripted-server test uses the same bounds). Also fixed on 2026-11-19: the TLS
+   suite was rerun after step 2 (karez-pg 51 tests with `tls`, karez-rt 14 and 6; all pass), the dead-host tests no longer wait two seconds each on Windows (a host that closes at once replaces a refused port, except in the one test about refusal),
+   and `execute_many` over 64 KiB now works on a blocking TLS connection: it goes out in windows of about 64 KiB, each followed by a Flush and a read of its results, with one Sync at the end (test: 60 requests of 300 KB answered with 1 MB each, and a failing
+   statement in the middle). Still not tested: a failover while a connection is open (only the choice at connect time is).
 3. **Native types.** `numeric` to a `Decimal128` column (precision and scale kept) with a text fallback beyond 38 digits; `interval`, `time`, `timetz`, `inet`/`cidr`/`macaddr`, `bit`, `json(b)` as
    dedicated chunk types or as `Utf8` with a marker, one decision per type recorded here before code; array and enum parameters. Exit: step 4 passes for each.
 4. **Differential harness.** For every supported type: the values NULL, zero, one, minimum, maximum, a random sample and the known edge cases (numeric `NaN`, infinity dates, time zones across DST),
