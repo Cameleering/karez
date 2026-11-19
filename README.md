@@ -5,10 +5,10 @@
 # karez
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Status: M0 spike, PostgreSQL only](https://img.shields.io/badge/status-M0%20spike%20%C2%B7%20PostgreSQL%20only-orange.svg)](docs/STATUS.md)
+[![Status: Milestone 1 started, PostgreSQL only](https://img.shields.io/badge/status-M1%20started%20%C2%B7%20PostgreSQL%20only-orange.svg)](docs/STATUS.md)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Standards: JDBC, ODBC, ADBC](https://img.shields.io/badge/standards-JDBC%20%C2%B7%20ODBC%20%C2%B7%20ADBC-informational.svg)](docs/design/plan.md#3-standards-parity)
-[![Part of Cameleer](https://img.shields.io/badge/part%20of-Cameleer-d4a017.svg)](https://github.com/pmsudhi/cameleer)
+[![Part of Cameleer](https://img.shields.io/badge/part%20of-Cameleer-d4a017.svg)](https://github.com/cameleering/cameleer)
 
 ### Database connectivity for Rust, shaped like JDBC, ODBC and ADBC.
 
@@ -18,17 +18,18 @@ standards, decodes results straight from the wire into **Apache Arrow** columnar
 exported as an **ADBC driver, an ODBC driver and a JDBC driver**, so Python, Java, Go, .NET, R,
 BI tools and query engines can use the same core. It is designed to be **fast, small and safe**.
 
-> **Status: design stage with a working first slice.** A PostgreSQL client exists in this repository: six crates with no
+> **Status: design stage with a working first slice, on `main` since 2026-11-19.** A PostgreSQL client exists in this repository: six library crates and a top-level crate with no
 > third-party dependencies, optional TLS, a pool, a shared pipelined connection, `COPY`, a partitioned parallel table scan and
 > a multi-row insert (see [What exists today](#what-exists-today)). It is **verified against a real server on PostgreSQL 14.25,
 > 16.15 and 17.12 (versions 13, 15 and 18 were not run)** and the whole test suite passes. It is **not released**: the code is not
 > published, and the crates.io names are reserved with empty placeholders. The speed figures below are first measurements (one
 > lane per competitor), not a finished benchmark; the full test is pending. Everything beyond PostgreSQL (MySQL, SQL Server, SQLite,
-> the ADBC, ODBC and JDBC exports) is a plan. The first milestone is still a go or no-go measurement spike (see
+> the ADBC, ODBC and JDBC exports) is a plan. The owner moved the project from the Milestone 0 spike to Milestone 1 on 2026-11-18 and
+> continued with the current numbers; the 2x bulk-read gate is still open (see
 > [Design targets](#design-targets-and-where-they-stand)).
 
 [Plan](docs/design/plan.md) · [Research](docs/design/research.md) · [Status](docs/STATUS.md) ·
-[Why](#why-another-database-library) · [Planned API](#the-planned-api) · [Targets](#design-targets-not-measurements) ·
+[Why](#why-another-database-library) · [Planned API](#the-planned-api) · [Targets](#design-targets-and-where-they-stand) ·
 [Roadmap](#roadmap) · [The name](#what-the-name-means) · [FAQ](#faq)
 
 ---
@@ -54,7 +55,7 @@ ratios between rows of the same lane and round) or from a laptop; the sources, t
 - **Small:** a stripped blocking hello-world is 441 KiB with no third-party crates (tokio-postgres: 824 KiB and 68 crates; sqlx: 1,060 KiB
   and 147 crates).
 
-**Pending:** the faster-network test, a complete third round (the bulk part ran on one lane only), TLS bulk reads, and diesel and wtx on more scenarios (rusqlite is SQLite and was compared only on binary size). These are first measurements and will change. Where karez is level or behind,
+**Pending:** the faster-network test, a complete third round (the bulk part ran on one lane only), TLS bulk reads, and diesel and wtx on more scenarios (rusqlite is SQLite and was compared only on binary size). These are first measurements and will change; competitors have 3 runs per cell where the plan asks for 5 (see [perf-program.md](docs/design/perf-program.md) section 21 for every gap against the plan's method). Where karez is level or behind,
 the tables say so.
 
 ## Why another database library
@@ -96,8 +97,10 @@ optional feature that adds rustls). Details, test counts and commands are in
 |---|---|
 | `karez-chunk` | an Arrow-layout columnar chunk: validity bitmap plus fixed-width data, or offsets plus bytes; a reusable builder; checked typed readers |
 | `karez-proto-pg` | the PostgreSQL 3.0 wire protocol without any I/O: framing with a size limit, the startup, authentication and extended-query messages, binary row decoding into chunks, and SCRAM-SHA-256 with SHA-256, HMAC, PBKDF2 and base64 written in-repo |
-| `karez-pg` | a blocking connection: URL parsing, trust, cleartext and SCRAM authentication behind an allow-list, a per-connection prepared-statement cache, server-side parameter binding only, a streaming cursor (row view and `next_chunk`), transactions with savepoints, errors with SQLSTATE, a first-come-first-served pool, batches in one round trip, `COPY` in and out, `LISTEN`/`NOTIFY`, cancellation, **`scan_partitioned`** (one table read on several connections from one snapshot) and **`insert_batch`** (multi-row insert) |
+| `karez-pg` | a blocking connection: URL parsing, trust, cleartext and SCRAM authentication behind an allow-list, a per-connection prepared-statement cache, server-side parameter binding only, a streaming cursor (row view and `next_chunk`), transactions with savepoints, errors with SQLSTATE, a first-come-first-served pool, multi-host URLs with `target_session_attrs` and `load_balance_hosts` (tested against a real primary and standby on PostgreSQL 16), batches in one round trip, `COPY` in and out, `LISTEN`/`NOTIFY`, cancellation, **`scan_partitioned`** (one table read on several connections from one snapshot) and **`insert_batch`** (multi-row insert) |
+| `karez-pool` | a blocking, first-come-first-served connection pool that is generic over a `Manager` trait and uses only the standard library; the pool in `karez-pg` is a thin wrapper over it |
 | `karez-rt` | a shared connection that many threads or futures on any executor can pipeline over, with no async runtime |
+| `karez-compat-tests` | tests that run `karez-rt` futures on real executors (tokio); not published |
 | `karez` | the top-level crate: re-exports the above; one runnable example in `crates/karez/examples/orders.rs` and doc examples for the partitioned scan and `insert_batch` |
 
 The repository also holds the benchmark harness (`bench/`: an open-loop load generator, adapters for 16 PostgreSQL clients, scripts that run
@@ -209,7 +212,7 @@ channel between them: it moves the precious thing a long way in bulk, with no pu
 access shafts along the way. The alternative it replaces is carrying water one bucket at a time,
 which is how row-by-row drivers work.
 
-karez belongs to the [Cameleer](https://github.com/pmsudhi/cameleer) family, a set of Rust
+karez belongs to the [Cameleer](https://github.com/cameleering/cameleer) family, a set of Rust
 projects with a desert and camel naming theme. Its siblings include Cameleer, the integration
 engine, and simoom, the HTTP server engine.
 
@@ -219,7 +222,7 @@ engine, and simoom, the HTTP server engine.
 native drivers for PostgreSQL, MySQL and MariaDB, SQL Server and SQLite, with JDBC, ODBC and ADBC
 parity and exports. It is the Rust counterpart of what JDBC and ODBC are for Java and C.
 
-**Can I use it today?** Only as a spike, from this repository. A PostgreSQL client exists, with optional TLS, a pool, a shared
+**Can I use it today?** Only from this repository, as a work in progress. A PostgreSQL client exists, with optional TLS, a pool, a shared
 pipelined connection, a partitioned parallel scan and a multi-row insert, tested against a real server on PostgreSQL 14.25, 16.15 and
 17.12, with first measurements. It is not released and its code is not published (the crates.io names hold empty placeholders). The
 rest is research, the plan and the brand assets.
@@ -248,8 +251,9 @@ Parity is declared per standard and per level.
 a Flight SQL client and the Arrow-based cloud warehouses are candidates after 1.0. Oracle is held
 out pending a legal review of its undocumented protocol.
 
-**Is it async?** Both forms are planned. The blocking API drives the connection from the
-caller's thread with no thread hop. In diesel's published benchmark suite, async SQLite wrappers
+**Is it async?** Both forms exist for PostgreSQL. The blocking API drives the connection from the
+caller's thread with no thread hop. `karez-rt` is a shared pipelined connection whose futures run on
+any executor, with no async runtime inside karez (tested with tokio). In diesel's published benchmark suite, async SQLite wrappers
 were 20 to 60 times slower than rusqlite, and the fastest async PostgreSQL client was about 37
 percent slower than the fastest synchronous one on single queries.
 

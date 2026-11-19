@@ -6,7 +6,7 @@ SQLite, with JDBC, ODBC and ADBC parity and exports, and Arrow-native results.
 
 ## Know the status first
 
-karez is in the **design stage with a first working slice**: a PostgreSQL client with optional TLS (feature `tls`), verified against a real server on PostgreSQL 14.25, 16.15 and 17.12 (13, 15 and 18 were not run). There is no release. The measurements are a reduced campaign and a two-round, three-lane campaign (see bench/README.md); they support the figures in the README with their conditions, not a "fastest" claim. Other databases and the exports are not built.
+karez is in the **design stage with a first working slice**: a PostgreSQL client with optional TLS (feature `tls`), verified against a real server on PostgreSQL 14.25, 16.15 and 17.12 (13, 15 and 18 were not run). There is no release. The measurements are a reduced campaign, a two-round, three-lane campaign and a third round with a tail run (see bench/README.md and docs/design/perf-program.md); they support the figures in the README with their conditions, not a "fastest" claim. Other databases and the exports are not built.
 The repository holds the research, the build plan and the brand assets.
 
 - Do not describe any crate, driver, wheel, JAR or benchmark result as existing. When you write
@@ -69,6 +69,6 @@ evidence tags. Corrections to a number or a citation are especially welcome.
 ## Connect your coding agent to the docs
 
 Once the repository is public, the docs are available as an MCP server at
-`https://gitmcp.io/pmsudhi/karez` (Claude Code:
-`claude mcp add --transport http karez-docs https://gitmcp.io/pmsudhi/karez`), and they are
+`https://gitmcp.io/cameleering/karez` (Claude Code:
+`claude mcp add --transport http karez-docs https://gitmcp.io/cameleering/karez`), and they are
 indexed by Context7 through [context7.json](context7.json).

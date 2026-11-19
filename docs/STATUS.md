@@ -1,13 +1,13 @@
 # karez status
 
-_Updated 2026-11-16. Read this first, then [plan.md](design/plan.md)._
+_Updated 2026-11-19. Read this first, then [plan.md](design/plan.md)._
 
 ## State
 
-karez is in the **design stage with a first working slice** on the branch `claude/m0-spike-1bacb7`
-(local, not pushed, not merged): a PostgreSQL client with optional TLS. It has no release and
+karez is in the **design stage with a first working slice**, merged to `main` in
+[PR #4](https://github.com/cameleering/karez/pull/4) on 2026-11-19: a PostgreSQL client with optional TLS. It has no release and
 **first measurements** (a reduced campaign on 2026-11-14, one-lane experiments and a two-round, three-lane campaign on 2026-11-16 plus a third round and a tail run on 2026-11-18, [perf-program.md](design/perf-program.md) sections 17, 19 and 20; they support the README figures with their conditions, not a "fastest" claim). The owner decided on 2026-11-16 to go ahead with the current numbers and to **park the faster-network test** that would settle the plan's 2x bulk-read gate ([design/perf-program.md](design/perf-program.md) sections 9 to 15). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
-versions 13, 15 and 18 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
+versions 13, 15 and 18 were not run**. The repository is private at `github.com/cameleering/karez`. What was built,
 tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-results.md).
 
 | area | state |

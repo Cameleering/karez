@@ -2583,7 +2583,7 @@ independent (non-ISRG) 2025/2026 benchmark was found; the harness is public.
 
 **cameleer-tls** (crates.io: "Cameleer std-only TLS 1.3 / TLS 1.2 client and server with
 from-scratch cryptography"; 0.2.0 on 2026-11-05 through 0.4.0 on 2026-11-06; 297 downloads;
-Apache-2.0; repo `github.com/pmsudhi/cameleer`; only dependency `cameleer-core ^0.4.0`; source
+Apache-2.0; repo `github.com/cameleering/cameleer`; only dependency `cameleer-core ^0.4.0`; source
 752.9 kB; doc coverage 54.54%) **[vendor, checked 2026-11-09]**
 (https://crates.io/api/v1/crates/cameleer-tls, https://docs.rs/cameleer-tls/latest/cameleer_tls/).
 Its 0.4.0 docs list TLS 1.3 suites `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`,
@@ -2722,7 +2722,7 @@ compromise were not confirmed from primary sources.
 - wtx self-reports **652 K** optimised size for its "Postgres Client" build row with 13 required /
   26 total dependencies and a 6.69 s clean optimised build **[vendor]** (section 2).
 - Cameleer (std-only, ~230 components) claims a **5.8 MB** binary with only the `core` feature,
-  "~10 MB RAM", startup 3 ms (README) vs 10 ms (About) **[vendor]** (https://github.com/pmsudhi/cameleer).
+  "~10 MB RAM", startup 3 ms (README) vs 10 ms (About) **[vendor]** (https://github.com/cameleering/cameleer).
 - **JDBC side for comparison**: pgJDBC 1.19 MiB, HikariCP 0.17 MiB, MariaDB Connector/J 0.80 MiB,
   Connector/J 2.56 MiB, mssql-jdbc 1.5 MiB, ojdbc 8.6 MiB, sqlite-jdbc 11.8 MiB, duckdb_jdbc
   78.4 MiB (section 3), plus a JVM: 250–390 MB RSS in JVM mode or 70–150 MB as a GraalVM native

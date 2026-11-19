@@ -686,3 +686,40 @@ Files: `bench/results/2026-11-18-round3-tail/lane*/out/lane*-round4-tail/crossch
 
 **Not covered (still):** TLS bulk reads (no adapter); diesel R2/R3/R4 and bulk S5/S6/S8; wtx taxi, TLS and bulk (section 18); a third asyncpg S8 run; the faster network; a different region or a faster droplet class for the
 bulk reads; a profile other than `lean2`.
+
+## 21. Conformance with the plan's method (read 2026-11-19, from the docs, nothing rerun)
+
+This is a reading of plan section 6 against `bench/README.md` and sections 17 to 20 above, made
+before the numbers are quoted outside the repository. I did not rerun any cell. The result: the
+load generation and the hygiene of the lanes follow the plan, but the repetition and the metrics do
+not yet, so the figures stay "first measurements" and are not the Milestone 0 gate result.
+
+**Follows the plan:**
+
+- Open loop, latency from the intended start time, SLO-throughput search, no best-of-N
+  (`bench/README.md`; plan 6.1).
+- Pipelined and unpipelined results are separate rows (plan 6.1).
+- The database on its own droplet and the clients on another, one PostgreSQL version and
+  dataset for every client in a lane (plan 6.2).
+- pgJDBC run with defaults and tuned settings, both reported (plan 6.2).
+- Medians with a 95% interval and the range, not a single best run (plan 6.2).
+- A cross-check against `pgbench -R` on 20 cells (two rates, one 20 s run per cell, 8 connections).
+
+**Does not follow the plan yet:**
+
+| plan asks for | what was done |
+|---|---|
+| at least 5 runs per cell | karez n=9 on bulk and n=11 on point queries; every rotated competitor n=3 (asyncpg S8 n=2). At n=3 the 95% interval is wide (t=4.30), so it only separates clients that are far apart |
+| JVM clients with a 60 s warm-up and 300 s runs | shortened for the budget (JIT clients get a 30 s warm-up in final runs) |
+| CPU governor, turbo and SMT recorded; `perf stat`; allocations per row; bytes on the wire | not captured (listed as not done in `bench/README.md`); the droplets are shared cloud machines |
+| connection sweep 1, 8, 64, 256, 512 | not checked here; the reported rows are at 64 and 512 connections, and at 8 for the pipelined case |
+| ConnectorX (S9) and a GraalVM native JVM build | no adapter, not measured |
+| S10, the same scenarios through the ADBC and JDBC exports | the exports do not exist yet |
+| the bulk gate's memory half (at most one third of tuned pgJDBC) | the client RSS of the bulk scans is measured, but the README table does not state the ratio to tuned pgJDBC |
+| TLS on bulk reads (S7 covers point queries only) | not run |
+
+**What this means for quoting.** Quote a figure only with its lane, round count and n, and say
+that competitors have n=3, below the plan's 5. Do not describe the bulk gate as met: the 2x result
+exists only where the network is not the limit (one machine, WSL), and the faster-network test is
+parked. The OLTP parity result holds at the stated n; the 2x over tuned pgJDBC on point queries is
+not met.

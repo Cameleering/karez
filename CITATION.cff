@@ -5,8 +5,8 @@ type: software
 authors:
   - given-names: Sudheesh
     family-names: PM
-repository-code: "https://github.com/pmsudhi/karez"
-url: "https://github.com/pmsudhi/karez"
+repository-code: "https://github.com/cameleering/karez"
+url: "https://github.com/cameleering/karez"
 license: Apache-2.0
 keywords:
   - rust

@@ -2,7 +2,7 @@
 
 Thanks for helping. karez is a planned Rust database connectivity library, and right now it is
 in the design stage: the useful contributions are corrections to the research, reviews of the
-plan and the benchmark method, and, once Milestone 0 starts, code.
+plan and the benchmark method, and reviews of the PostgreSQL client in `crates/` (Milestone 1 is in progress).
 
 ## Ground rules
 

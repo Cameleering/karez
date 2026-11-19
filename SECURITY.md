@@ -7,7 +7,7 @@ so security reports and design reviews are especially welcome.
 
 Please **don't open a public issue**. Report it privately through GitHub:
 **Security → Report a vulnerability** on
-[github.com/pmsudhi/karez](https://github.com/pmsudhi/karez/security/advisories/new).
+[github.com/cameleering/karez](https://github.com/cameleering/karez/security/advisories/new).
 
 Include the affected file or crate and version (or commit), steps to reproduce, and the impact
 you expect. We aim to acknowledge reports within a few days, agree on a fix and a disclosure
