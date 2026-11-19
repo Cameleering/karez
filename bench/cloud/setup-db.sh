@@ -88,4 +88,11 @@ EOF
 log "dataset"
 PGPASSWORD="$PW" psql -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U bench -d bench -f /root/karez/bench/sql/schema.sql 2>&1 | grep -v NOTICE || true
 PGPASSWORD="$PW" psql -h 127.0.0.1 -U bench -d bench -tAc "select version(), (select count(*) from bench_item), (select count(*) from bench_wide)" >&2
-bash /root/karez/bench/cloud/load-data.sh "$PW" "$PRIV"
+# The taxi files are staged later by `ctl.sh stage-data` (CloudFront refuses the droplets), so this usually fails here.
+# A run that needs no taxi data (the exit measurements) still needs the machine record and a row count, so write them.
+bash /root/karez/bench/cloud/load-data.sh "$PW" "$PRIV" || {
+  log "no taxi data yet (stage it and run ctl.sh load-data if a run needs it); writing the machine record without it"
+  [ -s /root/taxi_rows ] || echo 1000000 > /root/taxi_rows
+  { echo "host: $(hostname)  private ip: $PRIV"; echo "kernel: $(uname -r)  cpus: $(nproc)  mem_mb: $(free -m | awk '/Mem:/{print $2}')"
+    PGPASSWORD="$PW" psql -h 127.0.0.1 -U bench -d bench -tAc "select version()"; echo "taxi_trips: not loaded"; } > /root/machine-db.txt
+}

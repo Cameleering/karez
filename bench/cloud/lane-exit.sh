@@ -3,7 +3,7 @@
 #   lane-exit.sh LANE ROUND DB          (called by lane-run.sh when PROFILE=exit)
 #
 #   1. verify: every open-loop client folds the same checksum on the same request sequence
-#   2. S6, COPY of 10,000,000 rows, plain, karez against the other clients and PgBulkInsert (the plan's gate: at least 1.5x PgBulkInsert)
+#   2. S6, COPY of 10,000,000 rows, plain, karez (text and binary COPY) against the other clients and PgBulkInsert (the plan's gate: at least 1.5x PgBulkInsert)
 #   3. bulk over TLS (sslmode=verify-full): S4, S5 and S6, with the plain S4 and S5 of the same clients next to them on the same droplets
 #   4. open loop S1, S2, S3 and S8, each plain and over TLS (profile `exit` in run.py)
 # Cells are tagged round "x1" so nothing here is ranked against cells from other droplets. The order puts the gate first.
@@ -21,7 +21,7 @@ cp /root/machine-cl.txt "$OUT/machine-cl.txt" 2>/dev/null
 ssh -o BatchMode=yes "root@$DB" cat /root/machine-db.txt > "$OUT/machine-db.txt" 2>/dev/null
 R=x1
 COMMON=(--out "$OUT" --lane "lane$LANE" --round "$R" --db-host "root@$DB" --root-cert /root/ca.crt)
-S6C="karez-blocking,tokio-postgres,sqlx,asyncpg,psycopg3,pgx,libpq,pgjdbc,pgjdbc-tuned,pgbulkinsert"
+S6C="karez-blocking,karez-blocking-binary,tokio-postgres,sqlx,asyncpg,psycopg3,pgx,libpq,pgjdbc,pgjdbc-tuned,pgbulkinsert"
 BULKC="karez-blocking,karez-blocking-chunk,tokio-postgres,sqlx,asyncpg,psycopg3,pgx,libpq,pgjdbc-tuned"
 OPENC="karez-blocking,tokio-postgres,sqlx,pgx,libpq,asyncpg,pgjdbc-tuned"
 echo "$(date -u +%FT%TZ) lane $LANE exit measurements (round label $R)"
