@@ -1,0 +1,1718 @@
+2026-11-16T07:40:40Z lane 3 round 1 profile smoke clients karez-blocking,karez-shared,karez-blocking-chunk,karez-blocking-part,karez-blocking-mrow,sqlx,pgjdbc-tuned,r2dbc-postgresql,zero-postgres
+verify: rc=0 (see verify.txt)
+[karez-blocking] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 465us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 403us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 371us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 545us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 889us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 1937768us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 775946us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 105382us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 1294us, 2/2 runs inside the bound
+[karez-blocking] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 635us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 651us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 717us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 971us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 1233125us ok 64000/64000 err 0 drop 0
+    probe     24000/s: p99 137363us ok 48000/48000 err 0 drop 0
+    probe     20000/s: p99 1237us ok 40000/40000 err 0 drop 0
+    confirm     20000/s: median p99 10662us, 1/2 runs inside the bound
+    confirm     19400/s: median p99 2818us, 2/2 runs inside the bound
+[karez-shared] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 416us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 391us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 502us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 618us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 1991us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 2902458us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 1266680us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 505414us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 6365us, 0/2 runs inside the bound
+    confirm     31040/s: median p99 3752us, 0/2 runs inside the bound
+    confirm     30109/s: median p99 3858us, 0/2 runs inside the bound
+    confirm     29206/s: median p99 1761us, 2/2 runs inside the bound
+[karez-shared] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 684us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 692us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 831us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 1286us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 1937768us ok 64000/64000 err 0 drop 0
+    probe     24000/s: p99 591397us ok 48000/48000 err 0 drop 0
+    probe     20000/s: p99 11076us ok 40000/40000 err 0 drop 0
+    confirm     16000/s: median p99 1851us, 2/2 runs inside the bound
+[sqlx] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 514us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 537us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 602us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 522191us ok 32000/32000 err 0 drop 0
+    probe     12000/s: p99 3031us ok 24000/24000 err 0 drop 0
+    probe     10000/s: p99 758us ok 20000/20000 err 0 drop 0
+    confirm     10000/s: median p99 1448us, 2/2 runs inside the bound
+[sqlx] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 930us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 1057us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 1434us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 1853882us ok 32000/32000 err 0 drop 0
+    probe     12000/s: p99 616563us ok 24000/24000 err 0 drop 0
+    probe     10000/s: p99 44302us ok 20000/20000 err 0 drop 0
+    confirm      8000/s: median p99 3359us, 2/2 runs inside the bound
+[pgjdbc-tuned] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 391us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 395us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 362us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 545us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 1663us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 0us ok 0/128000 err 0 drop 128000
+    probe     48000/s: p99 3808428us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 817889us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 2769us, 0/2 runs inside the bound
+    confirm     31040/s: median p99 2277us, 0/2 runs inside the bound
+    confirm     30109/s: median p99 2216us, 1/2 runs inside the bound
+    confirm     29206/s: median p99 1270us, 2/2 runs inside the bound
+[pgjdbc-tuned] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 733us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 676us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 815us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 1303us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 6073352us ok 29294/64000 err 0 drop 34706
+    probe     24000/s: p99 2432696us ok 48000/48000 err 0 drop 0
+    probe     20000/s: p99 8716us ok 40000/40000 err 0 drop 0
+    confirm     16000/s: median p99 6947us, 2/2 runs inside the bound
+[r2dbc-postgresql] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 502us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 465us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 807us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 2231370us ok 32000/32000 err 0 drop 0
+    probe     12000/s: p99 492831us ok 24000/24000 err 0 drop 0
+    probe     10000/s: p99 274727us ok 20000/20000 err 0 drop 0
+    confirm      8000/s: median p99 1104us, 2/2 runs inside the bound
+[r2dbc-postgresql] r4 unpipelined conns=8 pool=0
+    probe      2000/s: p99 2900us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 4112us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 5200937us ok 16000/16000 err 0 drop 0
+    probe      6000/s: p99 2197815us ok 12000/12000 err 0 drop 0
+    probe      5000/s: p99 471859us ok 10000/10000 err 0 drop 0
+    confirm      4000/s: median p99 5153us, 2/2 runs inside the bound
+[zero-postgres] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 395us ok 4000/4000 err 0 drop 0
+    probe      4000/s: p99 375us ok 8000/8000 err 0 drop 0
+    probe      8000/s: p99 342us ok 16000/16000 err 0 drop 0
+    probe     16000/s: p99 379us ok 32000/32000 err 0 drop 0
+    probe     32000/s: p99 1270us ok 64000/64000 err 0 drop 0
+    probe     64000/s: p99 2634023us ok 128000/128000 err 0 drop 0
+    probe     48000/s: p99 859832us ok 96000/96000 err 0 drop 0
+    probe     40000/s: p99 217055us ok 80000/80000 err 0 drop 0
+    confirm     32000/s: median p99 2462us, 1/2 runs inside the bound
+    confirm     31040/s: median p99 1716us, 1/2 runs inside the bound
+[karez-blocking] bulk s4 rows=1000000
+    median 0.682s rows 1000000
+[karez-blocking] bulk s5 rows=20000
+    median 0.140s rows 20000
+[karez-blocking] bulk s6 rows=100000
+    median 0.129s rows 100000
+[karez-blocking] bulk s8 rows=13069067
+    median 14.028s rows 13069067
+[karez-blocking-chunk] bulk s4 rows=1000000
+    median 0.950s rows 1000000
+[karez-blocking-chunk] bulk s8 rows=13069067
+    median 16.852s rows 13069067
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.631s rows 1000000
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.649s rows 13069067
+[karez-blocking-mrow] bulk s5 rows=20000
+    median 0.086s rows 20000
+[sqlx] bulk s4 rows=1000000
+    median 0.776s rows 1000000
+[sqlx] bulk s5 rows=20000
+    median 0.086s rows 20000
+[sqlx] bulk s6 rows=100000
+    median 0.116s rows 100000
+[sqlx] bulk s8 rows=13069067
+    median 13.994s rows 13069067
+[pgjdbc-tuned] bulk s4 rows=1000000
+    median 0.893s rows 1000000
+[pgjdbc-tuned] bulk s5 rows=20000
+    median 0.214s rows 20000
+[pgjdbc-tuned] bulk s6 rows=100000
+    median 0.497s rows 100000
+[pgjdbc-tuned] bulk s8 rows=13069067
+    median 34.913s rows 13069067
+[r2dbc-postgresql] bulk s4 rows=1000000
+    median 3.514s rows 1000000
+campaign done: 11 configurations
+2026-11-16T08:04:55Z lane 3 round 1 finished, rc=0
+2026-11-16T08:11:53Z lane 3 round 1 profile lean2 clients karez-blocking,karez-shared,karez-blocking-chunk,karez-blocking-part,karez-blocking-mrow,sqlx,pgjdbc-tuned,r2dbc-postgresql,zero-postgres
+verify: rc=0 (see verify.txt)
+[karez-blocking] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 416us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 387us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 375us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 553us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 684us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1204us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 1937768us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 404750us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 3752us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 1004us ok 216000/216000 err 0 drop 0
+    probe     76000/s: p99 5669us ok 228000/228000 err 0 drop 0
+    confirm     72000/s: median p99 1712us, 2/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 387us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 297us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1166017us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 21365us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 371us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 1434us ok 16500/16500 err 0 drop 0
+    probe      5750/s: p99 1843us ok 17250/17250 err 0 drop 0
+    confirm      5750/s: median p99 32113us, 0/3 runs inside the bound
+    confirm      5578/s: median p99 2769us, 0/3 runs inside the bound
+    confirm      5410/s: median p99 2007us, 1/3 runs inside the bound
+    confirm      5248/s: median p99 1188us, 3/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 379us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 391us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 428us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 506us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 5210us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 561us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 717us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 1679us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 692us ok 93000/93000 err 0 drop 0
+    confirm     31000/s: median p99 1450us, 2/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 428us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 412us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 416us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 428us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 510us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 3850us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1139us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 954us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 1253us ok 180000/180000 err 0 drop 0
+    probe     62000/s: p99 1516us ok 186000/186000 err 0 drop 0
+    confirm     62000/s: median p99 21889us, 0/3 runs inside the bound
+    confirm     60140/s: median p99 7242us, 0/3 runs inside the bound
+    confirm     58336/s: median p99 2408us, 1/3 runs inside the bound
+    confirm     56586/s: median p99 2310us, 1/3 runs inside the bound
+    confirm     54888/s: median p99 1253us, 3/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 465us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 444us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 469us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 569us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1073us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1518338us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 270533us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1270us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 1843us ok 132000/132000 err 0 drop 0
+    probe     46000/s: p99 123208us ok 138000/138000 err 0 drop 0
+    confirm     44000/s: median p99 38535us, 0/3 runs inside the bound
+    confirm     42680/s: median p99 8028us, 0/3 runs inside the bound
+    confirm     41400/s: median p99 5079us, 0/3 runs inside the bound
+    confirm     40158/s: median p99 2277us, 0/3 runs inside the bound
+    confirm     38953/s: median p99 2605us, 1/3 runs inside the bound
+    confirm     37784/s: median p99 1384us, 3/3 runs inside the bound
+[karez-blocking] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 449us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 424us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 569us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 494us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 635us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1010827us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1139us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 250610us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 60555us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 1303us ok 150000/150000 err 0 drop 0
+    confirm     50000/s: median p99 28705us, 0/3 runs inside the bound
+    confirm     48500/s: median p99 4424us, 1/3 runs inside the bound
+    confirm     47045/s: median p99 4424us, 0/3 runs inside the bound
+    confirm     45634/s: median p99 1647us, 2/3 runs inside the bound
+[karez-blocking] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 545us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 514us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 971us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 537us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 610us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 312476us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1253us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 1221us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 46399us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 6980us ok 174000/174000 err 0 drop 0
+    confirm     56000/s: median p99 11862us, 0/3 runs inside the bound
+    confirm     54320/s: median p99 2540us, 2/3 runs inside the bound
+[karez-blocking] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 473us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 420us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 469us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 561us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 995us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2231370us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 658506us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 69730us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1188us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 1991us ok 114000/114000 err 0 drop 0
+    confirm     38000/s: median p99 3457us, 0/3 runs inside the bound
+    confirm     36860/s: median p99 2212us, 3/3 runs inside the bound
+[karez-blocking] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 758us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 954us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 3195us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1719665us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 274727us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 4882us ok 30000/30000 err 0 drop 0
+    probe     11000/s: p99 6586us ok 33000/33000 err 0 drop 0
+    probe     11500/s: p99 84410us ok 34500/34500 err 0 drop 0
+    confirm     11000/s: median p99 55312us, 0/3 runs inside the bound
+    confirm     10670/s: median p99 13042us, 0/3 runs inside the bound
+    confirm     10350/s: median p99 10682us, 0/3 runs inside the bound
+    confirm     10039/s: median p99 7766us, 2/3 runs inside the bound
+[karez-blocking] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 684us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 692us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 897us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1073us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 38535us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 2376us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 3031us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 6717us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 11731us ok 93000/93000 err 0 drop 0
+    confirm     30000/s: median p99 17170us, 0/3 runs inside the bound
+    confirm     29100/s: median p99 7176us, 2/3 runs inside the bound
+[karez-shared] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 428us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 408us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 477us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 528us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 635us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1614us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 2139095us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 658506us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 3981us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 3228us ok 216000/216000 err 0 drop 0
+    probe     68000/s: p99 8978us ok 204000/204000 err 0 drop 0
+    confirm     64000/s: median p99 1696us, 3/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 766us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1335us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 2055209us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 666894us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 25821us ok 15000/15000 err 0 drop 0
+    probe      4500/s: p99 700us ok 13500/13500 err 0 drop 0
+    probe      4750/s: p99 1171us ok 14250/14250 err 0 drop 0
+    confirm      4750/s: median p99 3097us, 1/3 runs inside the bound
+    confirm      4608/s: median p99 668us, 3/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 399us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 416us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 432us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 643us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 8978us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 643us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 1384us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 1155us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 14483us ok 93000/93000 err 0 drop 0
+    confirm     30000/s: median p99 3752us, 0/3 runs inside the bound
+    confirm     29100/s: median p99 1483us, 3/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 457us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 461us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 428us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 489us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 627us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 9110us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1221us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 2802us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 1466us ok 156000/156000 err 0 drop 0
+    probe     54000/s: p99 3359us ok 162000/162000 err 0 drop 0
+    confirm     52000/s: median p99 1761us, 2/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 668us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 561us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 741us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 791us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 2023us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1188us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 1319us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 1466us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 1745us ok 93000/93000 err 0 drop 0
+    confirm     31000/s: median p99 1843us, 2/3 runs inside the bound
+[karez-shared] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 498us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 489us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 510us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 561us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 840us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 960496us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1696us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 283116us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 72876us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 1745us ok 150000/150000 err 0 drop 0
+    confirm     50000/s: median p99 13959us, 0/3 runs inside the bound
+    confirm     48500/s: median p99 8585us, 0/3 runs inside the bound
+    confirm     47045/s: median p99 3686us, 0/3 runs inside the bound
+    confirm     45634/s: median p99 2671us, 0/3 runs inside the bound
+    confirm     44265/s: median p99 1761us, 2/3 runs inside the bound
+[karez-shared] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 481us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 469us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 522us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 514us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 971us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 434110us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1581us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 15139us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 2671us ok 156000/156000 err 0 drop 0
+    probe     54000/s: p99 10289us ok 162000/162000 err 0 drop 0
+    confirm     52000/s: median p99 6062us, 0/3 runs inside the bound
+    confirm     50440/s: median p99 3523us, 1/3 runs inside the bound
+    confirm     48927/s: median p99 2343us, 3/3 runs inside the bound
+[karez-shared] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 602us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 668us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 864us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 11993us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 750us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 725us ok 42000/42000 err 0 drop 0
+    probe     15000/s: p99 889us ok 45000/45000 err 0 drop 0
+    probe     15500/s: p99 831us ok 46500/46500 err 0 drop 0
+    confirm     15500/s: median p99 1319us, 3/3 runs inside the bound
+[karez-shared] r1 pipelined conns=8 pool=0
+    probe      2000/s: p99 473us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 428us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 465us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 522us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 889us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 3326us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 3031us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1188us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 1679us ok 132000/132000 err 0 drop 0
+    probe     46000/s: p99 2736us ok 138000/138000 err 0 drop 0
+    confirm     46000/s: median p99 1745us, 3/3 runs inside the bound
+[karez-shared] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 889us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1270us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 3785us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1786774us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 358613us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 5407us ok 30000/30000 err 0 drop 0
+    probe     11000/s: p99 8847us ok 33000/33000 err 0 drop 0
+    probe     10500/s: p99 7176us ok 31500/31500 err 0 drop 0
+    confirm     10500/s: median p99 12780us, 0/3 runs inside the bound
+    confirm     10185/s: median p99 8847us, 0/3 runs inside the bound
+    confirm      9879/s: median p99 6586us, 2/3 runs inside the bound
+[karez-shared] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 750us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 774us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 905us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1303us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 156238us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 2089us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 4555us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 8454us ok 90000/90000 err 0 drop 0
+    probe     29000/s: p99 4424us ok 87000/87000 err 0 drop 0
+    confirm     29000/s: median p99 9896us, 1/3 runs inside the bound
+    confirm     28130/s: median p99 6259us, 2/3 runs inside the bound
+[sqlx] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 545us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 578us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 659us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 897us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 3064us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1958us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 2638us ok 84000/84000 err 0 drop 0
+    probe     26000/s: p99 5669us ok 78000/78000 err 0 drop 0
+    probe     25000/s: p99 1729us ok 75000/75000 err 0 drop 0
+    confirm     25000/s: median p99 2966us, 1/3 runs inside the bound
+    confirm     24250/s: median p99 1827us, 2/3 runs inside the bound
+[sqlx] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 19530us ok 6000/6000 err 0 drop 0
+    probe      1000/s: p99 569us ok 3000/3000 err 0 drop 0
+    probe      1500/s: p99 594us ok 4500/4500 err 0 drop 0
+    probe      1750/s: p99 553us ok 5250/5250 err 0 drop 0
+    probe      1875/s: p99 1171us ok 5625/5625 err 0 drop 0
+    probe      1938/s: p99 1745us ok 5812/5812 err 0 drop 0
+    confirm      1938/s: median p99 5603us, 0/3 runs inside the bound
+    confirm      1879/s: median p99 1122us, 2/3 runs inside the bound
+[sqlx] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 627us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 594us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 668us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 834666us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 1028us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 107479us ok 42000/42000 err 0 drop 0
+    probe     13000/s: p99 2834us ok 39000/39000 err 0 drop 0
+    probe     12500/s: p99 1745us ok 37500/37500 err 0 drop 0
+    confirm     12500/s: median p99 5997us, 0/3 runs inside the bound
+    confirm     12125/s: median p99 3129us, 1/3 runs inside the bound
+    confirm     11761/s: median p99 1401us, 3/3 runs inside the bound
+[sqlx] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 618us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 627us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 692us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 856us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 173015us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1761us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 4686us ok 84000/84000 err 0 drop 0
+    probe     26000/s: p99 2933us ok 78000/78000 err 0 drop 0
+    probe     25000/s: p99 2212us ok 75000/75000 err 0 drop 0
+    confirm     24000/s: median p99 2277us, 0/3 runs inside the bound
+    confirm     23280/s: median p99 2146us, 1/3 runs inside the bound
+    confirm     22582/s: median p99 1860us, 2/3 runs inside the bound
+[sqlx] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 684us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 831us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 840us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1384us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1283457us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 31850us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 2769us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 1368us ok 54000/54000 err 0 drop 0
+    probe     19000/s: p99 1778us ok 57000/57000 err 0 drop 0
+    confirm     19000/s: median p99 2834us, 0/3 runs inside the bound
+    confirm     18430/s: median p99 1778us, 2/3 runs inside the bound
+[sqlx] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 635us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 643us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 741us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1122us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1484784us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 116916us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 1729us ok 60000/60000 err 0 drop 0
+    probe     22000/s: p99 2146us ok 66000/66000 err 0 drop 0
+    probe     21000/s: p99 2671us ok 63000/63000 err 0 drop 0
+    confirm     20000/s: median p99 18743us, 1/3 runs inside the bound
+    confirm     19400/s: median p99 1843us, 2/3 runs inside the bound
+[sqlx] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 594us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 635us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 692us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 872us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 446693us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1974us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 29229us ok 84000/84000 err 0 drop 0
+    probe     26000/s: p99 7242us ok 78000/78000 err 0 drop 0
+    probe     25000/s: p99 6717us ok 75000/75000 err 0 drop 0
+    confirm     24000/s: median p99 4948us, 0/3 runs inside the bound
+    confirm     23280/s: median p99 2638us, 3/3 runs inside the bound
+[sqlx] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 676us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 717us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 856us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1663us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1853882us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 299893us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 5472us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 1761us ok 54000/54000 err 0 drop 0
+    probe     19000/s: p99 3654us ok 57000/57000 err 0 drop 0
+    confirm     18000/s: median p99 2277us, 2/3 runs inside the bound
+[sqlx] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 1237us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1729us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 6717us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 3036676us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 1283457us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 299893us ok 30000/30000 err 0 drop 0
+    probe      9000/s: p99 40108us ok 27000/27000 err 0 drop 0
+    probe      8500/s: p99 11338us ok 25500/25500 err 0 drop 0
+    confirm      8000/s: median p99 8225us, 1/3 runs inside the bound
+    confirm      7760/s: median p99 7176us, 3/3 runs inside the bound
+[sqlx] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 971us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1090us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1499us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 2900us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 2466251us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 817889us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 50070us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 12911us ok 54000/54000 err 0 drop 0
+    probe     17000/s: p99 4555us ok 51000/51000 err 0 drop 0
+    confirm     17000/s: median p99 5931us, 2/3 runs inside the bound
+[pgjdbc-tuned] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 387us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 399us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 371us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 465us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 676us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1942us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 6811550us ok 148011/384000 err 0 drop 235989
+    probe     96000/s: p99 2734686us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 139461us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 2605us ok 216000/216000 err 0 drop 0
+    probe     68000/s: p99 4227us ok 204000/204000 err 0 drop 0
+    confirm     64000/s: median p99 1958us, 2/3 runs inside the bound
+[pgjdbc-tuned] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 342us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 342us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 4143972us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 484442us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 1171us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 3621us ok 16500/16500 err 0 drop 0
+    probe      5250/s: p99 1729us ok 15750/15750 err 0 drop 0
+    confirm      5250/s: median p99 19530us, 0/3 runs inside the bound
+    confirm      5092/s: median p99 2056us, 1/3 runs inside the bound
+    confirm      4940/s: median p99 1028us, 2/3 runs inside the bound
+[pgjdbc-tuned] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 659us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 424us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 440us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 522us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1401us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 0us ok 0/192000 err 0 drop 192000
+    probe     48000/s: p99 3909091us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1115685us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 5341us ok 108000/108000 err 0 drop 0
+    probe     34000/s: p99 1909us ok 102000/102000 err 0 drop 0
+    confirm     34000/s: median p99 6193us, 0/3 runs inside the bound
+    confirm     32980/s: median p99 1794us, 2/3 runs inside the bound
+[pgjdbc-tuned] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 403us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 408us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 432us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 553us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1696us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 505414us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1073us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 2540us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 1761us ok 156000/156000 err 0 drop 0
+    probe     54000/s: p99 2638us ok 162000/162000 err 0 drop 0
+    confirm     52000/s: median p99 4882us, 1/3 runs inside the bound
+    confirm     50440/s: median p99 1892us, 2/3 runs inside the bound
+[pgjdbc-tuned] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 403us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 766us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 399us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 506us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 37487us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 3424us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 618us ok 60000/60000 err 0 drop 0
+    probe     22000/s: p99 954us ok 66000/66000 err 0 drop 0
+    probe     23000/s: p99 774us ok 69000/69000 err 0 drop 0
+    confirm     23000/s: median p99 19792us, 1/3 runs inside the bound
+    confirm     22310/s: median p99 2834us, 1/3 runs inside the bound
+    confirm     21641/s: median p99 1450us, 2/3 runs inside the bound
+[pgjdbc-tuned] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 453us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 420us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 444us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 594us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 4489us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1630us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 913us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 1483us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 13173us ok 93000/93000 err 0 drop 0
+    confirm     30000/s: median p99 1319us, 3/3 runs inside the bound
+[pgjdbc-tuned] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 444us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 420us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 432us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 510us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 782us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2566914us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1958us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 446693us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 214958us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 6652us ok 150000/150000 err 0 drop 0
+    confirm     48000/s: median p99 6914us, 1/3 runs inside the bound
+    confirm     46560/s: median p99 2245us, 2/3 runs inside the bound
+[pgjdbc-tuned] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 485us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 436us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 774us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 840us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 30278us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1155us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 3654us ok 84000/84000 err 0 drop 0
+    probe     26000/s: p99 1450us ok 78000/78000 err 0 drop 0
+    probe     27000/s: p99 5538us ok 81000/81000 err 0 drop 0
+    confirm     26000/s: median p99 22151us, 1/3 runs inside the bound
+    confirm     25220/s: median p99 1827us, 2/3 runs inside the bound
+[pgjdbc-tuned] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 979us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1012us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 4686us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 7885292us ok 2462/48000 err 0 drop 45538
+    probe     12000/s: p99 3439329us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 859832us ok 30000/30000 err 0 drop 0
+    probe      9000/s: p99 30015us ok 27000/27000 err 0 drop 0
+    probe      8500/s: p99 8159us ok 25500/25500 err 0 drop 0
+    confirm      8000/s: median p99 6259us, 2/3 runs inside the bound
+[pgjdbc-tuned] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 750us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 741us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 995us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1335us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1988100us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 8847us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 5145us ok 60000/60000 err 0 drop 0
+    probe     22000/s: p99 8847us ok 66000/66000 err 0 drop 0
+    probe     21000/s: p99 2376us ok 63000/63000 err 0 drop 0
+    confirm     21000/s: median p99 2769us, 3/3 runs inside the bound
+[r2dbc-postgresql] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 432us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 424us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 440us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 635us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1516us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 6610223us ok 155191/192000 err 36809 drop 0
+    probe     48000/s: p99 2868904us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1249903us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 187695us ok 108000/108000 err 0 drop 0
+    probe     34000/s: p99 1499us ok 102000/102000 err 0 drop 0
+    confirm     34000/s: median p99 1663us, 3/3 runs inside the bound
+[r2dbc-postgresql] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 506us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 2071986us ok 12000/12000 err 0 drop 0
+    probe      3000/s: p99 436us ok 9000/9000 err 0 drop 0
+    probe      3500/s: p99 522191us ok 10500/10500 err 0 drop 0
+    probe      3250/s: p99 73925us ok 9750/9750 err 0 drop 0
+    probe      3125/s: p99 485us ok 9375/9375 err 0 drop 0
+    confirm      3125/s: median p99 528us, 3/3 runs inside the bound
+[r2dbc-postgresql] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 498us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 477us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1253us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1233125us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 881us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 1182794us ok 42000/42000 err 0 drop 0
+    probe     13000/s: p99 566231us ok 39000/39000 err 0 drop 0
+    probe     12500/s: p99 549454us ok 37500/37500 err 0 drop 0
+    confirm     12000/s: median p99 971us, 3/3 runs inside the bound
+[r2dbc-postgresql] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 510us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 510us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 477us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 881us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 4798284us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 2734686us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 1098908us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 1434us ok 54000/54000 err 0 drop 0
+    probe     19000/s: p99 162529us ok 57000/57000 err 0 drop 0
+    confirm     18000/s: median p99 872us, 3/3 runs inside the bound
+[r2dbc-postgresql] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 436us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 489us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 498us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 2966us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 1417us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 979us ok 42000/42000 err 0 drop 0
+    probe     15000/s: p99 1286us ok 45000/45000 err 0 drop 0
+    probe     15500/s: p99 1221us ok 46500/46500 err 0 drop 0
+    confirm     15500/s: median p99 872us, 3/3 runs inside the bound
+[r2dbc-postgresql] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 498us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 485us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1020us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 3070231us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 354419us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 591397us ok 30000/30000 err 0 drop 0
+    probe      9000/s: p99 840us ok 27000/27000 err 0 drop 0
+    probe      9500/s: p99 1253us ok 28500/28500 err 0 drop 0
+    confirm      9500/s: median p99 758us, 3/3 runs inside the bound
+[r2dbc-postgresql] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 485us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 514us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 692us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1450us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 7616856us ok 46106/96000 err 49894 drop 0
+    probe     24000/s: p99 4076863us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 2566914us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 2114us ok 54000/54000 err 0 drop 0
+    probe     19000/s: p99 1061159us ok 57000/57000 err 0 drop 0
+    confirm     18000/s: median p99 1335us, 3/3 runs inside the bound
+[r2dbc-postgresql] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 473us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 594us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 963us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 2867us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 6476005us ok 82930/96000 err 13029 drop 0
+    probe     24000/s: p99 2212us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 4328522us ok 84000/84000 err 0 drop 0
+    probe     26000/s: p99 2734686us ok 78000/78000 err 0 drop 0
+    probe     25000/s: p99 2105541us ok 75000/75000 err 0 drop 0
+    confirm     24000/s: median p99 2802us, 2/3 runs inside the bound
+[r2dbc-postgresql] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 505414us ok 6000/6000 err 0 drop 0
+    probe      1000/s: p99 8847us ok 3000/3000 err 0 drop 0
+    probe       500/s: p99 6455us ok 1500/1500 err 0 drop 0
+    probe      1250/s: p99 9372us ok 3750/3750 err 0 drop 0
+    probe       875/s: p99 6717us ok 2625/2625 err 0 drop 0
+    probe      1062/s: p99 6914us ok 3188/3188 err 0 drop 0
+    probe      1156/s: p99 7307us ok 3469/3469 err 0 drop 0
+    confirm      1156/s: median p99 8585us, 1/3 runs inside the bound
+    confirm      1122/s: median p99 6324us, 3/3 runs inside the bound
+[r2dbc-postgresql] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 2769us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 4882us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 2600468us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 455082us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 7504us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 8978us ok 16500/16500 err 0 drop 0
+    probe      5250/s: p99 6914us ok 15750/15750 err 0 drop 0
+    confirm      5250/s: median p99 7438us, 2/3 runs inside the bound
+[zero-postgres] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 403us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 367us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 371us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 408us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 545us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 758us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 1988100us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 492831us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 2056us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 1434us ok 216000/216000 err 0 drop 0
+    probe     76000/s: p99 6717us ok 228000/228000 err 0 drop 0
+    confirm     72000/s: median p99 2212us, 1/3 runs inside the bound
+    confirm     69840/s: median p99 1237us, 2/3 runs inside the bound
+[zero-postgres] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 367us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 362us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1535115us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 91750us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 428us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 3162us ok 16500/16500 err 0 drop 0
+    probe      5250/s: p99 30540us ok 15750/15750 err 0 drop 0
+    confirm      5000/s: median p99 1073us, 2/3 runs inside the bound
+[zero-postgres] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 391us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 371us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 330us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 545us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1020us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2734686us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1082130us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 221250us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1171us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 69730us ok 114000/114000 err 0 drop 0
+    confirm     36000/s: median p99 6455us, 0/3 runs inside the bound
+    confirm     34920/s: median p99 2007us, 1/3 runs inside the bound
+    confirm     33872/s: median p99 1303us, 3/3 runs inside the bound
+[zero-postgres] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 440us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 399us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 371us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 449us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 518us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 287310us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1352us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 1122us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 6455us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 2671us ok 174000/174000 err 0 drop 0
+    confirm     56000/s: median p99 3785us, 0/3 runs inside the bound
+    confirm     54320/s: median p99 2146us, 0/3 runs inside the bound
+    confirm     52690/s: median p99 1417us, 2/3 runs inside the bound
+[zero-postgres] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 461us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 428us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 420us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 750us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 799us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1484784us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 221250us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1860us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 130548us ok 132000/132000 err 0 drop 0
+    probe     42000/s: p99 11076us ok 126000/126000 err 0 drop 0
+    confirm     40000/s: median p99 20054us, 0/3 runs inside the bound
+    confirm     38800/s: median p99 4358us, 0/3 runs inside the bound
+    confirm     37636/s: median p99 4948us, 0/3 runs inside the bound
+    confirm     36507/s: median p99 1778us, 2/3 runs inside the bound
+[zero-postgres] s7 unpipelined conns=64 pool=0
+  skipped S7: this adapter has no TLS support yet
+[karez-blocking] bulk s4 rows=1000000
+    median 0.755s rows 1000000
+[karez-blocking] bulk s5 rows=100000
+    median 0.680s rows 100000
+[karez-blocking] bulk s6 rows=3000000
+    median 3.446s rows 3000000
+[karez-blocking] bulk s8 rows=13069067
+    median 14.386s rows 13069067
+[karez-blocking-chunk] bulk s4 rows=1000000
+    median 0.735s rows 1000000
+[karez-blocking-chunk] bulk s8 rows=13069067
+    median 14.517s rows 13069067
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.535s rows 1000000
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.637s rows 13069067
+[karez-blocking-mrow] bulk s5 rows=100000
+    median 0.369s rows 100000
+[sqlx] bulk s4 rows=1000000
+    median 0.800s rows 1000000
+[sqlx] bulk s5 rows=100000
+    median 0.397s rows 100000
+[sqlx] bulk s6 rows=3000000
+    median 3.550s rows 3000000
+[sqlx] bulk s8 rows=13069067
+    median 13.685s rows 13069067
+[pgjdbc-tuned] bulk s4 rows=1000000
+    median 0.996s rows 1000000
+[pgjdbc-tuned] bulk s5 rows=100000
+    median 0.569s rows 100000
+[pgjdbc-tuned] bulk s6 rows=3000000
+    median 4.296s rows 3000000
+[pgjdbc-tuned] bulk s8 rows=13069067
+    median 19.762s rows 13069067
+[r2dbc-postgresql] bulk s4 rows=1000000
+    median 2.594s rows 1000000
+campaign done: 56 configurations
+2026-11-16T11:34:48Z lane 3 round 1 finished, rc=0
+2026-11-16T12:10:00Z lane 3 round 2 profile lean2 clients karez-blocking,karez-shared,karez-blocking-chunk,karez-blocking-part,karez-blocking-mrow,libpq,tokio-postgres,pgjdbc,asyncpg
+verify: rc=0 (see verify.txt)
+[karez-blocking] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 416us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 424us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 440us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 494us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 594us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 905us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 1988100us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 599785us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 1548us ok 240000/240000 err 0 drop 0
+    probe     88000/s: p99 128451us ok 264000/264000 err 0 drop 0
+    probe     84000/s: p99 1581us ok 252000/252000 err 0 drop 0
+    confirm     84000/s: median p99 17170us, 0/3 runs inside the bound
+    confirm     81480/s: median p99 10813us, 0/3 runs inside the bound
+    confirm     79036/s: median p99 6193us, 0/3 runs inside the bound
+    confirm     76665/s: median p99 2114us, 0/3 runs inside the bound
+    confirm     74365/s: median p99 3228us, 1/3 runs inside the bound
+    confirm     72134/s: median p99 2114us, 0/3 runs inside the bound
+    confirm     69970/s: median p99 1483us, 3/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 358us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 449us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1434452us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 4227us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 741us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 1286us ok 16500/16500 err 0 drop 0
+    probe      5750/s: p99 51118us ok 17250/17250 err 0 drop 0
+    confirm      5500/s: median p99 5669us, 0/3 runs inside the bound
+    confirm      5335/s: median p99 4555us, 1/3 runs inside the bound
+    confirm      5175/s: median p99 668us, 3/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 395us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 391us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 432us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 420us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 938us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2533360us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 943718us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 196084us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1679us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 3949us ok 114000/114000 err 0 drop 0
+    confirm     36000/s: median p99 8585us, 0/3 runs inside the bound
+    confirm     34920/s: median p99 3260us, 0/3 runs inside the bound
+    confirm     33872/s: median p99 1384us, 2/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 416us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 399us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 700us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 436us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 618us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 16187us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 799us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 1122us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 3555us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 1450us ok 174000/174000 err 0 drop 0
+    confirm     58000/s: median p99 6062us, 0/3 runs inside the bound
+    confirm     56260/s: median p99 1532us, 2/3 runs inside the bound
+[karez-blocking] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 461us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 420us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 473us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 477us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 971us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1518338us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 64750us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1188us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 3359us ok 132000/132000 err 0 drop 0
+    probe     42000/s: p99 1532us ok 126000/126000 err 0 drop 0
+    confirm     42000/s: median p99 27132us, 0/3 runs inside the bound
+    confirm     40740/s: median p99 2671us, 0/3 runs inside the bound
+    confirm     39518/s: median p99 1384us, 3/3 runs inside the bound
+[karez-blocking] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 436us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 428us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 498us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 465us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 700us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 893387us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1352us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 396362us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 16908us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 1401us ok 150000/150000 err 0 drop 0
+    confirm     50000/s: median p99 16318us, 0/3 runs inside the bound
+    confirm     48500/s: median p99 7045us, 0/3 runs inside the bound
+    confirm     47045/s: median p99 4014us, 0/3 runs inside the bound
+    confirm     45634/s: median p99 2343us, 1/3 runs inside the bound
+    confirm     44265/s: median p99 1319us, 3/3 runs inside the bound
+[karez-blocking] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 594us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 553us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 643us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 502us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 831us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 371196us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1090us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 1909us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 58458us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 54788us ok 174000/174000 err 0 drop 0
+    confirm     56000/s: median p99 76022us, 0/3 runs inside the bound
+    confirm     54320/s: median p99 3457us, 1/3 runs inside the bound
+    confirm     52690/s: median p99 1892us, 2/3 runs inside the bound
+[karez-blocking] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 477us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 453us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 528us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 553us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 2023us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2365587us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 599785us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 78119us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 4751us ok 108000/108000 err 0 drop 0
+    probe     34000/s: p99 1368us ok 102000/102000 err 0 drop 0
+    confirm     34000/s: median p99 1696us, 2/3 runs inside the bound
+[karez-blocking] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 774us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 963us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 2212us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1769996us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 246415us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 7242us ok 30000/30000 err 0 drop 0
+    probe     11000/s: p99 19530us ok 33000/33000 err 0 drop 0
+    probe     10500/s: p99 4948us ok 31500/31500 err 0 drop 0
+    confirm     10500/s: median p99 11076us, 0/3 runs inside the bound
+    confirm     10185/s: median p99 6783us, 2/3 runs inside the bound
+[karez-blocking] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 700us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 692us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 823us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1020us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 135266us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1958us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 3326us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 15925us ok 90000/90000 err 0 drop 0
+    probe     29000/s: p99 4293us ok 87000/87000 err 0 drop 0
+    confirm     29000/s: median p99 8454us, 1/3 runs inside the bound
+    confirm     28130/s: median p99 5079us, 3/3 runs inside the bound
+[karez-shared] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 395us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 424us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 383us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 453us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 528us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1925us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 2021655us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 541065us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 2245us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 2769us ok 216000/216000 err 0 drop 0
+    probe     68000/s: p99 1499us ok 204000/204000 err 0 drop 0
+    confirm     68000/s: median p99 3391us, 0/3 runs inside the bound
+    confirm     65960/s: median p99 1876us, 3/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 461us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 461us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 2197815us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 530579us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 2146us ok 15000/15000 err 0 drop 0
+    probe      4500/s: p99 362us ok 13500/13500 err 0 drop 0
+    probe      4750/s: p99 1106us ok 14250/14250 err 0 drop 0
+    confirm      4750/s: median p99 1696us, 2/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 420us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 741us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 469us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 537us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 11600us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 537us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 766us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 1319us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 1237us ok 93000/93000 err 0 drop 0
+    confirm     31000/s: median p99 3686us, 0/3 runs inside the bound
+    confirm     30070/s: median p99 1729us, 2/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 440us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 449us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 440us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 510us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 766us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 164626us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1171us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 1679us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 5472us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 3097us ok 174000/174000 err 0 drop 0
+    confirm     56000/s: median p99 4686us, 0/3 runs inside the bound
+    confirm     54320/s: median p99 2023us, 1/3 runs inside the bound
+    confirm     52690/s: median p99 2343us, 0/3 runs inside the bound
+    confirm     51110/s: median p99 1827us, 3/3 runs inside the bound
+[karez-shared] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 676us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 610us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 741us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 700us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1090us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1468006us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 145752us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 4080us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1401us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 2277us ok 114000/114000 err 0 drop 0
+    confirm     36000/s: median p99 1794us, 2/3 runs inside the bound
+[karez-shared] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 489us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 465us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 498us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 725us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 872us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 918553us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1647us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 325059us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 111673us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 1761us ok 150000/150000 err 0 drop 0
+    confirm     50000/s: median p99 30015us, 0/3 runs inside the bound
+    confirm     48500/s: median p99 10289us, 0/3 runs inside the bound
+    confirm     47045/s: median p99 4620us, 0/3 runs inside the bound
+    confirm     45634/s: median p99 2408us, 0/3 runs inside the bound
+    confirm     44265/s: median p99 1909us, 2/3 runs inside the bound
+[karez-shared] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 473us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 457us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 469us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 561us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 774us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 480248us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 3391us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 3621us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1057us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 930us ok 114000/114000 err 0 drop 0
+    confirm     38000/s: median p99 1237us, 3/3 runs inside the bound
+[karez-shared] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 569us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 668us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 807us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 848us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1483us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2164261us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 784335us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 2834us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 221250us ok 132000/132000 err 0 drop 0
+    probe     42000/s: p99 177209us ok 126000/126000 err 0 drop 0
+    confirm     40000/s: median p99 175112us, 0/3 runs inside the bound
+    confirm     38800/s: median p99 11469us, 0/3 runs inside the bound
+    confirm     37636/s: median p99 2933us, 2/3 runs inside the bound
+[karez-shared] r1 pipelined conns=8 pool=0
+    probe      2000/s: p99 436us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 408us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 432us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 522us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 889us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 3424us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1499us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 2146us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 2343us ok 180000/180000 err 0 drop 0
+    probe     62000/s: p99 3293us ok 186000/186000 err 0 drop 0
+    confirm     60000/s: median p99 2900us, 2/3 runs inside the bound
+[karez-shared] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 872us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1122us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 2212us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1820328us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 341836us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 4751us ok 30000/30000 err 0 drop 0
+    probe     11000/s: p99 18743us ok 33000/33000 err 0 drop 0
+    probe     10500/s: p99 5341us ok 31500/31500 err 0 drop 0
+    confirm     10500/s: median p99 12124us, 0/3 runs inside the bound
+    confirm     10185/s: median p99 7700us, 2/3 runs inside the bound
+[karez-shared] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 1073us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 758us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1221us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1204us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 177209us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1991us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 5997us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 5538us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 22938us ok 93000/93000 err 0 drop 0
+    confirm     30000/s: median p99 13173us, 0/3 runs inside the bound
+    confirm     29100/s: median p99 10682us, 0/3 runs inside the bound
+    confirm     28227/s: median p99 7373us, 2/3 runs inside the bound
+[libpq] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 387us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 379us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 338us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 383us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 461us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 872us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 2264924us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 633340us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 1450us ok 240000/240000 err 0 drop 0
+    probe     88000/s: p99 65274us ok 264000/264000 err 0 drop 0
+    probe     84000/s: p99 6128us ok 252000/252000 err 0 drop 0
+    confirm     80000/s: median p99 14615us, 0/3 runs inside the bound
+    confirm     77600/s: median p99 5407us, 0/3 runs inside the bound
+    confirm     75272/s: median p99 1892us, 2/3 runs inside the bound
+[libpq] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 367us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 338us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1468006us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 1712us ok 18000/18000 err 0 drop 0
+    probe      7000/s: p99 734003us ok 21000/21000 err 0 drop 0
+    probe      6500/s: p99 256901us ok 19500/19500 err 0 drop 0
+    probe      6250/s: p99 308281us ok 18750/18750 err 0 drop 0
+    confirm      6000/s: median p99 145752us, 0/3 runs inside the bound
+    confirm      5820/s: median p99 17695us, 0/3 runs inside the bound
+    confirm      5645/s: median p99 3949us, 1/3 runs inside the bound
+    confirm      5476/s: median p99 14352us, 0/3 runs inside the bound
+    confirm      5312/s: median p99 1036us, 3/3 runs inside the bound
+[libpq] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 383us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 375us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 387us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 436us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1335us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2600468us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1019216us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 175112us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 3752us ok 108000/108000 err 0 drop 0
+    probe     34000/s: p99 569us ok 102000/102000 err 0 drop 0
+    confirm     34000/s: median p99 2474us, 0/3 runs inside the bound
+    confirm     32980/s: median p99 1155us, 2/3 runs inside the bound
+[libpq] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 408us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 391us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 440us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 387us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 473us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 219152us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 2179us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 684us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 602us ok 132000/132000 err 0 drop 0
+    probe     46000/s: p99 807us ok 138000/138000 err 0 drop 0
+    confirm     46000/s: median p99 1036us, 3/3 runs inside the bound
+[libpq] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 453us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 453us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 416us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 453us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 831us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1551892us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 530579us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 80216us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1188us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 1303us ok 114000/114000 err 0 drop 0
+    confirm     38000/s: median p99 8585us, 0/3 runs inside the bound
+    confirm     36860/s: median p99 1597us, 3/3 runs inside the bound
+[libpq] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 481us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 436us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 399us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 481us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 578us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1052770us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1679us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 434110us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 99090us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 3326us ok 150000/150000 err 0 drop 0
+    confirm     48000/s: median p99 16712us, 0/3 runs inside the bound
+    confirm     46560/s: median p99 8028us, 0/3 runs inside the bound
+    confirm     45163/s: median p99 3359us, 1/3 runs inside the bound
+    confirm     43808/s: median p99 1466us, 2/3 runs inside the bound
+[libpq] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 428us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 403us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 457us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 528us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 528us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 517997us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 881us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 45875us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 1028us ok 156000/156000 err 0 drop 0
+    probe     54000/s: p99 1221us ok 162000/162000 err 0 drop 0
+    confirm     54000/s: median p99 11207us, 1/3 runs inside the bound
+    confirm     52380/s: median p99 2802us, 3/3 runs inside the bound
+[libpq] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 453us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 420us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 428us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 494us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1647us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2432696us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 918553us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 183501us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 30540us ok 108000/108000 err 0 drop 0
+    probe     34000/s: p99 1384us ok 102000/102000 err 0 drop 0
+    confirm     34000/s: median p99 1942us, 2/3 runs inside the bound
+[libpq] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 725us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 905us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1843us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1702887us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 225444us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 2769us ok 30000/30000 err 0 drop 0
+    probe     11000/s: p99 8716us ok 33000/33000 err 0 drop 0
+    probe     10500/s: p99 3817us ok 31500/31500 err 0 drop 0
+    confirm     10500/s: median p99 10551us, 0/3 runs inside the bound
+    confirm     10185/s: median p99 7111us, 2/3 runs inside the bound
+[libpq] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 684us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 684us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 815us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1057us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 263193us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 2343us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 5472us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 34865us ok 90000/90000 err 0 drop 0
+    probe     29000/s: p99 4948us ok 87000/87000 err 0 drop 0
+    confirm     29000/s: median p99 12911us, 0/3 runs inside the bound
+    confirm     28130/s: median p99 8159us, 1/3 runs inside the bound
+    confirm     27286/s: median p99 6062us, 3/3 runs inside the bound
+[tokio-postgres] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 379us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 371us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 342us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 387us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 424us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 815us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 2021655us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 488636us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 1204us ok 240000/240000 err 0 drop 0
+    probe     88000/s: p99 5865us ok 264000/264000 err 0 drop 0
+    probe     84000/s: p99 12780us ok 252000/252000 err 0 drop 0
+    confirm     80000/s: median p99 5800us, 0/3 runs inside the bound
+    confirm     77600/s: median p99 4080us, 1/3 runs inside the bound
+    confirm     75272/s: median p99 1548us, 2/3 runs inside the bound
+[tokio-postgres] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 412us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1237us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1619001us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 143655us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 1876us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 913us ok 16500/16500 err 0 drop 0
+    probe      5750/s: p99 3686us ok 17250/17250 err 0 drop 0
+    confirm      5500/s: median p99 4293us, 0/3 runs inside the bound
+    confirm      5335/s: median p99 2114us, 1/3 runs inside the bound
+    confirm      5175/s: median p99 1761us, 3/3 runs inside the bound
+[tokio-postgres] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 391us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 362us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 379us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 375us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1139us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2466251us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 977273us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 103285us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 2179us ok 108000/108000 err 0 drop 0
+    probe     34000/s: p99 938us ok 102000/102000 err 0 drop 0
+    confirm     34000/s: median p99 1417us, 2/3 runs inside the bound
+[tokio-postgres] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 440us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 408us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 346us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 436us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1303us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 156238us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 979us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 987us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 2277us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 1106us ok 174000/174000 err 0 drop 0
+    confirm     58000/s: median p99 13697us, 0/3 runs inside the bound
+    confirm     56260/s: median p99 3162us, 0/3 runs inside the bound
+    confirm     54572/s: median p99 1761us, 2/3 runs inside the bound
+[tokio-postgres] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 465us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 440us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 420us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 465us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 635us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1501561us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 152044us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 1794us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 84410us ok 132000/132000 err 0 drop 0
+    probe     42000/s: p99 15925us ok 126000/126000 err 0 drop 0
+    confirm     40000/s: median p99 11731us, 0/3 runs inside the bound
+    confirm     38800/s: median p99 7307us, 0/3 runs inside the bound
+    confirm     37636/s: median p99 3424us, 0/3 runs inside the bound
+    confirm     36507/s: median p99 1958us, 2/3 runs inside the bound
+[tokio-postgres] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 461us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 444us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 391us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 428us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 823us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 968884us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1073us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 337641us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 90702us ok 156000/156000 err 0 drop 0
+    probe     50000/s: p99 1204us ok 150000/150000 err 0 drop 0
+    confirm     50000/s: median p99 17433us, 0/3 runs inside the bound
+    confirm     48500/s: median p99 8094us, 0/3 runs inside the bound
+    confirm     47045/s: median p99 2605us, 0/3 runs inside the bound
+    confirm     45634/s: median p99 2212us, 1/3 runs inside the bound
+    confirm     44265/s: median p99 1647us, 2/3 runs inside the bound
+[tokio-postgres] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 420us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 375us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 387us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 424us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 485us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 358613us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 2056us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 1384us ok 168000/168000 err 0 drop 0
+    probe     60000/s: p99 139461us ok 180000/180000 err 0 drop 0
+    probe     58000/s: p99 39584us ok 174000/174000 err 0 drop 0
+    confirm     56000/s: median p99 10158us, 0/3 runs inside the bound
+    confirm     54320/s: median p99 5865us, 1/3 runs inside the bound
+    confirm     52690/s: median p99 3326us, 1/3 runs inside the bound
+    confirm     51110/s: median p99 1663us, 3/3 runs inside the bound
+[tokio-postgres] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 469us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 432us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 428us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 545us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 848us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2038432us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 683672us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 193987us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1843us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 14746us ok 114000/114000 err 0 drop 0
+    confirm     36000/s: median p99 6455us, 0/3 runs inside the bound
+    confirm     34920/s: median p99 5407us, 0/3 runs inside the bound
+    confirm     33872/s: median p99 3523us, 1/3 runs inside the bound
+    confirm     32856/s: median p99 2572us, 3/3 runs inside the bound
+[tokio-postgres] r1 pipelined conns=8 pool=0
+    probe      2000/s: p99 408us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 436us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 383us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 420us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 676us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2900us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 1669333us ok 384000/384000 err 0 drop 0
+    probe     96000/s: p99 278921us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 8716us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 5734us ok 216000/216000 err 0 drop 0
+    probe     68000/s: p99 3293us ok 204000/204000 err 0 drop 0
+    confirm     64000/s: median p99 2540us, 2/3 runs inside the bound
+[tokio-postgres] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 782us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1044us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1663us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1702887us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 371196us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 2310us ok 30000/30000 err 0 drop 0
+    probe     11000/s: p99 49545us ok 33000/33000 err 0 drop 0
+    probe     10500/s: p99 2146us ok 31500/31500 err 0 drop 0
+    confirm     10500/s: median p99 12780us, 0/3 runs inside the bound
+    confirm     10185/s: median p99 7766us, 2/3 runs inside the bound
+[tokio-postgres] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 741us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 717us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 848us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1073us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 125305us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 2089us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 3293us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 4424us ok 90000/90000 err 0 drop 0
+    probe     31000/s: p99 28967us ok 93000/93000 err 0 drop 0
+    confirm     30000/s: median p99 14483us, 0/3 runs inside the bound
+    confirm     29100/s: median p99 10420us, 1/3 runs inside the bound
+    confirm     28227/s: median p99 5997us, 2/3 runs inside the bound
+[pgjdbc] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 440us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 403us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 350us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 416us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 618us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 1335us ok 192000/192000 err 0 drop 0
+    probe    128000/s: p99 6878659us ok 145457/384000 err 0 drop 238543
+    probe     96000/s: p99 2231370us ok 288000/288000 err 0 drop 0
+    probe     80000/s: p99 68682us ok 240000/240000 err 0 drop 0
+    probe     72000/s: p99 6062us ok 216000/216000 err 0 drop 0
+    probe     68000/s: p99 2114us ok 204000/204000 err 0 drop 0
+    confirm     64000/s: median p99 2441us, 1/3 runs inside the bound
+    confirm     62080/s: median p99 1663us, 2/3 runs inside the bound
+[pgjdbc] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 395us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 330us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 5066719us ok 23472/24000 err 0 drop 528
+    probe      6000/s: p99 541065us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 1122us ok 15000/15000 err 0 drop 0
+    probe      5500/s: p99 1548us ok 16500/16500 err 0 drop 0
+    probe      5750/s: p99 350224us ok 17250/17250 err 0 drop 0
+    confirm      5500/s: median p99 31064us, 0/3 runs inside the bound
+    confirm      5335/s: median p99 9765us, 0/3 runs inside the bound
+    confirm      5175/s: median p99 6586us, 0/3 runs inside the bound
+    confirm      5020/s: median p99 1794us, 2/3 runs inside the bound
+[pgjdbc] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 428us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 477us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 362us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 403us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1548us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 7281312us ok 44981/192000 err 0 drop 147019
+    probe     48000/s: p99 3640656us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 884998us ok 120000/120000 err 0 drop 0
+    probe     36000/s: p99 1778us ok 108000/108000 err 0 drop 0
+    probe     38000/s: p99 34865us ok 114000/114000 err 0 drop 0
+    confirm     36000/s: median p99 21627us, 0/3 runs inside the bound
+    confirm     34920/s: median p99 3981us, 0/3 runs inside the bound
+    confirm     33872/s: median p99 4227us, 0/3 runs inside the bound
+    confirm     32856/s: median p99 1548us, 2/3 runs inside the bound
+[pgjdbc] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 408us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 395us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 498us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 457us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 709us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 750780us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 1614us ok 144000/144000 err 0 drop 0
+    probe     56000/s: p99 2114us ok 168000/168000 err 0 drop 0
+    probe     52000/s: p99 1155us ok 156000/156000 err 0 drop 0
+    probe     54000/s: p99 2540us ok 162000/162000 err 0 drop 0
+    confirm     52000/s: median p99 5145us, 0/3 runs inside the bound
+    confirm     50440/s: median p99 2671us, 1/3 runs inside the bound
+    confirm     48927/s: median p99 1319us, 2/3 runs inside the bound
+[pgjdbc] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 494us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 489us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 383us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 4358us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 444us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 561us ok 42000/42000 err 0 drop 0
+    probe     15000/s: p99 594us ok 45000/45000 err 0 drop 0
+    probe     15500/s: p99 782us ok 46500/46500 err 0 drop 0
+    confirm     15500/s: median p99 1139us, 3/3 runs inside the bound
+[pgjdbc] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 440us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 391us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 561us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 469us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 39059us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 1044us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 799us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 13435us ok 90000/90000 err 0 drop 0
+    probe     29000/s: p99 758us ok 87001/87001 err 0 drop 0
+    confirm     29000/s: median p99 1036us, 3/3 runs inside the bound
+[pgjdbc] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 444us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 416us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 412us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 799us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 635us ok 96000/96000 err 0 drop 0
+    probe     64000/s: p99 2055209us ok 192000/192000 err 0 drop 0
+    probe     48000/s: p99 3785us ok 144000/144000 err 0 drop 0
+    probe     40000/s: p99 938us ok 120000/120000 err 0 drop 0
+    probe     44000/s: p99 2834us ok 132000/132000 err 0 drop 0
+    probe     46000/s: p99 1581us ok 138000/138000 err 0 drop 0
+    confirm     46000/s: median p99 2056us, 3/3 runs inside the bound
+[pgjdbc] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 403us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 2040us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 416us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 602us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 16450us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 659us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 2343us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 3621us ok 90000/90000 err 0 drop 0
+    probe     29000/s: p99 28180us ok 87001/87001 err 0 drop 0
+    confirm     28000/s: median p99 22151us, 0/3 runs inside the bound
+    confirm     27160/s: median p99 2605us, 2/3 runs inside the bound
+[pgjdbc] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 922us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 1892us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1679us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 6543114us ok 22852/48000 err 0 drop 25148
+    probe     12000/s: p99 3707765us ok 36000/36000 err 0 drop 0
+    probe     10000/s: p99 2801795us ok 30000/30000 err 0 drop 0
+    probe      9000/s: p99 4047us ok 27000/27000 err 0 drop 0
+    probe      9500/s: p99 488636us ok 28500/28500 err 0 drop 0
+    confirm      9000/s: median p99 4620us, 2/3 runs inside the bound
+[pgjdbc] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 725us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 692us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 815us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 1155us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 843055us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 2179us ok 72000/72000 err 0 drop 0
+    probe     28000/s: p99 5997us ok 84000/84000 err 0 drop 0
+    probe     30000/s: p99 308281us ok 90000/90000 err 0 drop 0
+    probe     29000/s: p99 4555us ok 87001/87001 err 0 drop 0
+    confirm     29000/s: median p99 54264us, 0/3 runs inside the bound
+    confirm     28130/s: median p99 20054us, 0/3 runs inside the bound
+    confirm     27286/s: median p99 24248us, 0/3 runs inside the bound
+    confirm     26468/s: median p99 6914us, 2/3 runs inside the bound
+[asyncpg] s1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 465us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 424us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 395us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 897us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 616563us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 110625us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 4620us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 5407us ok 54000/54000 err 0 drop 0
+    probe     17000/s: p99 1090us ok 51000/51000 err 0 drop 0
+    confirm     17000/s: median p99 1499us, 2/3 runs inside the bound
+[asyncpg] s2 unpipelined conns=1 pool=0
+    probe      2000/s: p99 489us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 428us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 2667577us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 876610us ok 18000/18000 err 0 drop 0
+    probe      5000/s: p99 168821us ok 15000/15000 err 0 drop 0
+    probe      4500/s: p99 1876us ok 13500/13500 err 0 drop 0
+    probe      4750/s: p99 34865us ok 14250/14250 err 0 drop 0
+    confirm      4500/s: median p99 45875us, 0/3 runs inside the bound
+    confirm      4365/s: median p99 2408us, 1/3 runs inside the bound
+    confirm      4234/s: median p99 4178us, 1/3 runs inside the bound
+    confirm      4107/s: median p99 2056us, 1/3 runs inside the bound
+    confirm      3984/s: median p99 4620us, 1/3 runs inside the bound
+    confirm      3864/s: median p99 602us, 3/3 runs inside the bound
+[asyncpg] s2 unpipelined conns=8 pool=0
+    probe      2000/s: p99 461us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 432us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 518us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 141558us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 709us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 930us ok 42000/42000 err 0 drop 0
+    probe     15000/s: p99 3490us ok 45000/45000 err 0 drop 0
+    probe     14500/s: p99 1270us ok 43500/43500 err 0 drop 0
+    confirm     14500/s: median p99 5341us, 0/3 runs inside the bound
+    confirm     14065/s: median p99 1204us, 3/3 runs inside the bound
+[asyncpg] s2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 498us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 469us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 416us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 848us ok 48000/48000 err 0 drop 0
+    probe     32000/s: p99 1535115us ok 96000/96000 err 0 drop 0
+    probe     24000/s: p99 229638us ok 72000/72000 err 0 drop 0
+    probe     20000/s: p99 11076us ok 60000/60000 err 0 drop 0
+    probe     18000/s: p99 7373us ok 54000/54000 err 0 drop 0
+    probe     17000/s: p99 2736us ok 51000/51000 err 0 drop 0
+    confirm     16000/s: median p99 2572us, 1/3 runs inside the bound
+    confirm     15520/s: median p99 2736us, 1/3 runs inside the bound
+    confirm     15054/s: median p99 1876us, 2/3 runs inside the bound
+[asyncpg] s2 unpipelined conns=512 pool=0
+    probe      2000/s: p99 518us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 469us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 602us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 152044us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 1401us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 1876us ok 42000/42000 err 0 drop 0
+    probe     15000/s: p99 2507us ok 45000/45000 err 0 drop 0
+    probe     14500/s: p99 1778us ok 43500/43500 err 0 drop 0
+    confirm     14500/s: median p99 2834us, 0/3 runs inside the bound
+    confirm     14065/s: median p99 1810us, 2/3 runs inside the bound
+[asyncpg] s7 unpipelined conns=64 pool=0
+    probe      2000/s: p99 676us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 807us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 295698us ok 24000/24000 err 0 drop 0
+    probe      6000/s: p99 1122us ok 18000/18000 err 0 drop 0
+    probe      7000/s: p99 2540us ok 21000/21000 err 0 drop 0
+    probe      6500/s: p99 2245us ok 19500/19500 err 0 drop 0
+    probe      6250/s: p99 1401us ok 18750/18750 err 0 drop 0
+    confirm      6250/s: median p99 2900us, 1/3 runs inside the bound
+    confirm      6062/s: median p99 2023us, 1/3 runs inside the bound
+    confirm      5881/s: median p99 2376us, 1/3 runs inside the bound
+    confirm      5704/s: median p99 1237us, 2/3 runs inside the bound
+[asyncpg] r1 unpipelined conns=64 pool=0
+    probe      2000/s: p99 684us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 578us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 528us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 13173us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 2507us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 53740us ok 42000/42000 err 0 drop 0
+    probe     13000/s: p99 19530us ok 39000/39000 err 0 drop 0
+    probe     12500/s: p99 4489us ok 37500/37500 err 0 drop 0
+    confirm     12000/s: median p99 3883us, 0/3 runs inside the bound
+    confirm     11640/s: median p99 1745us, 3/3 runs inside the bound
+[asyncpg] r1 unpipelined conns=512 pool=0
+    probe      2000/s: p99 569us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 485us ok 12000/12000 err 0 drop 0
+    probe      8000/s: p99 1036us ok 24000/24000 err 0 drop 0
+    probe     16000/s: p99 208667us ok 48000/48000 err 0 drop 0
+    probe     12000/s: p99 2703us ok 36000/36000 err 0 drop 0
+    probe     14000/s: p99 141558us ok 42000/42000 err 0 drop 0
+    probe     13000/s: p99 124256us ok 39000/39000 err 0 drop 0
+    probe     12500/s: p99 6128us ok 37500/37500 err 0 drop 0
+    confirm     12000/s: median p99 6914us, 0/3 runs inside the bound
+    confirm     11640/s: median p99 5407us, 1/3 runs inside the bound
+    confirm     11291/s: median p99 4424us, 1/3 runs inside the bound
+    confirm     10952/s: median p99 2507us, 3/3 runs inside the bound
+[asyncpg] r2 unpipelined conns=64 pool=0
+    probe      2000/s: p99 4395631us ok 6000/6000 err 0 drop 0
+    probe      1000/s: p99 21889us ok 3000/3000 err 0 drop 0
+    probe       500/s: p99 1679us ok 1500/1500 err 0 drop 0
+    probe      1250/s: p99 1098908us ok 3750/3750 err 0 drop 0
+    probe       875/s: p99 4882us ok 2625/2625 err 0 drop 0
+    probe      1062/s: p99 400556us ok 3187/3187 err 0 drop 0
+    probe       969/s: p99 20316us ok 2906/2906 err 0 drop 0
+    confirm       875/s: median p99 49021us, 1/3 runs inside the bound
+    confirm       849/s: median p99 63701us, 0/3 runs inside the bound
+    confirm       823/s: median p99 8978us, 1/3 runs inside the bound
+    confirm       799/s: median p99 42205us, 1/3 runs inside the bound
+    confirm       775/s: median p99 6259us, 2/3 runs inside the bound
+[asyncpg] r4 unpipelined conns=64 pool=0
+    probe      2000/s: p99 3293us ok 6000/6000 err 0 drop 0
+    probe      4000/s: p99 242221us ok 12000/12000 err 0 drop 0
+    probe      3000/s: p99 8716us ok 9000/9000 err 0 drop 0
+    probe      2500/s: p99 4358us ok 7500/7500 err 0 drop 0
+    probe      2750/s: p99 5407us ok 8250/8250 err 0 drop 0
+    probe      2875/s: p99 5734us ok 8625/8625 err 0 drop 0
+    confirm      2875/s: median p99 14483us, 0/3 runs inside the bound
+    confirm      2789/s: median p99 16056us, 0/3 runs inside the bound
+    confirm      2705/s: median p99 8159us, 1/3 runs inside the bound
+    confirm      2624/s: median p99 5669us, 2/3 runs inside the bound
+[karez-blocking] bulk s4 rows=1000000
+    median 0.669s rows 1000000
+[karez-blocking] bulk s5 rows=100000
+    median 0.673s rows 100000
+[karez-blocking] bulk s6 rows=3000000
+    median 3.430s rows 3000000
+[karez-blocking] bulk s8 rows=13069067
+    median 12.597s rows 13069067
+[karez-blocking-chunk] bulk s4 rows=1000000
+    median 0.918s rows 1000000
+[karez-blocking-chunk] bulk s8 rows=13069067
+    median 13.923s rows 13069067
+[karez-blocking-part] bulk s4 rows=1000000
+    median 0.528s rows 1000000
+[karez-blocking-part] bulk s8 rows=13069067
+    median 9.747s rows 13069067
+[karez-blocking-mrow] bulk s5 rows=100000
+    median 0.359s rows 100000
+[libpq] bulk s4 rows=1000000
+    median 0.750s rows 1000000
+[libpq] bulk s5 rows=100000
+    median 0.619s rows 100000
+[libpq] bulk s6 rows=3000000
+    median 4.401s rows 3000000
+[libpq] bulk s8 rows=13069067
+    median 22.398s rows 13069067
+[tokio-postgres] bulk s4 rows=1000000
+    median 0.705s rows 1000000
+[tokio-postgres] bulk s5 rows=100000
+    median 1.661s rows 100000
+[tokio-postgres] bulk s6 rows=3000000
+    median 3.796s rows 3000000
+[tokio-postgres] bulk s8 rows=13069067
+    median 14.008s rows 13069067
+[pgjdbc] bulk s4 rows=1000000
+    median 1.487s rows 1000000
+[pgjdbc] bulk s5 rows=100000
+    median 0.880s rows 100000
+[pgjdbc] bulk s6 rows=3000000
+    median 5.945s rows 3000000
+[pgjdbc] bulk s8 rows=13069067
+    FAILED SLF4J: Failed to load class "org.slf4j.impl.StaticLoggerBinder".
+SLF4J: Defaulting to no-operation (NOP) logger implementation
+SLF4J: See http://www.slf4j.org/codes.html#StaticLoggerBinder for further details.
+Exception in thread "main" java.lang.OutOfMemoryError: Java heap space
+
+[asyncpg] bulk s4 rows=1000000
+    median 2.214s rows 1000000
+[asyncpg] bulk s5 rows=100000
+    median 0.579s rows 100000
+[asyncpg] bulk s6 rows=3000000
+    median 5.738s rows 3000000
+[asyncpg] bulk s8 rows=13069067
+    median 129.365s rows 13069067
+campaign done: 62 configurations
+2026-11-16T16:04:50Z lane 3 round 2 finished, rc=0

@@ -1,0 +1,304 @@
+{
+ "_comment": "One entry per client adapter. cmd is the adapter executable (relative to bench/ unless absolute); every adapter takes the same flags (bench/README.md). modes: which of unpipelined/pipelined it supports. pool: supports --pool. family is only used for grouping in the report.",
+ "karez-blocking": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "karez-shared": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined",
+   "pipelined"
+  ],
+  "pool": false,
+  "family": "rust"
+ },
+ "tokio-postgres": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined",
+   "pipelined"
+  ],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "deadpool-postgres": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "tls": false
+ },
+ "sqlx": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "notes": "defaults: test_before_acquire on",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "sqlx-tuned": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "rust",
+  "notes": "test_before_acquire off"
+ },
+ "asyncpg": {
+  "cmd": [
+   "adapters/py/run-py.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "python",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "psycopg3": {
+  "cmd": [
+   "adapters/py/run-py.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "python",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "pgx": {
+  "cmd": [
+   "adapters/go/karez-bench-go"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "go",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "libpq": {
+  "cmd": [
+   "adapters/c/libpq_adapter"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "c",
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "pgjdbc": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 20,
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "pgjdbc-tuned": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 20,
+  "bulk": [
+   "s4",
+   "s5",
+   "s6",
+   "s8"
+  ]
+ },
+ "vertx-pg-client": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined",
+   "pipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 20,
+  "bulk": [
+   "s4",
+   "s5"
+  ]
+ },
+ "r2dbc-postgresql": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": true,
+  "family": "jvm",
+  "warmup_min": 20,
+  "bulk": [
+   "s4"
+  ]
+ },
+ "zero-postgres": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": false,
+  "family": "rust",
+  "tls": false,
+  "taxi": false
+ },
+ "karez-blocking-chunk": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s4",
+   "s8"
+  ],
+  "notes": "S4 through the chunk path (whole columns over the Arrow-layout buffers)"
+ },
+ "karez-blocking-part": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s4",
+   "s8"
+  ],
+  "notes": "S4 and S8 through the library scan_partitioned, 8 partitions, one shared snapshot",
+  "env": {
+   "KAREZ_API": "1",
+   "KAREZ_PARTS": "8"
+  }
+ },
+ "karez-blocking-mrow": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s5"
+  ],
+  "notes": "S5 through the library Connection::insert_batch (1,000 rows per statement)"
+ },
+ "diesel": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": false,
+  "family": "rust",
+  "scenarios": [
+   "s1",
+   "s2",
+   "s7",
+   "r1"
+  ],
+  "bulk": [
+   "s4"
+  ],
+  "notes": "diesel 2 over bundled libpq, one connection per worker, no pool; S1, S2, S7, R1 and the S4 scan only (see rustbench/src/diesel_client.rs)"
+ },
+ "wtx": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [
+   "unpipelined"
+  ],
+  "pool": false,
+  "family": "rust",
+  "tls": false,
+  "scenarios": [
+   "s1",
+   "s2"
+  ],
+  "notes": "wtx 0.52, blocking TcpStream per worker on wtx's StdRuntime, plaintext; S1 and S2 only. No bulk: execute_stmt_many buffers the whole result and refused the 1M-row scan (ForbiddenClear). See rustbench/src/wtx_client.rs"
+ }
+}
