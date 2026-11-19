@@ -20,8 +20,8 @@ BI tools and query engines can use the same core. It is designed to be **fast, s
 
 > **Status: design stage with a working first slice.** A PostgreSQL client exists in this repository: six crates with no
 > third-party dependencies, optional TLS, a pool, a shared pipelined connection, `COPY`, a partitioned parallel table scan and
-> a multi-row insert (see [What exists today](#what-exists-today)). It is **verified against a real server on PostgreSQL 14.25,
-> 16.15 and 17.12 (versions 13, 15 and 18 were not run)** and the whole test suite passes. It is **not released**: the code is not
+> a multi-row insert (see [What exists today](#what-exists-today)). It is **verified against a real server on PostgreSQL 13 to 18
+> (13.23, 14.25, 15.20, 16.16, 17.11 and 18.7; the partitioned scan needs 14 or later)** and the whole test suite passes. It is **not released**: the code is not
 > published, and the crates.io names are reserved with empty placeholders. The speed figures below are first measurements (one
 > lane per competitor), not a finished benchmark; the full test is pending. Everything beyond PostgreSQL (MySQL, SQL Server, SQLite,
 > the ADBC, ODBC and JDBC exports) is a plan. The first milestone is still a go or no-go measurement spike (see
@@ -109,7 +109,7 @@ Limits, stated plainly:
 - **Not published.** The working code is not on crates.io. The names `karez`, `karez-chunk`, `karez-proto-pg`, `karez-pg` and `karez-rt` are
   reserved there with 0.0.1 placeholder releases that contain no code; they are not the library.
 - **TLS is optional.** With the `tls` feature (rustls) the default `sslmode` is `verify-full`; without it a connection needs an explicit `sslmode=disable`, and the core has no dependencies. It works over the shared `karez-rt` connection too. See [docs/design/tls-decision.md](docs/design/tls-decision.md).
-- **Three server versions tested.** Real-server tests ran on PostgreSQL 14.25, 16.15 and 17.12 (the partitioned scan needs 14 or later). Versions 13, 15 and 18 were not run by the test suite. The 13 to 18 range in the plan is a target, not something tested.
+- **Six server versions tested.** Real-server tests ran on PostgreSQL 13.23, 14.25, 15.20, 16.16, 17.11 and 18.7 on 2026-11-19, with and without TLS (the partitioned scan needs 14 or later and is refused with a clear error on 13; numeric infinities exist from 14). Other minor versions of the same majors were not run.
 - **Types.** Native columns: `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `text`, `varchar`, `bpchar`, `name`, `bytea`, `uuid`, `date`, `timestamp`, `timestamptz`, `oid`, `time` (microseconds), `interval` (months, days and microseconds) and `numeric(p,s)` with a precision up to 38 (a 128-bit decimal that keeps precision and scale), and NULL. An unconstrained or wider `numeric`, `json`, `jsonb`, `timetz`, `inet`, `cidr`, `macaddr`, `bit`, enums and arrays of these are read in binary and delivered as exact text (not as Arrow list columns). `NaN` and `Infinity` in a `numeric(p,s)` column are a value error: select the column `::text`. Timestamps after about the year 294247 do not fit the microsecond counter and are a value error (select the column `::text`). Parameters can be sent natively as `numeric`, `interval`, `time` and one-dimensional arrays of the basic types. Any other type (for example `money`, ranges, `tsvector`) fails with an error that names the type, or is read as text with `unsupported_types=text`.
 - **Timestamp range.** Values are Unix-epoch microseconds, so PostgreSQL timestamps in roughly its last 30 years of range (after about year 294246) give an error. Dates, `infinity` and `-infinity` are handled.
 - **Speed.** Only first measurements exist ([At a glance](#at-a-glance-first-measurements-the-full-test-is-still-pending)); there is no
@@ -220,8 +220,8 @@ native drivers for PostgreSQL, MySQL and MariaDB, SQL Server and SQLite, with JD
 parity and exports. It is the Rust counterpart of what JDBC and ODBC are for Java and C.
 
 **Can I use it today?** Only as a spike, from this repository. A PostgreSQL client exists, with optional TLS, a pool, a shared
-pipelined connection, a partitioned parallel scan and a multi-row insert, tested against a real server on PostgreSQL 14.25, 16.15 and
-17.12, with first measurements. It is not released and its code is not published (the crates.io names hold empty placeholders). The
+pipelined connection, a partitioned parallel scan and a multi-row insert, tested against a real server on PostgreSQL 13 to 18, with first
+measurements. It is not released and its code is not published (the crates.io names hold empty placeholders). The
 rest is research, the plan and the brand assets.
 
 **Is it a fork of tokio-rs/rdbc?** No. It starts fresh with no code or history from rdbc, which

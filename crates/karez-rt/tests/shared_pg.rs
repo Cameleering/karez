@@ -578,3 +578,86 @@ fn an_idle_connection_has_no_thread_and_a_busy_one_keeps_its_reader() -> R {
     assert!(!c.reader_thread_running());
     Ok(())
 }
+
+#[test]
+fn every_owned_parameter_type_reaches_the_server_intact() -> R {
+    use karez_pg::{Date, Decimal128, Interval, Time, Timestamp};
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    let t = tag("owned");
+    c.exec("SET intervalstyle = 'iso_8601'", &[])?;
+    c.exec(
+        &format!(
+            "CREATE TEMP TABLE {t} (u uuid, d date, ts timestamp, tz timestamptz, tm time, iv interval, \
+             n numeric(12,3), ab bool[], a2 int2[], a4 int4[], a8 int8[], f4 float4[], f8 float8[], \
+             tx text[], m mood, ip inet)"
+        ),
+        &[],
+    )?;
+    let res = c
+        .pipeline()
+        .exec(
+            &format!(
+                "INSERT INTO {t} VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)"
+            ),
+            vec![
+                OwnedValue::Uuid([0xAB; 16]),
+                OwnedValue::Date(Date(0)),
+                OwnedValue::Timestamp(Timestamp(86_400_000_000)),
+                OwnedValue::TimestampTz(Timestamp(-1)),
+                OwnedValue::Time(Time(3_723_000_004)),
+                OwnedValue::Interval(Interval {
+                    months: 14,
+                    days: -3,
+                    micros: 5,
+                }),
+                OwnedValue::Numeric(Decimal128 {
+                    unscaled: -1_234_567,
+                    scale: 3,
+                }),
+                OwnedValue::BoolArray(vec![Some(true), None]),
+                OwnedValue::I16Array(vec![Some(-1), Some(2)]),
+                OwnedValue::I32Array(vec![None, Some(i32::MIN)]),
+                OwnedValue::I64Array(vec![Some(i64::MAX)]),
+                OwnedValue::F32Array(vec![Some(1.5)]),
+                OwnedValue::F64Array(vec![Some(-0.25), None]),
+                OwnedValue::TextArray(vec![Some("a b".into()), None, Some("é".into())]),
+                OwnedValue::Unknown("happy".into()),
+                OwnedValue::Unknown("10.1.2.3/24".into()),
+            ],
+        )
+        .run()?;
+    assert!(res[0].is_ok(), "{:?}", res[0]);
+    let d = c.collect(
+        &format!(
+            "SELECT u::text, d::text, ts::text, tz::text, tm::text, iv::text, n::text, ab::text, a2::text, \
+             a4::text, a8::text, f4::text, f8::text, tx::text, m::text, ip::text FROM {t}"
+        ),
+        &[],
+    )?;
+    let r = d.chunks[0].row(0).unwrap();
+    let got: Vec<&str> = (0..16).map(|i| r.get::<&str>(i).unwrap()).collect();
+    assert_eq!(
+        got,
+        [
+            "abababab-abab-abab-abab-abababababab",
+            "1970-01-01",
+            "1970-01-02 00:00:00",
+            "1969-12-31 23:59:59.999999+00",
+            "01:02:03.000004",
+            "P1Y2M-3DT0.000005S",
+            "-1234.567",
+            "{t,NULL}",
+            "{-1,2}",
+            "{NULL,-2147483648}",
+            "{9223372036854775807}",
+            "{1.5}",
+            "{-0.25,NULL}",
+            "{\"a b\",NULL,é}",
+            "happy",
+            "10.1.2.3/24",
+        ]
+    );
+    c.close();
+    Ok(())
+}

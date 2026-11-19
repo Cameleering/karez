@@ -7,7 +7,7 @@ _Updated 2026-11-16. Read this first, then [plan.md](design/plan.md)._
 karez is in the **design stage with a first working slice** on the branch `claude/m0-spike-1bacb7`
 (local, not pushed, not merged): a PostgreSQL client with optional TLS. It has no release and
 **first measurements** (a reduced campaign on 2026-11-14, one-lane experiments and a two-round, three-lane campaign on 2026-11-16 plus a third round and a tail run on 2026-11-18, [perf-program.md](design/perf-program.md) sections 17, 19 and 20; they support the README figures with their conditions, not a "fastest" claim). The owner decided on 2026-11-16 to go ahead with the current numbers and to **park the faster-network test** that would settle the plan's 2x bulk-read gate ([design/perf-program.md](design/perf-program.md) sections 9 to 15). It was verified against a real server on **PostgreSQL 14.25, 16.15 and 17.12;
-versions 13, 15 and 18 were not run**. The repository is private at `github.com/pmsudhi/karez`. What was built,
+versions 13 to 18 were all run on 2026-11-19 (13.23, 14.25, 15.20, 16.16, 17.11 and 18.7)**. The repository is private at `github.com/pmsudhi/karez`. What was built,
 tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-results.md).
 
 | area | state |
@@ -46,7 +46,7 @@ tested and how to rerun it is in [design/m0-spike-results.md](design/m0-spike-re
 - **Slow streams:** a stream leases its connection; other commands wait in a bounded queue. No automatic second connection.
 - **Audit:** ~~plan and fund an external audit before 1.0~~ **Changed 2026-11-16 by the owner: no paid audit.** Assurance comes from tests, fuzzing (30 CPU-days without a new crash, plan M8), `cargo audit`, `cargo deny`, review of every `unsafe` block in the ODBC FFI crate and public review. This is a lower assurance than a paid audit for an ODBC driver that BI tools would load; the risk is recorded in plan section 9.
 - **Names:** reserve `karez` and `karez-*` on crates.io, PyPI and npm now, as minimal placeholders. **crates.io done 2026-11-16** (`karez`, `karez-chunk`, `karez-proto-pg`, `karez-pg`, `karez-rt`, version 0.0.1, no code; the owner told me to publish them with the existing cargo login). **npm and PyPI not done**: there is no login on this machine (`npm whoami` fails, no PyPI token); the packages are built and checked in `packaging/placeholders/`, and need the owner to log in. Planned names beyond these five (`karez-odbc`, `karez-adbc`, `karez-jdbc`, ...) are not reserved: crates.io forbids squatting, so reserve each when it has code.
-- **PostgreSQL versions:** the real-server suite passes on 14.25, 16.15 and 17.12 (13, 15, 18 not run).
+- **PostgreSQL versions:** the real-server suite passes on 13.23, 14.25, 15.20, 16.16, 17.11 and 18.7 (plain on all six; TLS on all six too; `tests/docker/compose.yaml` has a profile for each; 2026-11-19). The partitioned scan needs 14 or later and the tests check its refusal on 13.
 
 ## Milestone 1 (started 2026-11-18)
 
@@ -62,7 +62,7 @@ The owner moved the project from Milestone 0 to Milestone 1 on 2026-11-18 and ch
 - [x] Blocking pool, `COPY` in and out, `LISTEN`/`NOTIFY`, cancel, write batches, and decoders for
       `numeric`, `json`, `jsonb`, `interval`, `time`, `inet`, enums, arrays and more (rendered to
       text); MSRV 1.85 tested.
-- [x] Run the same suite on PostgreSQL 14.25 and 17.12 (all 39 real-server tests pass on both). 13, 15 and 18 are not run.
+- [x] Run the same suite on PostgreSQL 14.25 and 17.12 (all 39 real-server tests pass on both). 13, 15 and 18 were added on 2026-11-19: see the PostgreSQL versions line above.
 - [x] TLS (`sslmode=verify-full` default, `tls` feature, rustls). The shared connection works over TLS.
 - [x] `karez-rt`: shared pipelined connection with futures (built; see [design/karez-rt.md](design/karez-rt.md) section 13 for the gaps).
 - [x] The `bench/` load generator: open loop, SLO-throughput search, adapters for 16 PostgreSQL clients (Rust, Python, Go, C, Java), bulk scenarios S4 to S6, DigitalOcean scripts. Tested in WSL on PostgreSQL 17 and 18, plain and TLS. See [bench/README.md](../bench/README.md).

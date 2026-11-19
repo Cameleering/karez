@@ -745,3 +745,457 @@ fn timestamps_beyond_the_unix_epoch_range_are_a_value_error() -> R {
     );
     Ok(())
 }
+
+// ---- the types that are read as rendered text ------------------------------------------------
+//
+// Random text goes in as a text-format parameter (the server parses it), is read back in the binary
+// format and rendered by us, and must equal the server's own text of the same stored value.
+
+type Gen = fn(&mut SplitMix64) -> String;
+
+fn pick<'a>(rng: &mut SplitMix64, items: &[&'a str]) -> &'a str {
+    items[rng.range(0, items.len() - 1)]
+}
+
+fn hex_bytes(rng: &mut SplitMix64, n: usize, sep: &str) -> String {
+    rng.bytes(n)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+/// 8 groups with runs of zeros, so the IPv6 compression rules are exercised.
+fn v6_groups(rng: &mut SplitMix64) -> [u16; 8] {
+    let mut g = [0u16; 8];
+    for x in g.iter_mut() {
+        *x = match rng.below(4) {
+            0 | 1 => 0,
+            2 => rng.below(16) as u16,
+            _ => rng.next_u32() as u16,
+        };
+    }
+    if rng.chance(1, 5) {
+        // an IPv4-mapped or IPv4-compatible shape
+        g[..5].fill(0);
+        g[5] = if rng.chance(1, 2) { 0xffff } else { 0 };
+    }
+    g
+}
+
+fn v6_text(g: &[u16; 8]) -> String {
+    g.iter()
+        .map(|x| format!("{x:x}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn gen_inet(rng: &mut SplitMix64) -> String {
+    if rng.chance(1, 2) {
+        let a = rng.bytes(4);
+        let p = rng.range(0, 32);
+        let base = format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]);
+        if p == 32 && rng.chance(1, 2) {
+            base
+        } else {
+            format!("{base}/{p}")
+        }
+    } else {
+        let g = v6_groups(rng);
+        let p = rng.range(0, 128);
+        if p == 128 && rng.chance(1, 2) {
+            v6_text(&g)
+        } else {
+            format!("{}/{p}", v6_text(&g))
+        }
+    }
+}
+
+fn gen_cidr(rng: &mut SplitMix64) -> String {
+    if rng.chance(1, 2) {
+        let p = rng.range(0, 32);
+        let b = rng.bytes(4);
+        let mut v = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        v = if p == 0 {
+            0
+        } else {
+            v & (u32::MAX << (32 - p))
+        };
+        let a = v.to_be_bytes();
+        format!("{}.{}.{}.{}/{p}", a[0], a[1], a[2], a[3])
+    } else {
+        let p = rng.range(0, 128);
+        let g = v6_groups(rng);
+        let mut v = g.iter().fold(0u128, |a, x| a << 16 | u128::from(*x));
+        v = if p == 0 {
+            0
+        } else {
+            v & (u128::MAX << (128 - p))
+        };
+        let mut out = [0u16; 8];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = (v >> (112 - 16 * i)) as u16;
+        }
+        format!("{}/{p}", v6_text(&out))
+    }
+}
+
+fn gen_bits(rng: &mut SplitMix64, n: usize) -> String {
+    (0..n)
+        .map(|_| if rng.chance(1, 2) { '1' } else { '0' })
+        .collect()
+}
+
+fn gen_json_value(rng: &mut SplitMix64, depth: usize) -> String {
+    let sp = if rng.chance(1, 2) { " " } else { "" };
+    match rng.below(if depth == 0 { 6 } else { 8 }) {
+        0 => "null".into(),
+        1 => "true".into(),
+        2 => "false".into(),
+        3 => format!("{}", rng.next_u64() as i64 / 1000),
+        4 => format!(
+            "{}{}.{}e{}",
+            if rng.chance(1, 2) { "-" } else { "" },
+            rng.below(1000),
+            rng.below(100000),
+            rng.range(0, 40) as i32 - 20
+        ),
+        5 => {
+            let s = rng.string(8).replace(['"', '\\'], "x");
+            let esc = pick(rng, &["", "\\n", "\\\"", "\\\\", "\\u00e9", "\\t", "/"]);
+            format!("\"{s}{esc}\"")
+        }
+        6 => {
+            let n = rng.range(0, 4);
+            let items: Vec<String> = (0..n).map(|_| gen_json_value(rng, depth - 1)).collect();
+            format!("[{sp}{}{sp}]", items.join(&format!(",{sp}")))
+        }
+        _ => {
+            let n = rng.range(0, 4);
+            let items: Vec<String> = (0..n)
+                .map(|i| {
+                    let k = format!("k{i}{}", rng.string(3).replace(['"', '\\'], "y"));
+                    format!("\"{k}\"{sp}:{sp}{}", gen_json_value(rng, depth - 1))
+                })
+                .collect();
+            format!("{{{sp}{}{sp}}}", items.join(&format!(",{sp}")))
+        }
+    }
+}
+
+fn gen_json(rng: &mut SplitMix64) -> String {
+    gen_json_value(rng, 3)
+}
+
+fn gen_xml(rng: &mut SplitMix64) -> String {
+    fn el(rng: &mut SplitMix64, depth: usize) -> String {
+        let name = pick(rng, &["a", "item", "x1", "row"]);
+        let attr = if rng.chance(1, 3) {
+            format!(" id=\"{}\"", rng.below(1000))
+        } else {
+            String::new()
+        };
+        let text = rng
+            .string(6)
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let kids = if depth > 0 && rng.chance(1, 2) {
+            (0..rng.range(1, 3))
+                .map(|_| el(rng, depth - 1))
+                .collect::<String>()
+        } else {
+            String::new()
+        };
+        format!("<{name}{attr}>{text}{kids}</{name}>")
+    }
+    el(rng, 2)
+}
+
+fn gen_timetz(rng: &mut SplitMix64) -> String {
+    let off_m = pick(rng, &["00", "30", "45", "15"]);
+    let frac = if rng.chance(1, 2) {
+        format!(".{:06}", rng.below(1_000_000))
+    } else {
+        String::new()
+    };
+    format!(
+        "{:02}:{:02}:{:02}{frac}{}{:02}:{off_m}",
+        rng.below(24),
+        rng.below(60),
+        rng.below(60),
+        if rng.chance(1, 2) { "+" } else { "-" },
+        rng.below(16)
+    )
+}
+
+fn gen_time(rng: &mut SplitMix64) -> String {
+    if rng.chance(1, 20) {
+        return "24:00:00".into();
+    }
+    format!(
+        "{:02}:{:02}:{:02}.{:06}",
+        rng.below(24),
+        rng.below(60),
+        rng.below(60),
+        rng.below(1_000_000)
+    )
+}
+
+/// `numeric` has infinities from PostgreSQL 14; the generator avoids them on older servers.
+static INFINITY_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn gen_numeric(rng: &mut SplitMix64) -> String {
+    match rng.below(20) {
+        0 => return "NaN".into(),
+        1 if INFINITY_OK.load(std::sync::atomic::Ordering::Relaxed) => {
+            return pick(rng, &["Infinity", "-Infinity"]).into()
+        }
+        _ => {}
+    }
+    let int = rng.range(0, 28);
+    let frac = rng.range(0, 20);
+    let digits = |rng: &mut SplitMix64, n: usize| -> String {
+        (0..n)
+            .map(|_| char::from(b'0' + rng.below(10) as u8))
+            .collect()
+    };
+    let i = if int == 0 {
+        "0".to_string()
+    } else {
+        digits(rng, int)
+    };
+    let f = if frac == 0 {
+        String::new()
+    } else {
+        format!(".{}", digits(rng, frac))
+    };
+    format!("{}{i}{f}", if rng.chance(1, 2) { "-" } else { "" })
+}
+
+fn gen_interval(rng: &mut SplitMix64) -> String {
+    let sign = |rng: &mut SplitMix64| if rng.chance(1, 2) { "-" } else { "+" };
+    format!(
+        "{}{} years {}{} mons {}{} days {}{}:{:02}:{:02}.{:06}",
+        sign(rng),
+        rng.below(2000),
+        sign(rng),
+        rng.below(24),
+        sign(rng),
+        rng.below(1000),
+        sign(rng),
+        rng.below(5000),
+        rng.below(60),
+        rng.below(60),
+        rng.below(1_000_000)
+    )
+}
+
+fn gen_text(rng: &mut SplitMix64) -> String {
+    if rng.chance(1, 3) {
+        pick(
+            rng,
+            &[
+                "",
+                "NULL",
+                "null",
+                "a,b",
+                "{x}",
+                "q\"uote",
+                "back\\slash",
+                " lead",
+                "trail ",
+                "tab\t",
+                "{",
+                "}",
+                "\"",
+                "\\",
+            ],
+        )
+        .into()
+    } else {
+        rng.string(10)
+    }
+}
+
+fn gen_uuid(rng: &mut SplitMix64) -> String {
+    let h = hex_bytes(rng, 16, "");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..]
+    )
+}
+
+/// A random array literal built from an element generator: NULLs, one or two dimensions, now and
+/// then a lower bound other than 1. Every element is quoted, so any text survives.
+fn gen_array(rng: &mut SplitMix64, elem: Gen) -> String {
+    let quote = |s: String| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let item = |rng: &mut SplitMix64| {
+        if rng.chance(1, 6) {
+            "NULL".to_string()
+        } else {
+            quote(elem(rng))
+        }
+    };
+    if rng.chance(1, 12) {
+        return "{}".into();
+    }
+    if rng.chance(1, 4) {
+        let (r, c) = (rng.range(1, 3), rng.range(1, 3));
+        let rows: Vec<String> = (0..r)
+            .map(|_| {
+                format!(
+                    "{{{}}}",
+                    (0..c).map(|_| item(rng)).collect::<Vec<_>>().join(",")
+                )
+            })
+            .collect();
+        format!("{{{}}}", rows.join(","))
+    } else {
+        let n = rng.range(1, 6);
+        let body = format!(
+            "{{{}}}",
+            (0..n).map(|_| item(rng)).collect::<Vec<_>>().join(",")
+        );
+        if rng.chance(1, 5) {
+            let lo = rng.range(0, 5) as i32 - 2;
+            format!("[{lo}:{}]={body}", lo + n as i32 - 1)
+        } else {
+            body
+        }
+    }
+}
+
+#[test]
+fn random_values_of_the_rendered_types_match_the_servers_text() -> R {
+    let addr = need_server!();
+    let mut c = connect(&addr)?;
+    let rows: usize = std::env::var("KAREZ_DIFF_ROWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+    let seed: u64 = std::env::var("KAREZ_DIFF_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0x5EED_0104);
+    let mut rng = SplitMix64::new(seed);
+    let major: u32 = c
+        .server_param("server_version")
+        .and_then(|v| v.split(['.', ' ']).next())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(14);
+    INFINITY_OK.store(major >= 14, std::sync::atomic::Ordering::Relaxed);
+    let gen_bit13: Gen = |r| gen_bits(r, 13);
+    let gen_varbit: Gen = |r| {
+        let n = r.range(0, 70);
+        gen_bits(r, n)
+    };
+    let gen_mac: Gen = |r| hex_bytes(r, 6, ":");
+    let gen_mac8: Gen = |r| hex_bytes(r, 8, ":");
+    let gen_bytea: Gen = |r| {
+        let n = r.range(0, 10);
+        format!("\\x{}", hex_bytes(r, n, ""))
+    };
+    let gen_mood: Gen = |r| pick(r, &["sad", "ok", "happy"]).into();
+    let gen_i2: Gen = |r| (r.next_u32() as i16).to_string();
+    let gen_i4: Gen = |r| (r.next_u32() as i32).to_string();
+    let gen_i8: Gen = |r| (r.next_u64() as i64).to_string();
+    let gen_bool: Gen = |r| {
+        if r.chance(1, 2) {
+            "t".into()
+        } else {
+            "f".into()
+        }
+    };
+    // (column type, generator, the server's text of the stored value)
+    let scalars: Vec<(&str, Gen, &str)> = vec![
+        ("inet", gen_inet, "abbrev(v)"), // inet::text always adds the netmask; abbrev is its output form
+        ("cidr", gen_cidr, "v::text"),
+        ("macaddr", gen_mac, "v::text"),
+        ("macaddr8", gen_mac8, "v::text"),
+        ("bit(13)", gen_bit13, "v::text"),
+        ("varbit", gen_varbit, "v::text"),
+        ("json", gen_json, "v::text"),
+        ("jsonb", gen_json, "v::text"),
+        ("xml", gen_xml, "v::text"),
+        ("timetz", gen_timetz, "v::text"),
+        ("mood", gen_mood, "v::text"),
+        ("numeric", gen_numeric, "v::text"), // unconstrained: delivered as text
+    ];
+    let elems: Vec<(&str, Gen)> = vec![
+        ("numeric", gen_numeric),
+        ("interval", gen_interval),
+        ("time", gen_time),
+        ("timetz", gen_timetz),
+        ("uuid", gen_uuid),
+        ("text", gen_text),
+        ("varchar", gen_text),
+        ("bytea", gen_bytea),
+        ("inet", gen_inet),
+        ("cidr", gen_cidr),
+        ("macaddr", gen_mac),
+        ("bit(13)", gen_bit13),
+        ("varbit", gen_varbit),
+        ("jsonb", gen_json),
+        ("json", gen_json),
+        ("xml", gen_xml),
+        ("int2", gen_i2),
+        ("int4", gen_i4),
+        ("int8", gen_i8),
+        ("bool", gen_bool),
+    ];
+    // (name, column type, scalar generator or element generator, server text expression)
+    let mut cases: Vec<(String, Gen, bool, &str)> = Vec::new();
+    for (ty, g, cmp) in &scalars {
+        cases.push((ty.to_string(), *g, false, *cmp));
+    }
+    for (ty, g) in &elems {
+        cases.push((format!("{ty}[]"), *g, true, "v::text"));
+    }
+    for (ty, g, is_array, cmp) in &cases {
+        c.execute(
+            &format!("CREATE TEMP TABLE d (id int PRIMARY KEY, v {ty})"),
+            &[],
+        )?;
+        let mut texts = Vec::new();
+        for id in 0..rows {
+            let t = if *is_array {
+                gen_array(&mut rng, *g)
+            } else {
+                g(&mut rng)
+            };
+            let null = rng.chance(1, 15);
+            let p = [
+                Value::I32(id as i32),
+                if null {
+                    Value::Null
+                } else {
+                    Value::Unknown(&t)
+                },
+            ];
+            c.execute(&format!("INSERT INTO d VALUES ($1, $2::{ty})"), &p)
+                .inspect_err(|_| eprintln!("{ty}: the server refused the generated value {t:?}"))?;
+            texts.push(t);
+        }
+        let mut cur = c.query(&format!("SELECT id, v, {cmp} FROM d ORDER BY id"), &[])?;
+        let mut n = 0;
+        while let Some(r) = cur.next()? {
+            let id = r.get::<i32>(0)? as usize;
+            assert_eq!(
+                r.get::<Option<&str>>(1)?,
+                r.get::<Option<&str>>(2)?,
+                "{ty} #{id}: sent {:?}",
+                texts[id]
+            );
+            n += 1;
+        }
+        assert_eq!(n, rows, "{ty}");
+        drop(cur);
+        c.execute("DROP TABLE d", &[])?;
+    }
+    Ok(())
+}

@@ -6,7 +6,7 @@ SQLite, with JDBC, ODBC and ADBC parity and exports, and Arrow-native results.
 
 ## Know the status first
 
-karez is in the **design stage with a first working slice**: a PostgreSQL client with optional TLS (feature `tls`), verified against a real server on PostgreSQL 14.25, 16.15 and 17.12 (13, 15 and 18 were not run). There is no release. The measurements are a reduced campaign and a two-round, three-lane campaign (see bench/README.md); they support the figures in the README with their conditions, not a "fastest" claim. Other databases and the exports are not built.
+karez is in the **design stage with a first working slice**: a PostgreSQL client with optional TLS (feature `tls`), verified against a real server on PostgreSQL 13.23, 14.25, 15.20, 16.16, 17.11 and 18.7 (all six majors, 2026-11-19; the partitioned scan needs 14 or later and refuses cleanly on 13). There is no release. The measurements are a reduced campaign and a two-round, three-lane campaign (see bench/README.md); they support the figures in the README with their conditions, not a "fastest" claim. Other databases and the exports are not built.
 The repository holds the research, the build plan and the brand assets.
 
 - Do not describe any crate, driver, wheel, JAR or benchmark result as existing. When you write

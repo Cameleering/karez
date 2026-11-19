@@ -8,11 +8,11 @@
 
 use crate::engine::{Class, CommandId, Done, Engine, Event, Prepared, RawPrepared};
 use crate::error::{Error, Result};
-use karez_chunk::Chunk;
+use karez_chunk::{Chunk, Date, Decimal128, Interval, Time, Timestamp};
 use karez_pg::{
     CancelToken, Config, Connection, Error as PgError, Notification, RawParts, UnsupportedTypes,
 };
-use karez_proto_pg::{ResultPlan, TxStatus, Value};
+use karez_proto_pg::{Array, ResultPlan, TxStatus, Value};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
@@ -932,6 +932,37 @@ pub enum OwnedValue {
     Text(String),
     /// `bytea`
     Bytes(Vec<u8>),
+    /// `uuid`
+    Uuid([u8; 16]),
+    /// `date`
+    Date(Date),
+    /// `timestamp`
+    Timestamp(Timestamp),
+    /// `timestamptz`
+    TimestampTz(Timestamp),
+    /// `time`
+    Time(Time),
+    /// `interval`
+    Interval(Interval),
+    /// `numeric`, sent in the binary format with the value's scale
+    Numeric(Decimal128),
+    /// `bool[]`
+    BoolArray(Vec<Option<bool>>),
+    /// `int2[]`
+    I16Array(Vec<Option<i16>>),
+    /// `int4[]`
+    I32Array(Vec<Option<i32>>),
+    /// `int8[]`
+    I64Array(Vec<Option<i64>>),
+    /// `float4[]`
+    F32Array(Vec<Option<f32>>),
+    /// `float8[]`
+    F64Array(Vec<Option<f64>>),
+    /// `text[]`
+    TextArray(Vec<Option<String>>),
+    /// A text-format literal whose type the server infers (an enum label, `inet`, `jsonb`, an
+    /// array literal of another element type).
+    Unknown(String),
 }
 
 impl OwnedValue {
@@ -946,6 +977,21 @@ impl OwnedValue {
             OwnedValue::F64(v) => Value::F64(*v),
             OwnedValue::Text(v) => Value::Text(v),
             OwnedValue::Bytes(v) => Value::Bytes(v),
+            OwnedValue::Uuid(v) => Value::Uuid(*v),
+            OwnedValue::Date(v) => Value::Date(*v),
+            OwnedValue::Timestamp(v) => Value::Timestamp(*v),
+            OwnedValue::TimestampTz(v) => Value::TimestampTz(*v),
+            OwnedValue::Time(v) => Value::Time(*v),
+            OwnedValue::Interval(v) => Value::Interval(*v),
+            OwnedValue::Numeric(v) => Value::Numeric(*v),
+            OwnedValue::BoolArray(v) => Value::Array(Array::Bool(v)),
+            OwnedValue::I16Array(v) => Value::Array(Array::I16(v)),
+            OwnedValue::I32Array(v) => Value::Array(Array::I32(v)),
+            OwnedValue::I64Array(v) => Value::Array(Array::I64(v)),
+            OwnedValue::F32Array(v) => Value::Array(Array::F32(v)),
+            OwnedValue::F64Array(v) => Value::Array(Array::F64(v)),
+            OwnedValue::TextArray(v) => Value::Array(Array::Strings(v)),
+            OwnedValue::Unknown(v) => Value::Unknown(v),
         }
     }
 }

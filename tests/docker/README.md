@@ -11,7 +11,9 @@ KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 cargo test -p karez-pg --te
 docker compose -f tests/docker/compose.yaml down -v          # removes the container and its volume
 ```
 
-The host port is `127.0.0.1:54316` (override with `KAREZ_TEST_PG16_PORT`). Containers and volumes
+The host port is `127.0.0.1:54316` (override with `KAREZ_TEST_PG16_PORT`). Profiles `pg13`, `pg14`, `pg15`, `pg17` and `pg18` start the other majors on ports 54313, 54314, 54315, 54317 and 54318
+(`docker compose -f tests/docker/compose.yaml --profile pg13 up -d --wait pg13`); the suite passes on all six. A container made from another copy of the repository can lose its published port
+when compose recreates the project network: recreate it with the same command from this folder. Containers and volumes
 are named `karez-test-*`.
 
 `KAREZ_TEST_PG` is the server address (`host:port`). If it is unset or the server is not

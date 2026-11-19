@@ -543,7 +543,7 @@ fn rendered_types_match_the_servers_own_text() -> R {
     let cases = [
         "SELECT v, v::text FROM (VALUES (0::numeric),(1),(-1),(0.5),(-0.0001),(0.0000000001),(10000),\
          (99999999),(1e100),(-123456789012345678901234567890.1234567890123456789),('NaN'),\
-         ('Infinity'),('-Infinity'),(12345678901234567890.123456789),(5.10),(0.000),(NULL)) t(v)",
+         (12345678901234567890.123456789),(5.10),(0.000),(NULL)) t(v)",
         "SELECT v, v::text FROM (SELECT round((i * 7919)::numeric * 123456789.123456789 \
          / (10::numeric ^ (i % 25)), i % 15) * (CASE WHEN i % 2 = 0 THEN -1 ELSE 1 END) AS v \
          FROM generate_series(1, 2000) i) t",
@@ -594,6 +594,11 @@ fn rendered_types_match_the_servers_own_text() -> R {
     ];
     for sql in cases {
         assert!(same_as_server(&mut c, sql)? > 0, "{sql}");
+    }
+    if major(&c) >= 14 {
+        // numeric infinities exist from PostgreSQL 14
+        let sql = "SELECT v, v::text FROM (VALUES ('Infinity'::numeric),('-Infinity')) t(v)";
+        assert_eq!(same_as_server(&mut c, sql)?, 2);
     }
     // Floating-point arrays use Rust's shortest form, so check them against known values.
     let mut cur = c.query(
@@ -2280,6 +2285,32 @@ mod tls {
 
 // ---- partitioned scans and multi-row inserts -----------------------------------------------------
 
+/// The server's major version, from the `server_version` it reports at startup.
+fn major(c: &Connection) -> u32 {
+    c.server_param("server_version")
+        .and_then(|v| v.split(['.', ' ']).next())
+        .and_then(|v| v.parse().ok())
+        .expect("server_version")
+}
+
+/// Partitioned scans use TID range scans (PostgreSQL 14 and later). On an older server the call
+/// must be refused with a clear usage error, which is all that can be checked there.
+macro_rules! need_tid_range_scans {
+    ($c:expr, $addr:expr) => {
+        if major(&$c) < 14 {
+            eprintln!("PostgreSQL {} has no TID range scans: checking the refusal only", major(&$c));
+            let r = karez_pg::scan_partitioned(
+                &scan_config(&$addr),
+                &karez_pg::Scan::new("pg_class", &["oid"]).partitions(2),
+                |_| 0i64,
+                |_, _| Ok(()),
+            );
+            assert!(matches!(r, Err(Error::Usage(m)) if m.contains("14")), "{r:?}");
+            return Ok(());
+        }
+    };
+}
+
 fn scan_config(addr: &str) -> Config {
     Config::from_url(&url(addr, "karez_scram", Some(SCRAM_PW), "karez", "")).expect("url")
 }
@@ -2436,6 +2467,7 @@ fn insert_batch_inserts_in_statements_and_is_atomic() -> R {
 fn scan_partitioned_reads_every_row_once_for_any_partition_count() -> R {
     let addr = need_server!();
     let mut c = connect(&addr)?;
+    need_tid_range_scans!(c, addr);
     let t = Table::create(
         &mut c,
         "scan",
@@ -2495,6 +2527,7 @@ fn scan_partitioned_reads_every_row_once_for_any_partition_count() -> R {
 fn scan_partitioned_sees_one_snapshot_while_the_table_changes() -> R {
     let addr = need_server!();
     let mut c = connect(&addr)?;
+    need_tid_range_scans!(c, addr);
     let t = Table::create(&mut c, "snap", "id int8 PRIMARY KEY, v int8 NOT NULL")?;
     let name = t.name.clone();
     t.conn.execute(
@@ -2540,6 +2573,7 @@ fn scan_partitioned_sees_one_snapshot_while_the_table_changes() -> R {
 fn scan_partitioned_empty_table_errors_and_usage() -> R {
     let addr = need_server!();
     let mut c = connect(&addr)?;
+    need_tid_range_scans!(c, addr);
     let t = Table::create(&mut c, "scanedge", "id int8 PRIMARY KEY, v int8")?;
     let name = t.name.clone();
     let cfg = scan_config(&addr);
@@ -2614,6 +2648,7 @@ fn scan_partitioned_empty_table_errors_and_usage() -> R {
 fn scan_partitioned_pool_reuses_connections_and_leaves_them_clean() -> R {
     let addr = need_server!();
     let mut c = connect(&addr)?;
+    need_tid_range_scans!(c, addr);
     let t = Table::create(&mut c, "poolscan", "id int8 PRIMARY KEY, v int8 NOT NULL")?;
     let name = t.name.clone();
     t.conn.execute(
@@ -2709,9 +2744,16 @@ fn a_real_server_reports_what_target_session_attrs_needs() -> R {
     let addr = need_server!();
     let port = addr.rsplit(':').next().unwrap();
     // PostgreSQL 14 and later send these two at startup; the client decides from them without a query.
+    // Older servers do not, and the client then asks with a query: the rest of this test runs the
+    // same checks through that path.
     let c = connect(&addr)?;
-    assert_eq!(c.server_param("in_hot_standby"), Some("off"));
-    assert_eq!(c.server_param("default_transaction_read_only"), Some("off"));
+    if major(&c) >= 14 {
+        assert_eq!(c.server_param("in_hot_standby"), Some("off"));
+        assert_eq!(c.server_param("default_transaction_read_only"), Some("off"));
+    } else {
+        assert_eq!(c.server_param("in_hot_standby"), None);
+        assert_eq!(c.server_param("default_transaction_read_only"), None);
+    }
     drop(c);
     // a dead first host, then the real server, which is a read-write primary
     let dead = {

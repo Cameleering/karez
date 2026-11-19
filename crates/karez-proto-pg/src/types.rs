@@ -477,6 +477,8 @@ pub enum Array<'a> {
     F64(&'a [Option<f64>]),
     /// `text[]`
     Text(&'a [Option<&'a str>]),
+    /// `text[]` from owned strings (for callers that keep their values in `String`s).
+    Strings(&'a [Option<String>]),
 }
 
 impl Array<'_> {
@@ -489,7 +491,7 @@ impl Array<'_> {
             Array::I64(_) => 1016,
             Array::F32(_) => 1021,
             Array::F64(_) => 1022,
-            Array::Text(_) => 1009,
+            Array::Text(_) | Array::Strings(_) => 1009,
         }
     }
 
@@ -501,7 +503,7 @@ impl Array<'_> {
             Array::I64(_) => oid::INT8,
             Array::F32(_) => oid::FLOAT4,
             Array::F64(_) => oid::FLOAT8,
-            Array::Text(_) => oid::TEXT,
+            Array::Text(_) | Array::Strings(_) => oid::TEXT,
         }
     }
 
@@ -547,6 +549,7 @@ impl Array<'_> {
             Array::F32(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
             Array::F64(v) => body(v, e, out, |x, o| o.extend_from_slice(&x.to_be_bytes())),
             Array::Text(v) => body(v, e, out, |x, o| o.extend_from_slice(x.as_bytes())),
+            Array::Strings(v) => body(v, e, out, |x, o| o.extend_from_slice(x.as_bytes())),
         }
     }
 }
