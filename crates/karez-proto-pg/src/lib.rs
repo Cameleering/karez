@@ -23,9 +23,11 @@ pub mod error;
 pub mod frame;
 pub mod frontend;
 mod numeric;
+pub mod oauth;
 mod render;
 pub mod scram;
 pub mod sha256;
+pub mod sha512;
 pub mod types;
 mod wire;
 

@@ -25,7 +25,7 @@ x-pg-extra: &pg-extra
       openssl ecparam -name prime256v1 -genkey -noout -out server.key
       openssl req -new -key server.key -subj "/CN=localhost" -out server.csr
       printf "subjectAltName=DNS:localhost,DNS:karez.test\nbasicConstraints=CA:FALSE\n" > ext.cnf
-      openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 30 -sha256 -extfile ext.cnf
+      openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 30 -sha$${CERT_SHA:-256} -extfile ext.cnf
       chown postgres:postgres server.key server.crt
       chmod 600 server.key
       cp ca.crt /certs/ca-$${CA_PORT}.crt
@@ -282,6 +282,8 @@ services:
     container_name: karez-test-pg18
     environment:
       CA_PORT: ${KAREZ_TEST_PG18_PORT:-54318}
+      # the server certificate is signed with SHA-384 here, so SCRAM channel binding uses SHA-384
+      CERT_SHA: "384"
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: karez_test_only_superuser_pw
       POSTGRES_DB: karez
@@ -294,6 +296,79 @@ services:
       - ./certs:/certs
       # PostgreSQL 18's image keeps the data in a versioned directory below /var/lib/postgresql
       - karez-test-pg18-data:/var/lib/postgresql
+  oauth:
+    # PostgreSQL 18 with a test OAuth validator (tests/docker/oauth); built, not pulled
+    profiles: ["oauth"]
+    build:
+      context: ./oauth
+    image: karez-test-oauth-pg18
+    container_name: karez-test-oauth
+    environment:
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+      - -c
+      - oauth_validator_libraries=karez_validator
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_OAUTH_PORT:-54319}:5432"
+    mem_limit: 512m
+    volumes:
+      - ./oauth/pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./oauth/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  kdc:
+    # A Kerberos KDC for realm KAREZ.TEST (tests/docker/gss); built, not pulled. It writes the
+    # PostgreSQL service keytab to tests/docker/gss/keytabs.
+    profiles: ["gss"]
+    build:
+      context: ./gss/kdc
+    image: karez-test-kdc
+    container_name: karez-test-kdc
+    hostname: kdc
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_KDC_PORT:-54388}:88"
+    volumes:
+      - ./gss/keytabs:/keytabs
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /keytabs/postgres.keytab && kadmin.local -q listprincs | grep -q karez_gss"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  pggss:
+    # PostgreSQL 16 that accepts a Kerberos login for the role karez_gss
+    profiles: ["gss"]
+    image: postgres:16
+    container_name: karez-test-pggss
+    depends_on:
+      kdc:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+      - -c
+      - krb_server_keyfile=/keytabs/postgres.keytab
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_GSS_PORT:-54320}:5432"
+    mem_limit: 512m
+    volumes:
+      - ./gss/pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./gss/krb5-pg.conf:/etc/krb5.conf:ro
+      - ./gss/keytabs:/keytabs:ro
+      - ./gss/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
 volumes:
   karez-test-pg16-data:
     name: karez-test-pg16-data

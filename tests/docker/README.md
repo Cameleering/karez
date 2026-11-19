@@ -57,6 +57,22 @@ KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 \
   cargo test -p karez-pg -p karez-rt --features karez-pg/tls,karez-rt/tls
 ```
 
+## OAuth and Kerberos servers
+
+Two more fixtures are **built**, not pulled, and need downloads from Debian's mirrors while building (the compiler and PostgreSQL 18's headers for the first, the Kerberos packages for the second):
+
+```sh
+docker compose -f tests/docker/compose.yaml --profile oauth up -d --build --wait oauth     # PostgreSQL 18 with a test OAuth validator, port 54319
+KAREZ_TEST_OAUTH=127.0.0.1:54319 KAREZ_REQUIRE_OAUTH=1 cargo test -p karez-pg --test auth oauth_server
+
+docker compose -f tests/docker/compose.yaml --profile gss up -d --build --wait kdc pggss   # a KDC (54388) and PostgreSQL 16 with Kerberos (54320)
+KAREZ_TEST_GSS=127.0.0.1:54320 KAREZ_REQUIRE_GSS=1 KRB5_CONFIG=$PWD/tests/docker/gss/krb5-client.conf \
+  cargo test -p karez-pg --features gss --test auth gss_server                              # Unix only
+```
+
+The OAuth validator accepts `karez-token-for-<role>` and nothing else; the Kerberos user is `karez_gss@KAREZ.TEST` with the public password `karez_test_only_gss`. The KDC writes the service keytab to `tests/docker/gss/keytabs` (git-ignored). Everything here is test-only.
+The PostgreSQL 18 TLS fixture signs its certificate with SHA-384, so SCRAM channel binding there uses SHA-384 (the others use SHA-256).
+
 ## Windows
 
 Docker runs in WSL here, and a Windows process reaches `127.0.0.1:54316` through the WSL localhost relay. **The relay stalls when a test sends and receives

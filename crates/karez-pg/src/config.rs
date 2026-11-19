@@ -1,6 +1,8 @@
 use crate::error::{Error, Result};
+use karez_proto_pg::oauth::OAuthChallenge;
 use karez_proto_pg::scram::Secret;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Which authentication outcomes the client accepts. The default accepts only SCRAM-SHA-256,
@@ -8,8 +10,14 @@ use std::time::Duration;
 /// no authentication (plan section 1.2, rule 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthPolicy {
-    /// Accept SCRAM-SHA-256 (without channel binding).
+    /// Accept SCRAM-SHA-256, and SCRAM-SHA-256-PLUS when channel binding is possible (see
+    /// [`Config::channel_binding`]).
     pub scram: bool,
+    /// Accept a Kerberos (GSSAPI) login when the server asks for it. Needs the `gss` feature.
+    pub gss: bool,
+    /// Accept OAUTHBEARER (PostgreSQL 18) when the server offers it and a token source is set
+    /// with [`Config::oauth_token_with`] or [`Config::oauth_token`]; those methods turn this on.
+    pub oauth: bool,
     /// Accept a cleartext password request.
     pub cleartext: bool,
     /// Accept a server that authenticates us without any exchange (`trust`).
@@ -20,9 +28,61 @@ impl Default for AuthPolicy {
     fn default() -> Self {
         AuthPolicy {
             scram: true,
+            gss: false,
+            oauth: false,
             cleartext: false,
             trust: false,
         }
+    }
+}
+
+/// Whether SCRAM channel binding is used (PostgreSQL's `channel_binding`). PostgreSQL implements one
+/// kind, `tls-server-end-point`, which binds the login to the server's TLS certificate, so that a
+/// man in the middle with a different certificate cannot relay it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChannelBindingMode {
+    /// Never bind (`n,,`).
+    Disable,
+    /// Bind when the connection uses TLS and the server offers `SCRAM-SHA-256-PLUS`; otherwise log in
+    /// without. This is the default, as in libpq.
+    #[default]
+    Prefer,
+    /// Fail unless the login is bound: needs TLS, and a server that offers `SCRAM-SHA-256-PLUS`.
+    Require,
+}
+
+type TokenFn = dyn Fn(Option<&OAuthChallenge>) -> std::result::Result<String, String> + Send + Sync;
+
+/// Where an OAuth bearer token comes from. The function is called once per connection attempt with
+/// `None`, and returns the token; if it returns an empty string, the client asks the server what it
+/// needs and calls the function again with that [`OAuthChallenge`] (its `scope` and
+/// `openid_configuration`) to get a token, and connects again with it. The function may block (a
+/// device flow, a call to an identity provider).
+#[derive(Clone)]
+pub struct TokenProvider(Arc<TokenFn>);
+
+impl TokenProvider {
+    /// Wrap a token function.
+    pub fn new(
+        f: impl Fn(Option<&OAuthChallenge>) -> std::result::Result<String, String>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        TokenProvider(Arc::new(f))
+    }
+
+    pub(crate) fn token(
+        &self,
+        challenge: Option<&OAuthChallenge>,
+    ) -> std::result::Result<String, String> {
+        (self.0)(challenge)
+    }
+}
+
+impl fmt::Debug for TokenProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TokenProvider(..)")
     }
 }
 
@@ -140,6 +200,14 @@ pub struct Config {
     pub read_timeout: Option<Duration>,
     /// Accepted authentication methods.
     pub auth: AuthPolicy,
+    /// SCRAM channel binding; see [`ChannelBindingMode`].
+    pub channel_binding: ChannelBindingMode,
+    /// The Kerberos service name the server's principal starts with: `krbsrvname=` in libpq,
+    /// default `postgres`. The principal is `krbsrvname/host@REALM`.
+    pub krbsrvname: String,
+    gss_credentials: Option<(String, Secret)>,
+    /// The OAuth token source for `OAUTHBEARER`, if any.
+    pub oauth: Option<TokenProvider>,
     /// Handling of columns without a decoder.
     pub unsupported_types: UnsupportedTypes,
     /// TLS policy. The default, [`SslMode::VerifyFull`], encrypts and verifies the certificate
@@ -195,6 +263,10 @@ impl Config {
             connect_timeout: Some(Duration::from_secs(10)),
             read_timeout: None,
             auth: AuthPolicy::default(),
+            channel_binding: ChannelBindingMode::Prefer,
+            krbsrvname: "postgres".to_string(),
+            gss_credentials: None,
+            oauth: None,
             unsupported_types: UnsupportedTypes::Error,
             ssl_mode: SslMode::VerifyFull,
             ssl_root_cert: None,
@@ -215,6 +287,43 @@ impl Config {
     pub fn add_host(&mut self, host: impl Into<String>, port: u16) -> &mut Self {
         self.fallback_hosts.push((host.into(), port));
         self
+    }
+
+    /// Log in with Kerberos (needs the `gss` feature) using a principal and its password: the
+    /// library asks the KDC for a ticket. Without this the credentials come from the ticket cache
+    /// (`KRB5CCNAME`, as `kinit` fills it). Turns on [`AuthPolicy::gss`].
+    pub fn gss_credentials(&mut self, principal: impl Into<String>, password: &str) -> &mut Self {
+        self.gss_credentials = Some((principal.into(), Secret::new(password.as_bytes())));
+        self.auth.gss = true;
+        self
+    }
+
+    /// The Kerberos principal and password set with [`Config::gss_credentials`].
+    #[cfg_attr(not(feature = "gss"), allow(dead_code))]
+    pub(crate) fn gss_login(&self) -> Option<(&str, &[u8])> {
+        self.gss_credentials
+            .as_ref()
+            .map(|(u, p)| (u.as_str(), p.expose()))
+    }
+
+    /// Log in with OAuth when the server offers `OAUTHBEARER` (PostgreSQL 18): `provider` supplies
+    /// the token; see [`TokenProvider`]. Turns on [`AuthPolicy::oauth`].
+    pub fn oauth_token_with(
+        &mut self,
+        provider: impl Fn(Option<&OAuthChallenge>) -> std::result::Result<String, String>
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.oauth = Some(TokenProvider::new(provider));
+        self.auth.oauth = true;
+        self
+    }
+
+    /// Log in with OAuth using a token you already have. Turns on [`AuthPolicy::oauth`].
+    pub fn oauth_token(&mut self, token: impl Into<String>) -> &mut Self {
+        let token = token.into();
+        self.oauth_token_with(move |_| Ok(token.clone()))
     }
 
     /// Set the password.
@@ -323,22 +432,44 @@ impl Config {
                     "auth" => {
                         let mut p = AuthPolicy {
                             scram: false,
+                            gss: false,
+                            oauth: false,
                             cleartext: false,
                             trust: false,
                         };
                         for m in v.split(',') {
                             match m {
                                 "scram" | "scram-sha-256" => p.scram = true,
+                                "oauth" | "oauthbearer" => p.oauth = true,
+                                "gss" | "kerberos" => p.gss = true,
                                 "password" | "cleartext" => p.cleartext = true,
                                 "trust" | "none" => p.trust = true,
                                 other => {
                                     return Err(Error::Config(format!(
-                                    "unknown auth method {other:?}; use scram, password or trust"
+                                    "unknown auth method {other:?}; use scram, oauth, gss, password or trust"
                                 )))
                                 }
                             }
                         }
                         cfg.auth = p;
+                    }
+                    "channel_binding" => {
+                        cfg.channel_binding = match v.as_str() {
+                            "disable" => ChannelBindingMode::Disable,
+                            "prefer" => ChannelBindingMode::Prefer,
+                            "require" => ChannelBindingMode::Require,
+                            other => {
+                                return Err(Error::Config(format!(
+                                    "unknown channel_binding {other:?}; use disable, prefer or require"
+                                )))
+                            }
+                        }
+                    }
+                    "krbsrvname" => {
+                        if v.is_empty() {
+                            return Err(Error::Config("krbsrvname needs a value".into()));
+                        }
+                        cfg.krbsrvname = v;
                     }
                     "target_session_attrs" => {
                         cfg.target_session_attrs = TargetSessionAttrs::parse(&v)?
@@ -458,6 +589,8 @@ mod tests {
             c.auth,
             AuthPolicy {
                 scram: true,
+                gss: false,
+                oauth: false,
                 cleartext: false,
                 trust: true
             }

@@ -104,6 +104,14 @@ pub fn sasl_initial_response(buf: &mut Vec<u8>, mechanism: &str, data: &[u8]) ->
     })
 }
 
+/// GSSResponse: a GSSAPI token from the client (the first one, and each one after).
+pub fn gss_response(buf: &mut Vec<u8>, token: &[u8]) -> Result<()> {
+    message(buf, Some(b'p'), |b| {
+        b.extend_from_slice(token);
+        Ok(())
+    })
+}
+
 /// SASLResponse: the client-final message.
 pub fn sasl_response(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     message(buf, Some(b'p'), |b| {

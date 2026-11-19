@@ -58,10 +58,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "karez-gss"
+version = "0.0.0"
+
+[[package]]
 name = "karez-pg"
 version = "0.0.0"
 dependencies = [
  "karez-chunk",
+ "karez-gss",
  "karez-pool",
  "karez-proto-pg",
  "rustls",

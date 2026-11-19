@@ -4,7 +4,10 @@ use crate::transport::Transport;
 use crate::tx::Isolation;
 use crate::tx::Transaction;
 use karez_chunk::{Chunk, ChunkBuilder, Field, RowRef};
-use karez_proto_pg::scram::{generate_nonce, ScramClient};
+use karez_proto_pg::oauth::{self, OAuthChallenge};
+use karez_proto_pg::scram::{
+    cert_hash_algorithm, certificate_signature_oid, generate_nonce, ChannelBinding, ScramClient,
+};
 use karez_proto_pg::{
     frontend, BackendMessage, ErrorFields, Frame, FrameReader, ProtoError, ResultPlan, TxStatus,
     Value,
@@ -289,6 +292,62 @@ fn shuffle(v: &mut [(String, u16)]) {
     }
 }
 
+/// The Kerberos context type: the real one with the `gss` feature, a placeholder without.
+#[cfg(feature = "gss")]
+type GssContext = karez_gss::Context;
+#[cfg(not(feature = "gss"))]
+type GssContext = ();
+
+#[cfg(feature = "gss")]
+fn gss_complete(c: &GssContext) -> bool {
+    c.is_complete()
+}
+#[cfg(not(feature = "gss"))]
+fn gss_complete(_: &GssContext) -> bool {
+    true
+}
+
+/// Start a Kerberos exchange with the service `krbsrvname@host` and return the first token.
+#[cfg(feature = "gss")]
+fn gss_start(cfg: &Config) -> Result<(GssContext, Vec<u8>)> {
+    let target = format!("{}@{}", cfg.krbsrvname, cfg.host);
+    let login = cfg.gss_login().map(|(u, p)| {
+        (
+            u,
+            std::str::from_utf8(p).map_err(|_| ProtoError::InvalidUtf8),
+        )
+    });
+    let creds = match login {
+        Some((user, Ok(password))) => karez_gss::Credentials::Password { user, password },
+        Some((_, Err(e))) => return Err(e.into()),
+        None => karez_gss::Credentials::Default,
+    };
+    let mut ctx = karez_gss::Context::new(&target, creds)
+        .map_err(|e| Error::Auth(format!("Kerberos: {e}")))?;
+    let token = ctx
+        .step(None)
+        .map_err(|e| Error::Auth(format!("Kerberos: {e}")))?;
+    Ok((ctx, token))
+}
+
+#[cfg(not(feature = "gss"))]
+fn gss_start(_cfg: &Config) -> Result<(GssContext, Vec<u8>)> {
+    Err(Error::Auth(
+        "the server asked for Kerberos (GSSAPI), which needs karez-pg's `gss` feature".into(),
+    ))
+}
+
+#[cfg(feature = "gss")]
+fn gss_step(ctx: &mut GssContext, token: &[u8]) -> Result<Vec<u8>> {
+    ctx.step(Some(token))
+        .map_err(|e| Error::Auth(format!("Kerberos: {e}")))
+}
+
+#[cfg(not(feature = "gss"))]
+fn gss_step(_ctx: &mut GssContext, _token: &[u8]) -> Result<Vec<u8>> {
+    Err(Error::Auth("Kerberos needs the `gss` feature".into()))
+}
+
 fn tcp_connect(cfg: &Config) -> Result<TcpStream> {
     tcp_connect_to(&cfg.host, cfg.port, cfg.connect_timeout)
 }
@@ -558,6 +617,34 @@ impl Connection {
     }
 
     fn connect_host(cfg: &Config) -> Result<Connection> {
+        match Connection::connect_once(cfg, None) {
+            // The server was asked what token it needs (the token source returned none the first
+            // time): get one for that challenge and connect again, once.
+            Err(Error::OAuthChallenge {
+                challenge,
+                discovery: true,
+            }) => {
+                let provider = cfg.oauth.as_ref().ok_or_else(|| {
+                    Error::Auth("the server asked for an OAuth token and none is configured".into())
+                })?;
+                let token = provider
+                    .token(Some(&challenge))
+                    .map_err(|e| Error::Auth(format!("the OAuth token source failed: {e}")))?;
+                if token.is_empty() {
+                    return Err(Error::Auth(
+                        "the OAuth token source returned no token for the server's challenge"
+                            .into(),
+                    ));
+                }
+                Connection::connect_once(cfg, Some(token))
+            }
+            other => other,
+        }
+    }
+
+    /// One connection attempt. `token` replaces the token source's first answer (the retry after a
+    /// discovery).
+    fn connect_once(cfg: &Config, token: Option<String>) -> Result<Connection> {
         let tcp = tcp_connect(cfg)?;
         tcp.set_nodelay(true)?;
         tcp.set_read_timeout(cfg.read_timeout)?;
@@ -595,14 +682,16 @@ impl Connection {
             connect_timeout: cfg.connect_timeout,
             enum_types: HashMap::new(),
         };
-        conn.startup(cfg)?;
+        conn.startup(cfg, token)?;
         Ok(conn)
     }
 
-    fn startup(&mut self, cfg: &Config) -> Result<()> {
+    fn startup(&mut self, cfg: &Config, token: Option<String>) -> Result<()> {
         enum Step {
             AuthOk,
             Cleartext,
+            Gss,
+            GssContinue(Vec<u8>),
             Md5,
             Sasl(Vec<String>),
             SaslContinue(Vec<u8>),
@@ -624,13 +713,18 @@ impl Connection {
         frontend::startup(&mut self.out, &params)?;
         self.io.send(&self.out)?;
 
+        let mut gss: Option<GssContext> = None;
         let mut scram: Option<ScramClient> = None;
+        // OAuth: whether a token was sent, and the server's JSON error once it arrives
+        let mut oauth: Option<(bool, Option<OAuthChallenge>)> = None;
         let mut exchanged = false;
         let mut verified = false;
         loop {
             let step = match self.io.next_msg(&mut self.side)? {
                 BackendMessage::AuthenticationOk => Step::AuthOk,
                 BackendMessage::AuthenticationCleartextPassword => Step::Cleartext,
+                BackendMessage::AuthenticationGss => Step::Gss,
+                BackendMessage::AuthenticationGssContinue(d) => Step::GssContinue(d.to_vec()),
                 BackendMessage::AuthenticationMd5Password { .. } => Step::Md5,
                 BackendMessage::AuthenticationSasl { mechanisms } => Step::Sasl(mechanisms),
                 BackendMessage::AuthenticationSaslContinue(d) => Step::SaslContinue(d.to_vec()),
@@ -651,11 +745,42 @@ impl Connection {
                                 .into(),
                         ));
                     }
+                    if gss.as_ref().is_some_and(|g| !gss_complete(g)) {
+                        return Err(Error::Auth(
+                            "the server finished Kerberos login before the security context was established (no mutual authentication)"
+                                .into(),
+                        ));
+                    }
                     if scram.is_some() && !verified {
                         return Err(Error::Auth(
                             "the server finished SCRAM without proving it knows the password"
                                 .into(),
                         ));
+                    }
+                }
+                Step::Gss => {
+                    if !cfg.auth.gss {
+                        return Err(Error::Auth(
+                            "the server asked for Kerberos (GSSAPI); allow that explicitly with auth=gss"
+                                .into(),
+                        ));
+                    }
+                    let (ctx, token) = gss_start(cfg)?;
+                    self.out.clear();
+                    frontend::gss_response(&mut self.out, &token)?;
+                    self.io.send(&self.out)?;
+                    gss = Some(ctx);
+                    exchanged = true;
+                }
+                Step::GssContinue(d) => {
+                    let ctx = gss
+                        .as_mut()
+                        .ok_or_else(|| Error::Auth("unexpected GSSAPI continue".into()))?;
+                    let out = gss_step(ctx, &d)?;
+                    if !out.is_empty() {
+                        self.out.clear();
+                        frontend::gss_response(&mut self.out, &out)?;
+                        self.io.send(&self.out)?;
                     }
                 }
                 Step::Cleartext => {
@@ -679,14 +804,44 @@ impl Connection {
                     ))
                 }
                 Step::Sasl(mechs) => {
+                    let offers = |m: &str| mechs.iter().any(|x| x == m);
+                    // OAuth is used only when the application set a token source and allowed it,
+                    // and the server offers it; otherwise the choice is SCRAM
+                    if cfg.auth.oauth && offers(oauth::MECHANISM) {
+                        let provider = cfg.oauth.as_ref().ok_or_else(|| {
+                            Error::Auth(
+                                "the server offers OAUTHBEARER and auth= allows it, but no token source is set"
+                                    .into(),
+                            )
+                        })?;
+                        let tok = match token.as_deref() {
+                            Some(t) => t.to_string(),
+                            None => provider.token(None).map_err(|e| {
+                                Error::Auth(format!("the OAuth token source failed: {e}"))
+                            })?,
+                        };
+                        let first = oauth::initial_response(&tok)?;
+                        self.out.clear();
+                        frontend::sasl_initial_response(&mut self.out, oauth::MECHANISM, &first)?;
+                        self.io.send(&self.out)?;
+                        oauth = Some((!tok.is_empty(), None));
+                        exchanged = true;
+                        continue;
+                    }
                     if !cfg.auth.scram {
                         return Err(Error::Auth(
                             "SCRAM authentication is not allowed by auth=".into(),
                         ));
                     }
-                    if !mechs.iter().any(|m| m == "SCRAM-SHA-256") {
+                    let binding = self.scram_binding(cfg, &mechs)?;
+                    let mech = if matches!(binding, ChannelBinding::TlsServerEndPoint(_)) {
+                        "SCRAM-SHA-256-PLUS"
+                    } else {
+                        "SCRAM-SHA-256"
+                    };
+                    if !offers(mech) {
                         return Err(Error::Auth(format!(
-                            "server offers {mechs:?}; only SCRAM-SHA-256 without channel binding is supported"
+                            "server offers {mechs:?}; this client needs {mech}"
                         )));
                     }
                     let pw = cfg
@@ -697,16 +852,31 @@ impl Connection {
                                 "the server needs a (UTF-8) password and none was given".into(),
                             )
                         })?;
-                    let c = ScramClient::new("", pw, generate_nonce());
+                    let c = ScramClient::with_binding("", pw, generate_nonce(), binding);
                     self.out.clear();
                     frontend::sasl_initial_response(
                         &mut self.out,
-                        "SCRAM-SHA-256",
+                        c.mechanism(),
                         c.client_first().as_bytes(),
                     )?;
                     self.io.send(&self.out)?;
                     scram = Some(c);
                     exchanged = true;
+                }
+                Step::SaslContinue(d) if oauth.is_some() => {
+                    // the server rejected the token and sent its JSON error; the RFC wants a single
+                    // 0x01 in answer, after which the server ends the exchange with an error
+                    let (sent_token, ch) = oauth.as_mut().expect("checked");
+                    if ch.is_some() {
+                        return Err(Error::Auth(
+                            "the server sent a second OAuth error message".into(),
+                        ));
+                    }
+                    *ch = Some(oauth::parse_challenge(&d));
+                    let _ = sent_token;
+                    self.out.clear();
+                    frontend::sasl_response(&mut self.out, oauth::ERROR_ACK)?;
+                    self.io.send(&self.out)?;
                 }
                 Step::SaslContinue(d) => {
                     let c = scram
@@ -718,6 +888,9 @@ impl Connection {
                     frontend::sasl_response(&mut self.out, fin.as_bytes())?;
                     self.io.send(&self.out)?;
                 }
+                Step::SaslFinal(_) if oauth.is_some() => {
+                    // nothing to verify: the token itself was the proof
+                }
                 Step::SaslFinal(d) => {
                     let c = scram
                         .as_ref()
@@ -726,7 +899,17 @@ impl Connection {
                     c.verify_server_final(sf)?;
                     verified = true;
                 }
-                Step::Failed(f) => return Err(Error::Server(ServerError::new(*f))),
+                Step::Failed(f) => {
+                    if let Some((sent_token, Some(challenge))) = oauth.take() {
+                        // the error that follows the JSON challenge: report what the server
+                        // said it needs, not the bare "authentication failed"
+                        return Err(Error::OAuthChallenge {
+                            challenge,
+                            discovery: !sent_token,
+                        });
+                    }
+                    return Err(Error::Server(ServerError::new(*f)));
+                }
                 Step::Key(pid, secret) => {
                     self.process_id = pid;
                     self.secret = secret;
@@ -738,6 +921,57 @@ impl Connection {
                 Step::Skip => {}
             }
         }
+    }
+
+    /// The channel-binding choice for a SCRAM exchange on this connection, from the policy, whether
+    /// the connection is TLS, what the server offers, and the server certificate.
+    fn scram_binding(&self, cfg: &Config, mechs: &[String]) -> Result<ChannelBinding> {
+        use crate::config::ChannelBindingMode as M;
+        let offers_plus = mechs.iter().any(|m| m == "SCRAM-SHA-256-PLUS");
+        let tls = self.io.stream.is_tls();
+        match cfg.channel_binding {
+            M::Disable => Ok(ChannelBinding::None),
+            mode => {
+                if !tls {
+                    return if mode == M::Require {
+                        Err(Error::Auth(
+                            "channel_binding=require needs a TLS connection".into(),
+                        ))
+                    } else {
+                        Ok(ChannelBinding::None)
+                    };
+                }
+                if !offers_plus {
+                    return if mode == M::Require {
+                        Err(Error::Auth(
+                            "channel_binding=require, but the server did not offer SCRAM-SHA-256-PLUS"
+                                .into(),
+                        ))
+                    } else {
+                        // we could bind and the server did not offer it: `y` lets a server that
+                        // does support it detect that the offer was stripped on the way
+                        Ok(ChannelBinding::Supported)
+                    };
+                }
+                let data = self.server_certificate_hash();
+                match (data, mode) {
+                    (Some(d), _) => Ok(ChannelBinding::TlsServerEndPoint(d)),
+                    (None, M::Require) => Err(Error::Auth(
+                        "channel_binding=require, but the server certificate's signature algorithm has no hash to bind to"
+                            .into(),
+                    )),
+                    (None, _) => Ok(ChannelBinding::None),
+                }
+            }
+        }
+    }
+
+    /// The `tls-server-end-point` data (RFC 5929) for the server's certificate: its hash under the
+    /// hash of its own signature algorithm, with SHA-256 for MD5 and SHA-1.
+    fn server_certificate_hash(&self) -> Option<Vec<u8>> {
+        let der = self.io.stream.server_certificate()?;
+        let alg = cert_hash_algorithm(certificate_signature_oid(&der)?)?;
+        Some(alg.digest(&der))
     }
 
     /// Give up the connection object and return its socket and session facts, for a layer that

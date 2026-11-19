@@ -101,6 +101,19 @@ impl Transport {
         }
     }
 
+    /// The server's certificate (DER) as presented in the handshake, for channel binding.
+    pub(crate) fn server_certificate(&self) -> Option<Vec<u8>> {
+        match self {
+            #[cfg(feature = "tls")]
+            Transport::Tls(s) => s
+                .conn
+                .peer_certificates()
+                .and_then(|c| c.first())
+                .map(|c| c.as_ref().to_vec()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_tls(&self) -> bool {
         !matches!(self, Transport::Plain(_) | Transport::Taken)
     }

@@ -5,6 +5,7 @@ members = [
     "crates/karez-proto-pg",
     "crates/karez-pool",
     "crates/karez-pg",
+    "crates/karez-gss",
     "crates/karez-rt",
     "crates/karez-compat-tests",
     "crates/karez",
