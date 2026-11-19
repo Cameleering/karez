@@ -55,7 +55,7 @@ ratios between rows of the same lane and round) or from a laptop; the sources, t
 - **Small:** a stripped blocking hello-world is 441 KiB with no third-party crates (tokio-postgres: 824 KiB and 68 crates; sqlx: 1,060 KiB
   and 147 crates).
 
-**Pending:** the faster-network test, a complete third round (the bulk part ran on one lane only), TLS bulk reads, and diesel and wtx on more scenarios (rusqlite is SQLite and was compared only on binary size). These are first measurements and will change. Where karez is level or behind,
+**Pending:** the faster-network test, a complete third round (the bulk part ran on one lane only), TLS bulk reads, and diesel and wtx on more scenarios (rusqlite is SQLite and was compared only on binary size). These are first measurements and will change; competitors have 3 runs per cell where the plan asks for 5 (see [perf-program.md](docs/design/perf-program.md) section 21 for every gap against the plan's method). Where karez is level or behind,
 the tables say so.
 
 ## Why another database library
