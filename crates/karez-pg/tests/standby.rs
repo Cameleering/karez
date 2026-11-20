@@ -2,8 +2,9 @@
 //! standby (`tests/docker/standby.yaml`, PostgreSQL 16).
 //!
 //! `KAREZ_TEST_PRIMARY` and `KAREZ_TEST_STANDBY` hold `host:port` of the two servers. Without
-//! them each test prints `SKIPPED` and returns, unless `KAREZ_REQUIRE_SERVER=1`, which makes a
-//! missing server a failure. A skipped run verifies nothing.
+//! them each test prints `SKIPPED` and returns, unless `KAREZ_REQUIRE_STANDBY=1`, which makes a
+//! missing server a failure. (It is not `KAREZ_REQUIRE_SERVER`: that one is set for runs that have
+//! only the single-server fixture.) A skipped run verifies nothing.
 
 use karez_pg::{Connection, Error, Value};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -30,9 +31,9 @@ fn servers() -> Option<(String, String)> {
         (a, b) => {
             let why = a.err().or(b.err()).unwrap_or_default();
             eprintln!("SKIPPED (not verified against a real standby): {why}");
-            if std::env::var("KAREZ_REQUIRE_SERVER").as_deref() == Ok("1") {
+            if std::env::var("KAREZ_REQUIRE_STANDBY").as_deref() == Ok("1") {
                 panic!(
-                    "KAREZ_REQUIRE_SERVER=1 but the primary and standby are not both there: {why}"
+                    "KAREZ_REQUIRE_STANDBY=1 but the primary and standby are not both there: {why}"
                 );
             }
             None

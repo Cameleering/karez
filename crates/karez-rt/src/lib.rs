@@ -10,4 +10,8 @@ mod error;
 mod shared;
 
 pub use error::{Error, Result};
-pub use shared::{NextChunk, Options, OwnedValue, Pending, Pipeline, SharedConnection, Stream};
+pub use karez_pg::Fetched;
+pub use shared::{
+    NextChunk, Options, OwnedValue, Pending, PendingFetch, Pipeline, Portal, SharedConnection,
+    Stream,
+};

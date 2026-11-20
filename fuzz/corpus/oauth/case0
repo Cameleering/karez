@@ -1,0 +1,1 @@
+{"status":"invalid_token","scope":"openid","openid-configuration":"https://idp.example/.well-known/openid-configuration"}

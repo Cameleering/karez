@@ -1,0 +1,4 @@
+host: karez-bench-l1-db  private ip: 10.120.0.2
+kernel: 6.8.0-149-generic  cpus: 4  mem_mb: 7941
+PostgreSQL 18.7 (Ubuntu 18.7-1.pgdg24.04+5) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+taxi_trips: not loaded

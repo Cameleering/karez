@@ -19,7 +19,7 @@ mod types;
 pub use builder::{Chunk, ChunkBuilder, RowRef};
 pub use column::{Column, FromColumn};
 pub use error::ChunkError;
-pub use types::{ColumnType, Date, Field, Timestamp};
+pub use types::{ColumnType, Date, Decimal128, Field, Interval, Time, Timestamp};
 
 /// Rows after which a chunk is considered full (plan section 2.2).
 pub const CHUNK_MAX_ROWS: usize = 1024;

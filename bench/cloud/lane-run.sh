@@ -8,8 +8,10 @@ cd /root/karez/bench
 PW="$(cat /root/bench-pw)"
 export BENCH_URL="postgresql://bench:$PW@$DB:5432/bench?sslmode=disable"
 export BENCH_URL_TLS="postgresql://bench:$PW@$DB:5432/bench?sslmode=verify-full&sslrootcert=/root/ca.crt"
-export BENCH_TAXI_ROWS="$(cat /root/taxi_rows)"
+export BENCH_TAXI_ROWS="$(cat /root/taxi_rows 2>/dev/null || echo 1000000)"
 if [ "$PROFILE" = tail ]; then exec bash /root/karez/bench/cloud/lane-tail.sh "$LANE" "$ROUND" "$DB"; fi
+if [ "$PROFILE" = recheck ]; then exec bash /root/karez/bench/cloud/lane-recheck.sh "$LANE" "$ROUND" "$DB"; fi
+if [ "$PROFILE" = exit ]; then exec bash /root/karez/bench/cloud/lane-exit.sh "$LANE" "$ROUND" "$DB"; fi
 OUT="/root/out/lane$LANE-round$ROUND-$PROFILE"
 mkdir -p "$OUT"
 cp /root/machine-cl.txt "$OUT/machine-cl.txt" 2>/dev/null

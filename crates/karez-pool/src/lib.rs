@@ -7,19 +7,25 @@
 //! Behaviour:
 //!
 //! * Connections are opened lazily, up to a maximum, and handed out one at a time.
-//! * Waiters are served first come, first served.
+//! * Waiters are served first come, first served. Only the waiter at the front of the queue is woken when a
+//!   connection comes back, so a release costs one wake-up however many threads wait.
 //! * A connection goes back when its guard is dropped, after [`Manager::recycle`] has looked at it.
 //!   `recycle` runs outside the pool's lock, so it may do network I/O (a `ROLLBACK`, say). If it
 //!   returns `false` the connection is discarded and its slot is free again.
-//! * Connections are not tested before they are handed out, so a server restart shows up as an
-//!   error on first use; the driver's `recycle` then discards the broken connection and the next
-//!   `get` opens a new one.
+//! * A connection that has sat idle for a while (by default one second, see
+//!   [`Pool::set_validate_after`]) is checked with [`Manager::validate`] before it is handed out; one
+//!   that fails is dropped and replaced by a new connection in the same place in the queue, so a
+//!   server that went away (a failover, a restart) does not show up as an error on first use. A
+//!   connection that was idle for less than that is handed out without a check, so a pool that
+//!   is busy pays nothing. A connection that dies within that window still fails on first use; the
+//!   driver's `recycle` then discards it and the next `get` opens a new one.
 
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -37,6 +43,14 @@ pub trait Manager: Send + Sync + 'static {
     /// example roll back an open transaction). Return `true` to keep it, `false` to discard it.
     /// Called without the pool's lock held.
     fn recycle(&self, conn: &mut Self::Connection) -> bool;
+
+    /// Check a connection that has been idle before it is handed out. Return `false` if it is
+    /// dead (the pool drops it and opens another). Must not wait on the network for long: a
+    /// non-blocking probe of the socket is the intended use. Called without the pool's lock held.
+    /// The default accepts every connection.
+    fn validate(&self, _conn: &mut Self::Connection) -> bool {
+        true
+    }
 }
 
 /// Why [`Pool::get`] or [`Pool::new`] failed.
@@ -69,20 +83,44 @@ impl<E: std::error::Error + 'static> std::error::Error for PoolError<E> {
     }
 }
 
+/// One thread waiting for a connection. Each waiter has its own condition variable, so that a
+/// release can wake exactly the one that is next in line (a shared one woke every waiter on every
+/// release: with 512 threads on 32 connections that was most of the pool's time, see
+/// bench/results/2026-11-19-exit-c4/REPORT.md).
+struct Waiter {
+    ticket: u64,
+    wake: Arc<Condvar>,
+}
+
 struct State<C> {
-    idle: Vec<C>,
+    /// Idle connections and when each went idle; the last in is the first out.
+    idle: Vec<(C, Instant)>,
     /// Connections that exist: idle, checked out, or being opened.
     total: usize,
-    /// Tickets of the threads waiting for a connection, in arrival order.
-    waiters: VecDeque<u64>,
+    /// The threads waiting for a connection, in arrival order.
+    waiters: VecDeque<Waiter>,
     next_ticket: u64,
+}
+
+impl<C> State<C> {
+    /// Wake the waiter at the front of the queue, if any. Call it after every change that can let
+    /// the front waiter proceed: a connection came back, a slot was freed, or the front left.
+    fn wake_front(&self) {
+        if let Some(w) = self.waiters.front() {
+            w.wake.notify_one();
+        }
+    }
 }
 
 struct Shared<M: Manager> {
     manager: M,
     max: usize,
     state: Mutex<State<M::Connection>>,
-    available: Condvar,
+    /// An idle connection older than this is validated before it is handed out (milliseconds).
+    validate_after_ms: AtomicU64,
+    /// Loop turns of waiting threads, to test that a release wakes one thread and not all.
+    #[cfg(test)]
+    turns: std::sync::atomic::AtomicUsize,
 }
 
 impl<M: Manager> Shared<M> {
@@ -132,9 +170,18 @@ impl<M: Manager> Pool<M> {
                     waiters: VecDeque::new(),
                     next_ticket: 0,
                 }),
-                available: Condvar::new(),
+                validate_after_ms: AtomicU64::new(1000),
+                #[cfg(test)]
+                turns: std::sync::atomic::AtomicUsize::new(0),
             }),
         })
+    }
+
+    /// Validate a connection that has been idle at least this long before handing it out (default
+    /// one second; `Duration::ZERO` checks every idle connection every time).
+    pub fn set_validate_after(&self, after: Duration) {
+        let ms = u64::try_from(after.as_millis()).unwrap_or(u64::MAX);
+        self.shared.validate_after_ms.store(ms, Ordering::Relaxed);
     }
 
     /// The manager this pool was built with.
@@ -169,54 +216,98 @@ impl<M: Manager> Pool<M> {
 
     fn get_inner(&self, deadline: Option<Instant>) -> Result<Pooled<M>, PoolError<M::Error>> {
         let mut st = self.shared.lock();
-        // First come, first served: a waiter proceeds only when it is at the front of the queue.
+        // Nobody is waiting: take a connection, or a free slot, at once.
+        if st.waiters.is_empty() {
+            if let Some((c, since)) = st.idle.pop() {
+                drop(st);
+                return self.checked(c, since);
+            }
+            if st.total < self.shared.max {
+                st.total += 1;
+                drop(st);
+                return self.open();
+            }
+        }
+        // First come, first served: a waiter proceeds only when it is at the front of the queue,
+        // and it is woken only when something has changed for it (see `State::wake_front`).
         let ticket = st.next_ticket;
         st.next_ticket += 1;
-        st.waiters.push_back(ticket);
+        let wake = Arc::new(Condvar::new());
+        st.waiters.push_back(Waiter {
+            ticket,
+            wake: wake.clone(),
+        });
         loop {
-            if st.waiters.front() == Some(&ticket) {
-                if let Some(c) = st.idle.pop() {
+            #[cfg(test)]
+            self.shared
+                .turns
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if st.waiters.front().map(|w| w.ticket) == Some(ticket) {
+                if let Some((c, since)) = st.idle.pop() {
                     st.waiters.pop_front();
+                    st.wake_front(); // the next in line may be able to go too
                     drop(st);
-                    self.shared.available.notify_all();
-                    return Ok(self.guard(c));
+                    return self.checked(c, since);
                 }
                 if st.total < self.shared.max {
                     st.total += 1;
                     st.waiters.pop_front();
+                    st.wake_front();
                     drop(st);
-                    self.shared.available.notify_all();
-                    return match self.shared.manager.connect() {
-                        Ok(c) => Ok(self.guard(c)),
-                        Err(e) => {
-                            self.shared.lock().total -= 1;
-                            self.shared.available.notify_all();
-                            Err(PoolError::Connect(e))
-                        }
-                    };
+                    return self.open();
                 }
             }
             st = match deadline {
-                None => self
-                    .shared
-                    .available
-                    .wait(st)
-                    .unwrap_or_else(|e| e.into_inner()),
+                None => wake.wait(st).unwrap_or_else(|e| e.into_inner()),
                 Some(d) => {
                     let now = Instant::now();
                     if now >= d {
-                        st.waiters.retain(|t| *t != ticket);
-                        drop(st);
-                        self.shared.available.notify_all();
+                        let was_front = st.waiters.front().map(|w| w.ticket) == Some(ticket);
+                        st.waiters.retain(|w| w.ticket != ticket);
+                        if was_front {
+                            st.wake_front();
+                        }
                         return Err(PoolError::Timeout);
                     }
-                    self.shared
-                        .available
-                        .wait_timeout(st, d - now)
+                    wake.wait_timeout(st, d - now)
                         .unwrap_or_else(|e| e.into_inner())
                         .0
                 }
             };
+        }
+    }
+
+    /// Hand out a connection taken from the idle list, after checking it if it has been idle long
+    /// enough. A dead one is replaced in the same slot (the count does not change).
+    fn checked(
+        &self,
+        mut c: M::Connection,
+        since: Instant,
+    ) -> Result<Pooled<M>, PoolError<M::Error>> {
+        let after = Duration::from_millis(self.shared.validate_after_ms.load(Ordering::Relaxed));
+        if since.elapsed() >= after {
+            let alive = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.shared.manager.validate(&mut c)
+            }))
+            .unwrap_or(false);
+            if !alive {
+                drop(c);
+                return self.open();
+            }
+        }
+        Ok(self.guard(c))
+    }
+
+    /// Open the connection for a slot already counted in `total`. A failure gives the slot back.
+    fn open(&self) -> Result<Pooled<M>, PoolError<M::Error>> {
+        match self.shared.manager.connect() {
+            Ok(c) => Ok(self.guard(c)),
+            Err(e) => {
+                let mut st = self.shared.lock();
+                st.total -= 1;
+                st.wake_front();
+                Err(PoolError::Connect(e))
+            }
         }
     }
 
@@ -280,11 +371,10 @@ impl<M: Manager> Drop for Pooled<M> {
         };
         let mut st = self.shared.lock();
         match keep {
-            Some(c) => st.idle.push(c),
+            Some(c) => st.idle.push((c, Instant::now())),
             None => st.total -= 1,
         }
-        drop(st);
-        self.shared.available.notify_all();
+        st.wake_front();
     }
 }
 
@@ -323,6 +413,86 @@ mod tests {
         fn recycle(&self, _: &mut usize) -> bool {
             self.keep
         }
+    }
+
+    /// Connections are numbers; the ones in `dead` fail validation.
+    struct Checked {
+        opened: AtomicUsize,
+        validated: AtomicUsize,
+        dead: Mutex<Vec<usize>>,
+    }
+
+    impl Manager for Checked {
+        type Connection = usize;
+        type Error = &'static str;
+        fn connect(&self) -> Result<usize, &'static str> {
+            Ok(self.opened.fetch_add(1, Ordering::SeqCst))
+        }
+        fn recycle(&self, _: &mut usize) -> bool {
+            true
+        }
+        fn validate(&self, c: &mut usize) -> bool {
+            self.validated.fetch_add(1, Ordering::SeqCst);
+            !self.dead.lock().unwrap().contains(c)
+        }
+    }
+
+    fn checked() -> Pool<Checked> {
+        Pool::new(
+            Checked {
+                opened: AtomicUsize::new(0),
+                validated: AtomicUsize::new(0),
+                dead: Mutex::new(Vec::new()),
+            },
+            3,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_dead_idle_connection_is_replaced_before_it_is_handed_out() {
+        let pool = checked();
+        pool.set_validate_after(Duration::ZERO);
+        let (a, b) = (pool.get().unwrap(), pool.get().unwrap());
+        assert_eq!((*a, *b), (0, 1));
+        drop((a, b));
+        assert_eq!((pool.size(), pool.idle()), (2, 2));
+        pool.manager().dead.lock().unwrap().extend([0, 1]); // the server went away
+        let c = pool.get().unwrap();
+        assert_eq!(*c, 2, "a new connection, not the dead one");
+        let d = pool.get().unwrap();
+        assert_eq!(*d, 3, "the second dead one is replaced too");
+        assert_eq!(pool.size(), 2, "the slots were reused, none leaked");
+        assert_eq!(pool.manager().validated.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_connection_that_was_idle_only_briefly_is_not_checked() {
+        let pool = checked();
+        assert_eq!(*pool.get().unwrap(), 0);
+        pool.manager().dead.lock().unwrap().push(0);
+        // idle for a moment, under the default one second: handed out without a check
+        let a = pool.get().unwrap();
+        assert_eq!(*a, 0);
+        assert_eq!(pool.manager().validated.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_waiter_gets_a_replacement_for_a_dead_connection_in_its_place() {
+        let pool = checked();
+        pool.set_validate_after(Duration::ZERO);
+        let held: Vec<_> = (0..3).map(|_| pool.get().unwrap()).collect();
+        let p = pool.clone();
+        let waiter = thread::spawn(move || *p.get().unwrap());
+        thread::sleep(Duration::from_millis(50));
+        pool.manager().dead.lock().unwrap().extend([0, 1, 2]);
+        drop(held); // all three go idle and dead; the waiter is woken for the front one
+        assert_eq!(
+            waiter.join().unwrap(),
+            3,
+            "it got a new connection, not a dead one"
+        );
+        assert!(pool.size() <= 3);
     }
 
     #[test]
@@ -424,6 +594,51 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(*order.lock().unwrap(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_release_wakes_one_waiter_not_all_of_them() {
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        let held = pool.get().unwrap();
+        let waiters = 48usize;
+        let hs: Vec<_> = (0..waiters)
+            .map(|_| {
+                let p = pool.clone();
+                thread::spawn(move || drop(p.get().unwrap()))
+            })
+            .collect();
+        // let every thread reach the queue
+        while pool.shared.lock().waiters.len() < waiters {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let before = pool.shared.turns.load(Ordering::SeqCst);
+        drop(held);
+        for h in hs {
+            h.join().unwrap();
+        }
+        let turns = pool.shared.turns.load(Ordering::SeqCst) - before;
+        // each waiter runs its loop once when it is woken for its turn; a shared condition variable
+        // woke every waiter at every release, about waiters * waiters / 2 turns (1,100 here)
+        assert!(
+            turns <= waiters * 3,
+            "{turns} loop turns for {waiters} waiters: releases wake more than one thread"
+        );
+        assert_eq!(pool.size(), pool.idle());
+    }
+
+    #[test]
+    fn a_waiter_that_times_out_in_front_lets_the_next_one_through() {
+        let pool = Pool::new(Mock::new(true), 1).unwrap();
+        let held = pool.get().unwrap();
+        let p1 = pool.clone();
+        let front = thread::spawn(move || p1.get_timeout(Duration::from_millis(80)).err());
+        thread::sleep(Duration::from_millis(30)); // the first is in the queue
+        let p2 = pool.clone();
+        let second = thread::spawn(move || p2.get_timeout(Duration::from_secs(5)).map(drop));
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(front.join().unwrap(), Some(PoolError::Timeout));
+        drop(held); // the first has left the queue: the second must be woken by this
+        assert!(second.join().unwrap().is_ok());
     }
 
     #[test]

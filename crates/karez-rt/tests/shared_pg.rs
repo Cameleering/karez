@@ -578,3 +578,420 @@ fn an_idle_connection_has_no_thread_and_a_busy_one_keeps_its_reader() -> R {
     assert!(!c.reader_thread_running());
     Ok(())
 }
+
+#[test]
+fn every_owned_parameter_type_reaches_the_server_intact() -> R {
+    use karez_pg::{Date, Decimal128, Interval, Time, Timestamp};
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    let t = tag("owned");
+    c.exec("SET intervalstyle = 'iso_8601'", &[])?;
+    c.exec(
+        &format!(
+            "CREATE TEMP TABLE {t} (u uuid, d date, ts timestamp, tz timestamptz, tm time, iv interval, \
+             n numeric(12,3), ab bool[], a2 int2[], a4 int4[], a8 int8[], f4 float4[], f8 float8[], \
+             tx text[], m mood, ip inet)"
+        ),
+        &[],
+    )?;
+    let res = c
+        .pipeline()
+        .exec(
+            &format!(
+                "INSERT INTO {t} VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)"
+            ),
+            vec![
+                OwnedValue::Uuid([0xAB; 16]),
+                OwnedValue::Date(Date(0)),
+                OwnedValue::Timestamp(Timestamp(86_400_000_000)),
+                OwnedValue::TimestampTz(Timestamp(-1)),
+                OwnedValue::Time(Time(3_723_000_004)),
+                OwnedValue::Interval(Interval {
+                    months: 14,
+                    days: -3,
+                    micros: 5,
+                }),
+                OwnedValue::Numeric(Decimal128 {
+                    unscaled: -1_234_567,
+                    scale: 3,
+                }),
+                OwnedValue::BoolArray(vec![Some(true), None]),
+                OwnedValue::I16Array(vec![Some(-1), Some(2)]),
+                OwnedValue::I32Array(vec![None, Some(i32::MIN)]),
+                OwnedValue::I64Array(vec![Some(i64::MAX)]),
+                OwnedValue::F32Array(vec![Some(1.5)]),
+                OwnedValue::F64Array(vec![Some(-0.25), None]),
+                OwnedValue::TextArray(vec![Some("a b".into()), None, Some("é".into())]),
+                OwnedValue::Unknown("happy".into()),
+                OwnedValue::Unknown("10.1.2.3/24".into()),
+            ],
+        )
+        .run()?;
+    assert!(res[0].is_ok(), "{:?}", res[0]);
+    let d = c.collect(
+        &format!(
+            "SELECT u::text, d::text, ts::text, tz::text, tm::text, iv::text, n::text, ab::text, a2::text, \
+             a4::text, a8::text, f4::text, f8::text, tx::text, m::text, ip::text FROM {t}"
+        ),
+        &[],
+    )?;
+    let r = d.chunks[0].row(0).unwrap();
+    let got: Vec<&str> = (0..16).map(|i| r.get::<&str>(i).unwrap()).collect();
+    assert_eq!(
+        got,
+        [
+            "abababab-abab-abab-abab-abababababab",
+            "1970-01-01",
+            "1970-01-02 00:00:00",
+            "1969-12-31 23:59:59.999999+00",
+            "01:02:03.000004",
+            "P1Y2M-3DT0.000005S",
+            "-1234.567",
+            "{t,NULL}",
+            "{-1,2}",
+            "{NULL,-2147483648}",
+            "{9223372036854775807}",
+            "{1.5}",
+            "{-0.25,NULL}",
+            "{\"a b\",NULL,é}",
+            "happy",
+            "10.1.2.3/24",
+        ]
+    );
+    c.close();
+    Ok(())
+}
+
+fn first_col_i64(f: &karez_rt::Fetched) -> Vec<i64> {
+    let mut v = Vec::new();
+    for ch in &f.chunks {
+        for r in 0..ch.rows() {
+            v.push(ch.row(r).unwrap().get::<i64>(0).unwrap());
+        }
+    }
+    v
+}
+
+#[test]
+fn portals_on_a_shared_connection_interleave_with_other_commands_and_threads() -> R {
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    // outside a transaction a portal is refused, and the connection carries on
+    match c.portal("SELECT 1::int8", &[]) {
+        Err(Error::Pg(PgError::Usage(m))) => assert!(m.contains("transaction"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(one_i64(&c, "SELECT 1::int8", &[])?, 1);
+
+    c.exec("BEGIN", &[])?;
+    let a = c.portal("SELECT g::int8 FROM generate_series(1, 1000) g", &[])?;
+    let b = c.portal(
+        "SELECT g::int8 * 10 FROM generate_series(1, $1::int4) g",
+        &[Value::i32(250)],
+    )?;
+    // a second thread keeps issuing commands on the same session while this one fetches
+    let other = {
+        let c = c.clone();
+        thread::spawn(move || -> Result<i64, Error> {
+            let mut sum = 0;
+            for i in 0..30 {
+                sum += one_i64(&c, "SELECT $1::int8", &[Value::i64(i)])?;
+            }
+            Ok(sum)
+        })
+    };
+    let (mut got_a, mut got_b) = (Vec::new(), Vec::new());
+    while !a.is_done() || !b.is_done() {
+        got_a.extend(first_col_i64(&c.fetch(&a, 100)?));
+        got_b.extend(first_col_i64(&c.fetch(&b, 60)?));
+    }
+    assert_eq!(other.join().unwrap()?, (0..30).sum::<i64>());
+    assert_eq!(got_a, (1..=1000).collect::<Vec<i64>>());
+    assert_eq!(got_b, (1..=250).map(|g| g * 10).collect::<Vec<i64>>());
+    assert_eq!(a.rows_fetched(), 1000);
+    // a finished portal returns nothing, and queuing a fetch on it is a usage error
+    let again = c.fetch(&a, 10)?;
+    assert!(again.done && again.rows() == 0);
+    assert!(matches!(
+        c.submit_fetch(&a, 10),
+        Err(Error::Pg(PgError::Usage(_)))
+    ));
+    c.exec("COMMIT", &[])?;
+    Ok(())
+}
+
+#[test]
+fn queued_fetches_are_answered_in_order_and_futures_work() -> R {
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    c.exec("BEGIN", &[])?;
+    let p = c.portal("SELECT g::int8 FROM generate_series(1, 25) g", &[])?;
+    // four fetches queued before any answer: the last ones may find the portal already finished
+    let p1 = c.submit_fetch(&p, 10)?;
+    let p2 = c.submit_fetch(&p, 10)?;
+    let p3 = c.submit_fetch(&p, 10)?;
+    let p4 = c.submit_fetch(&p, 10)?;
+    let (r1, r2, r3, r4) = (p1.wait()?, p2.wait()?, p3.wait()?, p4.wait());
+    assert_eq!(first_col_i64(&r1), (1..=10).collect::<Vec<_>>());
+    assert_eq!(first_col_i64(&r2), (11..=20).collect::<Vec<_>>());
+    assert_eq!(first_col_i64(&r3), (21..=25).collect::<Vec<_>>());
+    assert!(r3.done && !r1.done);
+    // the fourth fetch ran on a portal the server had finished: no rows, done
+    let r4 = r4?;
+    assert!(r4.done && r4.rows() == 0);
+    assert!(p.is_done());
+    // `.await`
+    let q = c.portal("SELECT g::int8 FROM generate_series(1, 7) g", &[])?;
+    let rows = block_on(async {
+        let mut all = Vec::new();
+        while !q.is_done() {
+            all.extend(first_col_i64(&c.submit_fetch(&q, 3)?.await?));
+        }
+        Ok::<_, Error>(all)
+    })?;
+    assert_eq!(rows, (1..=7).collect::<Vec<_>>());
+    c.exec("COMMIT", &[])?;
+    Ok(())
+}
+
+#[test]
+fn shared_portals_report_errors_and_end_with_the_transaction() -> R {
+    let addr = need_server!();
+    let c = shared(&addr)?;
+    // an error in a later row fails that fetch and the transaction, not the connection
+    c.exec("BEGIN", &[])?;
+    let p = c.portal(
+        "SELECT (100 / (6 - g))::int8 FROM generate_series(1, 10) g",
+        &[],
+    )?;
+    assert_eq!(c.fetch(&p, 3)?.rows(), 3);
+    match c.fetch(&p, 5) {
+        Err(Error::Pg(PgError::Server(e))) => assert_eq!(e.sqlstate(), "22012"),
+        other => panic!("{other:?}"),
+    }
+    assert!(p.is_done());
+    c.exec("ROLLBACK", &[])?;
+    assert_eq!(one_i64(&c, "SELECT 2::int8", &[])?, 2);
+    // after COMMIT the server has dropped the portal
+    c.exec("BEGIN", &[])?;
+    let p = c.portal("SELECT g::int8 FROM generate_series(1, 100) g", &[])?;
+    assert_eq!(c.fetch(&p, 10)?.rows(), 10);
+    c.exec("COMMIT", &[])?;
+    match c.fetch(&p, 10) {
+        Err(Error::Pg(PgError::Server(e))) => assert_eq!(e.sqlstate(), "34000"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(one_i64(&c, "SELECT 3::int8", &[])?, 3);
+    // close_portal frees it early; a large result in windows adds up
+    c.exec("BEGIN", &[])?;
+    let q = c.portal("SELECT g::int8 FROM generate_series(1, 50) g", &[])?;
+    c.close_portal(q);
+    let big = c.portal("SELECT id::int8 FROM audit_log ORDER BY id", &[])?;
+    let (mut rows, mut sum) = (0i64, 0i64);
+    while !big.is_done() {
+        for v in first_col_i64(&c.fetch(&big, 20_000)?) {
+            rows += 1;
+            sum += v;
+        }
+    }
+    assert_eq!(rows, 400_000);
+    assert_eq!(
+        sum,
+        one_i64(&c, "SELECT sum(id)::int8 FROM audit_log", &[])?
+    );
+    c.exec("COMMIT", &[])?;
+    Ok(())
+}
+
+/// A TCP relay in front of the server that can stop reading from the client, so that the client's
+/// writes pile up and its writer thread blocks (a slow or stalled network).
+struct Relay {
+    addr: String,
+    paused: Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn relay(target: &str) -> Relay {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let paused = Arc::new(AtomicBool::new(false));
+    let (target, p) = (target.to_string(), paused.clone());
+    thread::spawn(move || {
+        for client in listener.incoming() {
+            let Ok(mut client) = client else { return };
+            let Ok(mut server) = TcpStream::connect(&target) else {
+                return;
+            };
+            let (mut c2, mut s2) = (client.try_clone().unwrap(), server.try_clone().unwrap());
+            let p = p.clone();
+            thread::spawn(move || {
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    while p.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    match client.read(&mut buf) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => {
+                            if server.write_all(&buf[..n]).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+            thread::spawn(move || {
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    match s2.read(&mut buf) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => {
+                            if c2.write_all(&buf[..n]).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Relay { addr, paused }
+}
+
+#[test]
+fn a_dropped_or_timed_out_command_that_was_never_written_never_reaches_the_server() -> R {
+    use std::sync::atomic::Ordering;
+    let addr = need_server!();
+    let table = tag("unsent");
+    let mut other = Connection::connect(&cfg(&addr))?;
+    other.execute(&format!("DROP TABLE IF EXISTS {table}"), &[])?;
+    other.execute(&format!("CREATE TABLE {table} (id int)"), &[])?;
+    let rl = relay(&addr);
+    let c = shared(&rl.addr)?;
+    let sql = format!("INSERT INTO {table}(id) SELECT $1::int WHERE length($2::bytea) >= 0");
+    c.exec(&sql, &[Value::i32(0), Value::bytes(&[])])?; // prepares the statement: later ones need no round trip
+                                                        // A 48 MB parameter on a relay that stopped reading: the writer blocks in `write_all`, and
+                                                        // whatever is submitted meanwhile waits in the engine, unwritten.
+    rl.paused.store(true, Ordering::Release);
+    let big = vec![7u8; 48 << 20];
+    let (c1, sql1) = (c.clone(), sql.clone());
+    let writer = thread::spawn(move || c1.exec(&sql1, &[Value::i32(1), Value::bytes(&big)]));
+    thread::sleep(Duration::from_millis(400));
+    assert!(!writer.is_finished(), "the big write should be blocked");
+    let small = |n: i32| c.submit_exec(&sql, &[Value::i32(n), Value::bytes(&[])]);
+    let (p2, p3, p4, p5) = (small(2)?, small(3)?, small(4)?, small(5)?);
+    assert_eq!(c.in_flight(), 5);
+    drop(p2); // dropped before it was written: gone
+    assert_eq!(
+        c.in_flight(),
+        4,
+        "a dropped unwritten command leaves the queue"
+    );
+    assert!(matches!(
+        p3.wait_timeout(Duration::from_millis(50)),
+        Err(Error::Timeout)
+    ));
+    assert_eq!(
+        c.in_flight(),
+        3,
+        "a timed-out unwritten command leaves the queue"
+    );
+    drop(p5);
+    assert_eq!(c.in_flight(), 2);
+    rl.paused.store(false, Ordering::Release);
+    assert_eq!(writer.join().unwrap()?, 1);
+    assert_eq!(p4.wait()?.rows, 1);
+    let mut ids: Vec<i32> = Vec::new();
+    let mut cur = other.query(&format!("SELECT id FROM {table} ORDER BY id"), &[])?;
+    while let Some(r) = cur.next()? {
+        ids.push(r.get::<i32>(0).unwrap());
+    }
+    drop(cur);
+    assert_eq!(
+        ids,
+        vec![0, 1, 4],
+        "2, 3 and 5 were taken back and never ran"
+    );
+    assert_eq!(
+        one_i64(&c, "SELECT 1::int8", &[])?,
+        1,
+        "the connection is in step"
+    );
+    other.execute(&format!("DROP TABLE {table}"), &[])?;
+    Ok(())
+}
+
+#[test]
+fn an_idle_connection_that_keeps_listening_receives_notifications() -> R {
+    let addr = need_server!();
+    let opts = Options {
+        keep_listening: true,
+        ..Options::default()
+    };
+    let c = shared_with(&addr, opts)?;
+    let chan = tag("idle_chan");
+    c.exec(&format!("LISTEN {chan}"), &[])?;
+    thread::sleep(Duration::from_millis(300)); // far longer than the linger of a normal connection
+    assert!(
+        c.reader_thread_running(),
+        "the reader stays while listening"
+    );
+    let mut other = Connection::connect(&cfg(&addr))?;
+    let got = thread::scope(|s| {
+        let h = s.spawn(|| c.wait_for_notification(Duration::from_secs(5)));
+        thread::sleep(Duration::from_millis(100));
+        other
+            .execute("SELECT pg_notify($1, 'one')", &[Value::text(&chan)])
+            .unwrap();
+        h.join().unwrap()
+    })?;
+    let n = got.expect("a notification while no command was in flight");
+    assert_eq!(
+        (n.channel.as_str(), n.payload.as_str()),
+        (chan.as_str(), "one")
+    );
+    // several at once, then none
+    for i in 0..3 {
+        other.execute(
+            "SELECT pg_notify($1, $2)",
+            &[Value::text(&chan), Value::text(&format!("m{i}"))],
+        )?;
+    }
+    let mut seen = Vec::new();
+    while let Some(n) = c.wait_for_notification(Duration::from_millis(500))? {
+        seen.push(n.payload);
+    }
+    assert_eq!(seen, vec!["m0", "m1", "m2"]);
+    assert_eq!(c.wait_for_notification(Duration::from_millis(50))?, None);
+    // commands still work with the reader parked in `read`
+    assert_eq!(one_i64(&c, "SELECT 41::int8 + 1", &[])?, 42);
+    // the last handle going away ends the connection (the backend disappears)
+    let waiting = |other: &mut Connection| -> i64 {
+        let mut cur = other
+            .query(
+                "SELECT count(*) FROM pg_stat_activity WHERE query LIKE $1",
+                &[Value::text(&format!("SELECT '{chan}'%"))],
+            )
+            .unwrap();
+        cur.next().unwrap().unwrap().get::<i64>(0).unwrap()
+    };
+    let c2 = c.clone();
+    drop(c);
+    // its last statement names the channel, so the backend can be found by it
+    assert!(
+        c2.exec(&format!("SELECT '{chan}'"), &[]).is_ok(),
+        "another handle keeps it open"
+    );
+    assert_eq!(waiting(&mut other), 1);
+    drop(c2);
+    let start = Instant::now();
+    while waiting(&mut other) != 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "the listening connection did not end"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}

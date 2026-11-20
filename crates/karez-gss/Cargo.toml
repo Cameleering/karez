@@ -1,0 +1,17 @@
+[package]
+name = "karez-gss"
+description = "GSS-API (Kerberos) client contexts for karez, over the system library. The only crate here with FFI to a security library; every unsafe block has a written safety argument."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+# No dependencies. `unsafe` is allowed in this crate (and only here and in a future SSPI crate) and
+# every block carries a SAFETY comment: see src/lib.rs and docs/design/gss-safety.md.
+[lints.rust]
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"

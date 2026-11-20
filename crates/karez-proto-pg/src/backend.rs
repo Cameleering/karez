@@ -197,6 +197,10 @@ pub enum BackendMessage<'a> {
     AuthenticationOk,
     /// The server wants a cleartext password.
     AuthenticationCleartextPassword,
+    /// The server starts a GSSAPI (Kerberos) exchange: the client sends its first token.
+    AuthenticationGss,
+    /// A GSSAPI token from the server (the next step of the exchange).
+    AuthenticationGssContinue(&'a [u8]),
     /// The server wants an MD5 password (not supported by karez; reported so it can be refused).
     AuthenticationMd5Password {
         /// The 4-byte salt.
@@ -295,6 +299,8 @@ fn auth_message<'a>(body: &'a [u8]) -> Result<BackendMessage<'a>> {
     let msg = match code {
         0 => BackendMessage::AuthenticationOk,
         3 => BackendMessage::AuthenticationCleartextPassword,
+        7 => BackendMessage::AuthenticationGss,
+        8 => BackendMessage::AuthenticationGssContinue(r.rest()),
         5 => {
             let s = r.take(4)?;
             BackendMessage::AuthenticationMd5Password {
@@ -515,9 +521,23 @@ mod tests {
             parse(b'R', b"\0\0\0\x0br=abc").unwrap(),
             BackendMessage::AuthenticationSaslContinue(b"r=abc")
         );
+        // GSSAPI (Kerberos): the start, and a token from the server
         assert_eq!(
-            parse(b'R', &[0, 0, 0, 7]),
-            Err(ProtoError::UnsupportedAuth(7))
+            parse(b'R', &[0, 0, 0, 7]).unwrap(),
+            BackendMessage::AuthenticationGss
+        );
+        assert_eq!(
+            parse(b'R', &[0, 0, 0, 8, 1, 2, 3]).unwrap(),
+            BackendMessage::AuthenticationGssContinue(&[1, 2, 3])
+        );
+        // methods this client does not implement are still reported, by number
+        assert_eq!(
+            parse(b'R', &[0, 0, 0, 9]),
+            Err(ProtoError::UnsupportedAuth(9))
+        );
+        assert_eq!(
+            parse(b'R', &[0, 0, 0, 6]),
+            Err(ProtoError::UnsupportedAuth(6))
         );
         assert!(parse(b'R', &[0, 0, 0, 0, 9]).is_err());
         assert!(parse(b'R', &[0, 0]).is_err());

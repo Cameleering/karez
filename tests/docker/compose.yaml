@@ -10,6 +10,61 @@
 # The server has TLS on with a throwaway CA written to tests/docker/certs/ca-<port>.crt at every start.
 # Containers and volumes are named karez-test-*, the port is bound to 127.0.0.1 only.
 name: karez-test
+# PostgreSQL 13, 15 and 18 are optional profiles too (ports 54313, 54315, 54318). They share this block.
+x-pg-extra: &pg-extra
+  entrypoint:
+    - bash
+    - -c
+    - |
+      set -e
+      d=/var/lib/postgresql/ssl
+      mkdir -p $$d /certs
+      cd $$d
+      openssl ecparam -name prime256v1 -genkey -noout -out ca.key
+      openssl req -new -x509 -key ca.key -sha256 -days 30 -subj "/CN=karez-test-ca" -out ca.crt
+      openssl ecparam -name prime256v1 -genkey -noout -out server.key
+      openssl req -new -key server.key -subj "/CN=localhost" -out server.csr
+      printf "subjectAltName=DNS:localhost,DNS:karez.test\nbasicConstraints=CA:FALSE\n" > ext.cnf
+      openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 30 -sha$${CERT_SHA:-256} -extfile ext.cnf
+      chown postgres:postgres server.key server.crt
+      chmod 600 server.key
+      cp ca.crt /certs/ca-$${CA_PORT}.crt
+      # a client certificate for the role karez_cert, in the three key formats the client reads
+      openssl ecparam -name prime256v1 -genkey -noout -out client.key
+      openssl req -new -key client.key -subj "/CN=karez_cert" -out client.csr
+      openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 30 -sha256
+      openssl pkcs8 -topk8 -nocrypt -in client.key -out client-pkcs8.key
+      cp client.crt /certs/client-$${CA_PORT}.crt
+      cp client.key /certs/client-$${CA_PORT}.key
+      cp client-pkcs8.key /certs/client-$${CA_PORT}-pkcs8.key
+      chmod 644 /certs/client-*
+      exec docker-entrypoint.sh "$$@"
+    - ssl-entrypoint
+  command:
+    - postgres
+    - -c
+    - ssl=on
+    - -c
+    - ssl_cert_file=/var/lib/postgresql/ssl/server.crt
+    - -c
+    - ssl_key_file=/var/lib/postgresql/ssl/server.key
+    - -c
+    - hba_file=/etc/karez/pg_hba.conf
+    - -c
+    - password_encryption=scram-sha-256
+    - -c
+    - shared_buffers=256MB
+    - -c
+    - deadlock_timeout=500ms
+    - -c
+    - max_connections=100
+  mem_limit: 1g
+  shm_size: 256m
+  healthcheck:
+    test: ["CMD-SHELL", "psql -U postgres -d karez -tAc 'select 1 from seed_done' | grep -q 1"]
+    interval: 3s
+    timeout: 5s
+    retries: 100
 services:
   pg16:
     image: postgres:16
@@ -193,6 +248,171 @@ services:
       interval: 3s
       timeout: 5s
       retries: 100
+  pg13:
+    <<: *pg-extra
+    profiles: ["pg13"]
+    image: postgres:13
+    container_name: karez-test-pg13
+    environment:
+      CA_PORT: ${KAREZ_TEST_PG13_PORT:-54313}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_PG13_PORT:-54313}:5432"
+    volumes:
+      - ./pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./certs:/certs
+      - karez-test-pg13-data:/var/lib/postgresql/data
+  pg15:
+    <<: *pg-extra
+    profiles: ["pg15"]
+    image: postgres:15
+    container_name: karez-test-pg15
+    environment:
+      CA_PORT: ${KAREZ_TEST_PG15_PORT:-54315}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_PG15_PORT:-54315}:5432"
+    volumes:
+      - ./pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./certs:/certs
+      - karez-test-pg15-data:/var/lib/postgresql/data
+  pg18:
+    <<: *pg-extra
+    profiles: ["pg18"]
+    image: postgres:18
+    container_name: karez-test-pg18
+    environment:
+      CA_PORT: ${KAREZ_TEST_PG18_PORT:-54318}
+      # the server certificate is signed with SHA-384 here, so SCRAM channel binding uses SHA-384
+      CERT_SHA: "384"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_PG18_PORT:-54318}:5432"
+    volumes:
+      - ./pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./certs:/certs
+      # PostgreSQL 18's image keeps the data in a versioned directory below /var/lib/postgresql
+      - karez-test-pg18-data:/var/lib/postgresql
+  oauth:
+    # PostgreSQL 18 with a test OAuth validator (tests/docker/oauth); built, not pulled
+    profiles: ["oauth"]
+    build:
+      context: ./oauth
+    image: karez-test-oauth-pg18
+    container_name: karez-test-oauth
+    environment:
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+      - -c
+      - oauth_validator_libraries=karez_validator
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_OAUTH_PORT:-54319}:5432"
+    mem_limit: 512m
+    volumes:
+      - ./oauth/pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./oauth/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  kdc:
+    # A Kerberos KDC for realm KAREZ.TEST (tests/docker/gss); built, not pulled. It writes the
+    # PostgreSQL service keytab to tests/docker/gss/keytabs.
+    profiles: ["gss"]
+    build:
+      context: ./gss/kdc
+    image: karez-test-kdc
+    container_name: karez-test-kdc
+    hostname: kdc
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_KDC_PORT:-54388}:88"
+    volumes:
+      - ./gss/keytabs:/keytabs
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /keytabs/postgres.keytab && kadmin.local -q listprincs | grep -q karez_gss"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  pggss:
+    # PostgreSQL 16 that accepts a Kerberos login for the role karez_gss
+    profiles: ["gss"]
+    image: postgres:16
+    container_name: karez-test-pggss
+    depends_on:
+      kdc:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+      - -c
+      - krb_server_keyfile=/keytabs/postgres.keytab
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_GSS_PORT:-54320}:5432"
+    mem_limit: 512m
+    volumes:
+      - ./gss/pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./gss/krb5-pg.conf:/etc/krb5.conf:ro
+      - ./gss/keytabs:/keytabs:ro
+      - ./gss/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  pgcert:
+    # PostgreSQL 17 that requires a client certificate for the role karez_cert (tests/docker/cert).
+    # PostgreSQL 17 is also the first version that accepts a direct TLS handshake.
+    <<: *pg-extra
+    profiles: ["cert"]
+    image: postgres:17
+    container_name: karez-test-pgcert
+    environment:
+      CA_PORT: ${KAREZ_TEST_CERT_PORT:-54321}
+      POSTGRES_PASSWORD: karez_test_only_superuser_pw
+      POSTGRES_DB: karez
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/ssl/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/ssl/server.key
+      - -c
+      - ssl_ca_file=/var/lib/postgresql/ssl/ca.crt
+      - -c
+      - hba_file=/etc/karez/pg_hba.conf
+    ports:
+      - "127.0.0.1:${KAREZ_TEST_CERT_PORT:-54321}:5432"
+    volumes:
+      - ./cert/pg_hba.conf:/etc/karez/pg_hba.conf:ro
+      - ./cert/init:/docker-entrypoint-initdb.d:ro
+      - ./certs:/certs
+      - karez-test-pgcert-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -d karez -tAc 'select 1' | grep -q 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
 volumes:
   karez-test-pg16-data:
     name: karez-test-pg16-data
@@ -200,3 +420,11 @@ volumes:
     name: karez-test-pg14-data
   karez-test-pg17-data:
     name: karez-test-pg17-data
+  karez-test-pg13-data:
+    name: karez-test-pg13-data
+  karez-test-pg15-data:
+    name: karez-test-pg15-data
+  karez-test-pg18-data:
+    name: karez-test-pg18-data
+  karez-test-pgcert-data:
+    name: karez-test-pgcert-data

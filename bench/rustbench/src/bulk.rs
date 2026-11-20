@@ -12,6 +12,7 @@ use std::time::Instant;
 pub const S4_SQL: &str = "SELECT id, a, b, c, d, e, s1, s2, flag, f FROM bench_wide";
 pub const INS_SQL: &str = "INSERT INTO bench_ins (id, a, b, c, d, e, s1, s2, flag, f) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
 pub const COPY_SQL: &str = "COPY bench_ins (id, a, b, c, d, e, s1, s2, flag, f) FROM STDIN";
+pub const COPY_BINARY_SQL: &str = "COPY bench_ins (id, a, b, c, d, e, s1, s2, flag, f) FROM STDIN (FORMAT binary)";
 
 /// The row recipe of S5 and S6; every language generates exactly this (the generation cost is part of
 /// the measurement, the same for everyone).
@@ -150,6 +151,10 @@ pub fn run(cfg: &Cfg) -> Option<String> {
         "karez-blocking-chunk" => crate::bulk_karez::run(cfg, true),
         "karez-blocking-mrow" => {
             crate::bulk_karez::MULTIROW.store(true, std::sync::atomic::Ordering::Relaxed);
+            crate::bulk_karez::run(cfg, false)
+        }
+        "karez-blocking-binary" => {
+            crate::bulk_karez::BINARY_COPY.store(true, std::sync::atomic::Ordering::Relaxed);
             crate::bulk_karez::run(cfg, false)
         }
         "karez-blocking-part" => crate::bulk_karez::run_part(cfg),

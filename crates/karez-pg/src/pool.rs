@@ -3,9 +3,12 @@
 //! The pool opens connections lazily up to a maximum, hands them out one at a time and takes
 //! them back when the guard is dropped. Waiters are served first come, first served. A
 //! connection that is broken is discarded. One that is still inside a transaction is rolled
-//! back; if that fails it is discarded too. Connections are not tested before they are handed
-//! out, so a server restart shows up as an error on first use (the broken connection is then
-//! discarded and the next `get` opens a new one).
+//! back; if that fails it is discarded too. A connection that has been idle for a second or more
+//! is probed with [`Connection::is_alive`] before it is handed out and replaced if the server
+//! has gone (see [`Pool::set_validate_after`]); a connection idle for less is handed out
+//! unchecked, so a busy pool pays nothing, and one that died in that window shows up as an
+//! error on first use (the broken connection is then discarded and the next `get` opens a new
+//! one).
 
 use crate::config::Config;
 use crate::conn::Connection;
@@ -26,6 +29,10 @@ impl Manager for PgManager {
 
     fn connect(&self) -> Result<Connection> {
         Connection::connect(&self.cfg)
+    }
+
+    fn validate(&self, c: &mut Connection) -> bool {
+        c.is_alive()
     }
 
     fn recycle(&self, c: &mut Connection) -> bool {
@@ -56,6 +63,13 @@ impl Pool {
         Ok(Pool {
             inner: karez_pool::Pool::new(PgManager { cfg }, max_size).map_err(map)?,
         })
+    }
+
+    /// Probe a connection that has been idle at least this long before handing it out (default
+    /// one second; `Duration::ZERO` probes every idle connection every time). The probe is a
+    /// non-blocking read of the socket, with no round trip: see [`Connection::is_alive`].
+    pub fn set_validate_after(&self, after: Duration) {
+        self.inner.set_validate_after(after);
     }
 
     /// Take a connection, opening one if there is room and waiting if the pool is full.

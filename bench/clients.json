@@ -300,5 +300,28 @@
    "s2"
   ],
   "notes": "wtx 0.52, blocking TcpStream per worker on wtx's StdRuntime, plaintext; S1 and S2 only. No bulk: execute_stmt_many buffers the whole result and refused the 1M-row scan (ForbiddenClear). See rustbench/src/wtx_client.rs"
+ },
+ "pgbulkinsert": {
+  "cmd": [
+   "adapters/java/run-java.sh"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "jvm",
+  "warmup_min": 20,
+  "bulk": [
+   "s6"
+  ]
+ },
+ "karez-blocking-binary": {
+  "cmd": [
+   "target/release/rustbench"
+  ],
+  "modes": [],
+  "pool": false,
+  "family": "rust",
+  "bulk": [
+   "s6"
+  ]
  }
 }

@@ -157,6 +157,29 @@ final class Bulk {
                     one = mk.apply(bulkRows); warm = mk.apply(1000);
                 }
             }
+            case "pgbulkinsert" -> {
+                // PgBulkInsert (binary COPY) on a pgjdbc connection; S6 only. Its row source is a lazy stream of row numbers,
+                // so the row recipe is generated inside the timed pass, as in every other adapter.
+                if (!sc.equals("s6")) throw new IllegalStateException("pgbulkinsert: only S6 is implemented");
+                HikariConfig hc = new HikariConfig();
+                hc.setJdbcUrl(Main.jdbcUrl(false));
+                hc.setUsername(ui[0]); hc.setPassword(ui[1]);
+                hc.setMaximumPoolSize(1); hc.setMinimumIdle(1);
+                HikariDataSource ds = new HikariDataSource(hc);
+                Connection c = ds.getConnection();
+                c.setAutoCommit(false);
+                de.bytefish.pgbulkinsert.PgBulkInsert<Long> bulk = new de.bytefish.pgbulkinsert.PgBulkInsert<>(new WideMapping());
+                version = "pgbulkinsert 8.1.4 on pgjdbc " + org.postgresql.util.DriverInfo.DRIVER_VERSION;
+                java.util.function.LongFunction<Pass> mk = n -> () -> {
+                    try (java.sql.Statement st = c.createStatement()) { st.execute("TRUNCATE bench_ins"); }
+                    c.commit();
+                    bulk.saveAll(c.unwrap(org.postgresql.PGConnection.class),
+                            java.util.stream.LongStream.rangeClosed(1, n).boxed());
+                    c.commit();
+                    return count(c);
+                };
+                one = mk.apply(bulkRows); warm = mk.apply(1000);
+            }
             case "vertx-pg-client" -> {
                 if (sc.equals("s6")) throw new IllegalStateException("vertx-pg-client has no COPY support");
                 Vertx vertx = Vertx.vertx();
@@ -224,6 +247,23 @@ final class Bulk {
         }
         return "{\"harness\":\"javaadapter\",\"bulk\":true,\"client\":\"" + client + "\",\"version\":\"" + version + "\",\"scenario\":\""
                 + sc.toUpperCase() + "\",\"rows_target\":" + bulkRows + ",\"runs\":[" + runs + "],\"rss_kb\":" + rss() + "}";
+    }
+
+    /** The row recipe of S5 and S6 (bench/rustbench/src/bulk.rs) as a PgBulkInsert mapping over the row number. */
+    static final class WideMapping extends de.bytefish.pgbulkinsert.mapping.AbstractMapping<Long> {
+        WideMapping() {
+            super("public", "bench_ins");
+            mapLong("id", i -> i);
+            mapInteger("a", i -> (int) (i % 100000));
+            mapInteger("b", i -> (int) ((i * 17) % 65536));
+            mapLong("c", i -> i * 10007);
+            mapDouble("d", i -> i / 3.0);
+            mapDouble("e", i -> (i % 1000) * 0.25);
+            mapText("s1", i -> "row-" + i);
+            mapText("s2", Bulk::s2);
+            mapBoolean("flag", i -> i % 2 == 0);
+            mapShort("f", i -> (short) (i % 1000));
+        }
     }
 
     static long[] count(Connection c) throws Exception {

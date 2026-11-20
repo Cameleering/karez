@@ -1,7 +1,11 @@
-//! SCRAM-SHA-256 client (RFC 5802, RFC 7677) without channel binding, as PostgreSQL uses it.
+//! SCRAM-SHA-256 client (RFC 5802, RFC 7677), with or without channel binding, as PostgreSQL uses
+//! it. Channel binding is `tls-server-end-point` (RFC 5929) only: the hash of the server's
+//! certificate, which is the one binding PostgreSQL implements (mechanism `SCRAM-SHA-256-PLUS`).
 //!
 //! Limits: the password is used as given (no SASLprep normalisation), which is identical for
-//! ASCII passwords. A non-ASCII password may fail against a server that normalised it.
+//! ASCII passwords. A non-ASCII password may fail against a server that normalised it, so a
+//! caller prepares it first: `karez-pg` does, with its `saslprep` feature (this crate has no
+//! dependency and std has no Unicode tables).
 
 use crate::base64;
 use crate::error::{ProtoError, Result};
@@ -80,6 +84,138 @@ pub fn generate_nonce() -> String {
     base64::encode(&raw)
 }
 
+/// What the client tells the server about channel binding in the GS2 header (RFC 5802 section 7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelBinding {
+    /// `n,,`: the client does not support channel binding, or it is switched off, or the
+    /// connection is not TLS.
+    None,
+    /// `y,,`: the client supports channel binding but the server did not offer it. A server that
+    /// does support it then refuses the exchange, which detects a downgrade by a man in the middle.
+    Supported,
+    /// `p=tls-server-end-point,,`: bound to the server certificate; the bytes are the certificate
+    /// hash (see [`cert_hash_algorithm`]) and are sent, hidden in `c=`, in the client-final message.
+    TlsServerEndPoint(Vec<u8>),
+}
+
+impl ChannelBinding {
+    fn gs2_header(&self) -> &'static str {
+        match self {
+            ChannelBinding::None => "n,,",
+            ChannelBinding::Supported => "y,,",
+            ChannelBinding::TlsServerEndPoint(_) => "p=tls-server-end-point,,",
+        }
+    }
+
+    /// The `c=` value: the base64 of the GS2 header followed by the binding data.
+    fn c_value(&self) -> String {
+        let mut v = self.gs2_header().as_bytes().to_vec();
+        if let ChannelBinding::TlsServerEndPoint(d) = self {
+            v.extend_from_slice(d);
+        }
+        base64::encode(&v)
+    }
+}
+
+/// The hash `tls-server-end-point` uses for a certificate, from the OID of its signature
+/// algorithm: the hash named by it, except that MD5 and SHA-1 are replaced by SHA-256 (RFC 5929
+/// section 4.1). `None` for an algorithm without a plain hash (EdDSA, RSASSA-PSS), where
+/// PostgreSQL itself cannot bind either.
+pub fn cert_hash_algorithm(signature_oid: &[u8]) -> Option<CertHash> {
+    // DER content bytes of the OIDs
+    const RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01]; // 1.2.840.113549.1.1.x
+    const ECDSA_SHA2: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03]; // 1.2.840.10045.4.3.x
+    const ECDSA_SHA1: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x01]; // 1.2.840.10045.4.1
+    if let Some(&last) = signature_oid.strip_prefix(RSA).and_then(|r| r.first()) {
+        return match (signature_oid.len() == RSA.len() + 1, last) {
+            (true, 4 | 5) => Some(CertHash::Sha256), // md5WithRSA, sha1WithRSA
+            (true, 11) => Some(CertHash::Sha256),
+            (true, 12) => Some(CertHash::Sha384),
+            (true, 13) => Some(CertHash::Sha512),
+            (true, 14) => Some(CertHash::Sha256), // sha224WithRSA: replaced like the weak ones
+            _ => None,
+        };
+    }
+    if let Some(&last) = signature_oid
+        .strip_prefix(ECDSA_SHA2)
+        .and_then(|r| r.first())
+    {
+        return match (signature_oid.len() == ECDSA_SHA2.len() + 1, last) {
+            (true, 1) => Some(CertHash::Sha256), // ecdsa-with-SHA224
+            (true, 2) => Some(CertHash::Sha256),
+            (true, 3) => Some(CertHash::Sha384),
+            (true, 4) => Some(CertHash::Sha512),
+            _ => None,
+        };
+    }
+    if signature_oid == ECDSA_SHA1 {
+        return Some(CertHash::Sha256);
+    }
+    None
+}
+
+/// The hash function of a certificate's channel-binding data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertHash {
+    /// SHA-256 (also used for MD5, SHA-1 and SHA-224 signatures).
+    Sha256,
+    /// SHA-384.
+    Sha384,
+    /// SHA-512.
+    Sha512,
+}
+
+impl CertHash {
+    /// Hash a DER certificate.
+    pub fn digest(self, cert_der: &[u8]) -> Vec<u8> {
+        match self {
+            CertHash::Sha256 => sha256(cert_der).to_vec(),
+            CertHash::Sha384 => crate::sha512::sha384(cert_der).to_vec(),
+            CertHash::Sha512 => crate::sha512::sha512(cert_der).to_vec(),
+        }
+    }
+}
+
+/// The signature algorithm OID (the DER content bytes) of an X.509 certificate, read without
+/// parsing the rest: `Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }`.
+pub fn certificate_signature_oid(der: &[u8]) -> Option<&[u8]> {
+    // one TLV: (tag, content, rest)
+    fn tlv(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+        let (&tag, b) = b.split_first()?;
+        let (&l0, b) = b.split_first()?;
+        let (len, b) = if l0 < 0x80 {
+            (usize::from(l0), b)
+        } else {
+            let n = usize::from(l0 & 0x7f);
+            if n == 0 || n > 4 || b.len() < n {
+                return None;
+            }
+            let len = b[..n]
+                .iter()
+                .fold(0usize, |a, x| (a << 8) | usize::from(*x));
+            (len, &b[n..])
+        };
+        if b.len() < len {
+            return None;
+        }
+        Some((tag, &b[..len], &b[len..]))
+    }
+    let (tag, cert, _) = tlv(der)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (tag, _tbs, rest) = tlv(cert)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (tag, alg, _) = tlv(rest)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (tag, oid, _) = tlv(alg)?;
+    (tag == 0x06).then_some(oid)
+}
+
 fn escape_user(user: &str) -> String {
     user.replace('=', "=3D").replace(',', "=2C")
 }
@@ -88,6 +224,7 @@ fn escape_user(user: &str) -> String {
 #[derive(Debug)]
 pub struct ScramClient {
     password: Secret,
+    binding: ChannelBinding,
     client_first_bare: String,
     nonce: String,
     expected_server_signature: Option<[u8; 32]>,
@@ -98,18 +235,38 @@ impl ScramClient {
     /// pass an empty string there. `nonce` must be unpredictable and free of commas
     /// ([`generate_nonce`] qualifies).
     pub fn new(username: &str, password: &str, nonce: String) -> Self {
+        Self::with_binding(username, password, nonce, ChannelBinding::None)
+    }
+
+    /// Like [`ScramClient::new`], with the channel-binding choice for the GS2 header.
+    pub fn with_binding(
+        username: &str,
+        password: &str,
+        nonce: String,
+        binding: ChannelBinding,
+    ) -> Self {
         let client_first_bare = format!("n={},r={}", escape_user(username), nonce);
         ScramClient {
             password: Secret::new(password.as_bytes()),
+            binding,
             client_first_bare,
             nonce,
             expected_server_signature: None,
         }
     }
 
-    /// The client-first message, including the GS2 header `n,,` (no channel binding).
+    /// The SASL mechanism this exchange is for.
+    pub fn mechanism(&self) -> &'static str {
+        match self.binding {
+            ChannelBinding::TlsServerEndPoint(_) => "SCRAM-SHA-256-PLUS",
+            _ => "SCRAM-SHA-256",
+        }
+    }
+
+    /// The client-first message, including the GS2 header (`n,,`, `y,,` or
+    /// `p=tls-server-end-point,,`).
     pub fn client_first(&self) -> String {
-        format!("n,,{}", self.client_first_bare)
+        format!("{}{}", self.binding.gs2_header(), self.client_first_bare)
     }
 
     /// Consume the server-first message and produce the client-final message.
@@ -153,7 +310,7 @@ impl ScramClient {
         pbkdf2_hmac_sha256(self.password.expose(), &salt, iterations, &mut salted);
         let client_key = hmac_sha256(&salted, b"Client Key");
         let stored_key = sha256(&client_key);
-        let client_final_no_proof = format!("c=biws,r={r}");
+        let client_final_no_proof = format!("c={},r={r}", self.binding.c_value());
         let auth_message = format!(
             "{},{},{}",
             self.client_first_bare, server_first, client_final_no_proof
@@ -218,6 +375,82 @@ mod tests {
         assert!(c
             .verify_server_final("v=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
             .is_err());
+    }
+
+    #[test]
+    fn channel_binding_goes_into_the_gs2_header_and_the_c_attribute() {
+        let data = vec![7u8; 32];
+        let mut c = ScramClient::with_binding(
+            "",
+            "pencil",
+            NONCE.to_string(),
+            ChannelBinding::TlsServerEndPoint(data.clone()),
+        );
+        assert_eq!(c.mechanism(), "SCRAM-SHA-256-PLUS");
+        assert_eq!(
+            c.client_first(),
+            "p=tls-server-end-point,,n=,r=rOprNGfwEbeRWgbNEkqO"
+        );
+        let fin = c.client_final(SERVER_FIRST).unwrap();
+        let mut gs2 = b"p=tls-server-end-point,,".to_vec();
+        gs2.extend_from_slice(&data);
+        assert!(
+            fin.starts_with(&format!("c={},r=", base64::encode(&gs2))),
+            "{fin}"
+        );
+        // the proof depends on the binding: the same exchange without it gives another proof
+        let mut plain = ScramClient::new("", "pencil", NONCE.to_string());
+        let plain_fin = plain.client_final(SERVER_FIRST).unwrap();
+        assert_ne!(fin.rsplit("p=").next(), plain_fin.rsplit("p=").next());
+        // `y` and `n`
+        let y = ScramClient::with_binding("", "x", "n".into(), ChannelBinding::Supported);
+        assert_eq!(y.client_first(), "y,,n=,r=n");
+        assert_eq!(y.mechanism(), "SCRAM-SHA-256");
+        assert_eq!(ChannelBinding::Supported.c_value(), "eSws");
+        assert_eq!(ChannelBinding::None.c_value(), "biws");
+    }
+
+    /// A DER certificate prefix with the given signature algorithm OID: enough for the reader.
+    fn cert_with(oid: &[u8]) -> Vec<u8> {
+        let alg = [&[0x06, oid.len() as u8][..], oid, &[0x05, 0x00]].concat();
+        let alg = [&[0x30, alg.len() as u8][..], &alg].concat();
+        let tbs = [0x30, 0x03, 0x02, 0x01, 0x00];
+        let body = [&tbs[..], &alg, &[0x03, 0x02, 0x00, 0x00]].concat();
+        [&[0x30, body.len() as u8][..], &body].concat()
+    }
+
+    #[test]
+    fn the_hash_follows_the_certificates_signature_algorithm() {
+        let rsa = |n: u8| [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, n];
+        let ec = |n: u8| [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, n];
+        let h = |oid: &[u8]| {
+            let der = cert_with(oid);
+            cert_hash_algorithm(certificate_signature_oid(&der).unwrap())
+        };
+        assert_eq!(h(&rsa(11)), Some(CertHash::Sha256));
+        assert_eq!(h(&rsa(12)), Some(CertHash::Sha384));
+        assert_eq!(h(&rsa(13)), Some(CertHash::Sha512));
+        assert_eq!(
+            h(&rsa(5)),
+            Some(CertHash::Sha256),
+            "SHA-1 is replaced by SHA-256"
+        );
+        assert_eq!(h(&rsa(4)), Some(CertHash::Sha256), "MD5 too");
+        assert_eq!(h(&rsa(10)), None, "RSASSA-PSS has no plain hash");
+        assert_eq!(h(&ec(2)), Some(CertHash::Sha256));
+        assert_eq!(h(&ec(3)), Some(CertHash::Sha384));
+        assert_eq!(h(&ec(4)), Some(CertHash::Sha512));
+        assert_eq!(h(&[0x2b, 0x65, 0x70]), None, "Ed25519");
+        // malformed input is None, never a panic
+        assert!(certificate_signature_oid(&[]).is_none());
+        assert!(certificate_signature_oid(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xff]).is_none());
+        let der = cert_with(&rsa(11));
+        for cut in 0..der.len() {
+            let _ = certificate_signature_oid(&der[..cut]);
+        }
+        assert_eq!(CertHash::Sha256.digest(b"abc").len(), 32);
+        assert_eq!(CertHash::Sha384.digest(b"abc").len(), 48);
+        assert_eq!(CertHash::Sha512.digest(b"abc").len(), 64);
     }
 
     #[test]

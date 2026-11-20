@@ -686,3 +686,24 @@ Files: `bench/results/2026-11-18-round3-tail/lane*/out/lane*-round4-tail/crossch
 
 **Not covered (still):** TLS bulk reads (no adapter); diesel R2/R3/R4 and bulk S5/S6/S8; wtx taxi, TLS and bulk (section 18); a third asyncpg S8 run; the faster network; a different region or a faster droplet class for the
 bulk reads; a profile other than `lean2`.
+
+## 21. The blocking pipeline: one connection, pipelined and unpipelined, reported separately (2026-11-19, local)
+
+M1 step 6 added `conn.pipeline()` and `conn.batch(&stmt)` to the blocking API (m1-plan.md step 6). The example `crates/karez-pg/examples/pipeline_s2.rs` runs a point select by primary key on **one connection**,
+unpipelined (one query per round trip) and pipelined (N queries per `Sync`), and prints them as separate rows. Every mode must return the same rows (a checksum is compared).
+
+**Conditions `[measured here, 2026-11-19]`:** an AMD Ryzen 5 5600X (12 threads), Windows 11, WSL2 (Linux 6.18), the client in WSL, PostgreSQL 16.16 in a Docker container reached through Docker's published port on the WSL loopback (so
+every round trip crosses Docker's userland proxy), the seeded `customers` table (20,000 rows), `SELECT * FROM customers WHERE id = $1`, 20,000 queries per repetition, 7 repetitions, release build, Rust 1.85.0, the statement prepared
+and the cache warm before the clock.
+
+| mode | median µs per query | min..max | queries per second | rate against unpipelined |
+|---|---|---|---|---|
+| unpipelined | 170.1 | 167.0..186.7 | 5,879 | 1.00x |
+| pipelined, 4 per Sync | 48.8 | 47.8..50.4 | 20,472 | 3.48x |
+| pipelined, 16 per Sync | 17.6 | 17.0..18.5 | 56,701 | 9.64x |
+| pipelined, 64 per Sync | 10.6 | 10.0..11.8 | 94,669 | 16.10x |
+| pipelined, 256 per Sync | 7.4 | 7.2..7.9 | 135,160 | 22.99x |
+
+**How to read it.** The ratio is large because the round trip here is slow (170 µs per query is the cost of the proxy, not of the client or the server: on the droplet lanes of section 17 one blocking connection ran a point query in tens of microseconds),
+and pipelining removes round trips. It says what the feature does on a connection with a slow round trip; it says nothing about a competitor, a network or a 64-connection run. **This is not the S2 of the plan's gate**: that needs the open-loop harness of `bench/`,
+several clients, droplets, and the owner's approval of the spend (m1-plan.md step 9). Until then the gate rows for S2 stay as they are in plan section 1.3, the unpipelined row measured and the pipelined row without a competitor to compare with.

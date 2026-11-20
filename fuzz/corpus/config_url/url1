@@ -1,0 +1,1 @@
+postgresql://u@h1:5432,h2:5433/db?target_session_attrs=read-write&load_balance_hosts=random

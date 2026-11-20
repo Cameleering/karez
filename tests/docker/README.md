@@ -11,7 +11,9 @@ KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 cargo test -p karez-pg --te
 docker compose -f tests/docker/compose.yaml down -v          # removes the container and its volume
 ```
 
-The host port is `127.0.0.1:54316` (override with `KAREZ_TEST_PG16_PORT`). Containers and volumes
+The host port is `127.0.0.1:54316` (override with `KAREZ_TEST_PG16_PORT`). Profiles `pg13`, `pg14`, `pg15`, `pg17` and `pg18` start the other majors on ports 54313, 54314, 54315, 54317 and 54318
+(`docker compose -f tests/docker/compose.yaml --profile pg13 up -d --wait pg13`); the suite passes on all six. A container made from another copy of the repository can lose its published port
+when compose recreates the project network: recreate it with the same command from this folder. Containers and volumes
 are named `karez-test-*`.
 
 `KAREZ_TEST_PG` is the server address (`host:port`). If it is unset or the server is not
@@ -40,9 +42,19 @@ The seed finishes by creating a `seed_done` table; the compose health check wait
 
 ```sh
 docker compose -f tests/docker/standby.yaml up -d --wait
-KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQUIRE_SERVER=1 cargo test -p karez-pg --test standby
+KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQUIRE_STANDBY=1 cargo test -p karez-pg --test standby
 docker compose -f tests/docker/standby.yaml down -v
 ```
+
+The failover test (`crates/karez-pg/tests/failover.rs`) **destroys this fixture** (it kills the primary and promotes the standby), so it runs only with `KAREZ_TEST_FAILOVER=1`, needs the `docker` command, and the fixture must be recreated afterwards (`down -v`, then `up -d --wait`):
+
+```sh
+KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_TEST_FAILOVER=1 KAREZ_REQUIRE_FAILOVER=1 cargo test -p karez-pg --test failover
+```
+
+## SASLprep
+
+`crates/karez-pg/tests/saslprep.rs` creates a role `karez_prep` as the superuser (the `pg_hba.conf` here has a rule for it) with a password the server normalises (`U+2168`, which is `IX` after SASLprep). Run it without and with the feature: `cargo test -p karez-pg [--features saslprep] --test saslprep`.
 
 ## TLS
 
@@ -54,6 +66,29 @@ the TLS tests fail with a certificate error. Recreate it with `docker compose -f
 KAREZ_TEST_PG=127.0.0.1:54316 KAREZ_REQUIRE_SERVER=1 \
   cargo test -p karez-pg -p karez-rt --features karez-pg/tls,karez-rt/tls
 ```
+
+## OAuth and Kerberos servers
+
+Two more fixtures are **built**, not pulled, and need downloads from Debian's mirrors while building (the compiler and PostgreSQL 18's headers for the first, the Kerberos packages for the second):
+
+```sh
+docker compose -f tests/docker/compose.yaml --profile oauth up -d --build --wait oauth     # PostgreSQL 18 with a test OAuth validator, port 54319
+KAREZ_TEST_OAUTH=127.0.0.1:54319 KAREZ_REQUIRE_OAUTH=1 cargo test -p karez-pg --test auth oauth_server
+
+docker compose -f tests/docker/compose.yaml --profile gss up -d --build --wait kdc pggss   # a KDC (54388) and PostgreSQL 16 with Kerberos (54320)
+KAREZ_TEST_GSS=127.0.0.1:54320 KAREZ_REQUIRE_GSS=1 KRB5_CONFIG=$PWD/tests/docker/gss/krb5-client.conf \
+  cargo test -p karez-pg --features gss --test auth gss_server                              # Unix only
+```
+
+```sh
+docker compose -f tests/docker/compose.yaml --profile cert up -d --wait pgcert   # PostgreSQL 17 with a client-certificate rule, port 54321
+KAREZ_TEST_CERT=127.0.0.1:54321 KAREZ_REQUIRE_CERT=1 cargo test -p karez-pg --features tls --test auth client_certificate
+```
+
+The `cert` role is `karez_cert`; `pg_hba.conf` accepts it only over TLS with a certificate signed by the fixture CA (`hostssl all karez_cert all cert clientcert=verify-full`). The client certificate and key (SEC1 and PKCS#8) are written next to the CA in `tests/docker/certs` (git-ignored). The same service also serves `sslnegotiation=direct`.
+
+The OAuth validator accepts `karez-token-for-<role>` and nothing else; the Kerberos user is `karez_gss@KAREZ.TEST` with the public password `karez_test_only_gss`. The KDC writes the service keytab to `tests/docker/gss/keytabs` (git-ignored). Everything here is test-only.
+The PostgreSQL 18 TLS fixture signs its certificate with SHA-384, so SCRAM channel binding there uses SHA-384 (the others use SHA-256).
 
 ## Windows
 

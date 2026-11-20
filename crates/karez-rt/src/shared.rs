@@ -8,16 +8,18 @@
 
 use crate::engine::{Class, CommandId, Done, Engine, Event, Prepared, RawPrepared};
 use crate::error::{Error, Result};
-use karez_chunk::Chunk;
+use karez_chunk::{Chunk, Date, Decimal128, Interval, Time, Timestamp};
 use karez_pg::{
-    CancelToken, Config, Connection, Error as PgError, Notification, RawParts, UnsupportedTypes,
+    CancelToken, Config, Connection, Error as PgError, Fetched, Notification, RawParts,
+    UnsupportedTypes,
 };
-use karez_proto_pg::{ResultPlan, TxStatus, Value};
+use karez_proto_pg::{Array, ResultPlan, TxStatus, Value};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -40,6 +42,12 @@ pub struct Options {
     /// follows (default 50 ms). Starting a thread for every command would cost more than the
     /// round trip itself. After this the connection has no thread; 0 means exit at once.
     pub idle_linger: Duration,
+    /// Keep the reader thread running while no command is in flight, so `LISTEN` notifications
+    /// arrive on an idle connection (default false). With it set the connection keeps one thread
+    /// blocked in `read` from its first command until the last handle is dropped or the server
+    /// closes it; `wait_for_notification` and `take_notifications` then see notifications at
+    /// any time. Without it notifications are read only while commands are in flight.
+    pub keep_listening: bool,
 }
 
 impl Default for Options {
@@ -51,6 +59,7 @@ impl Default for Options {
             wait_timeout: Duration::from_secs(30),
             close_grace: Duration::from_secs(5),
             idle_linger: Duration::from_millis(50),
+            keep_listening: false,
         }
     }
 }
@@ -100,6 +109,9 @@ struct State {
     closed: bool,
     dead: Option<String>,
     leased: Option<CommandId>,
+    /// The last handle was dropped while commands were in flight: the reader may now exit when
+    /// they are done, even with `Options::keep_listening`.
+    stop_listening: bool,
 }
 
 struct Inner {
@@ -112,15 +124,46 @@ struct Inner {
     opts: Options,
     unsupported: UnsupportedTypes,
     enums: Mutex<HashMap<u32, bool>>,
+    /// Live `SharedConnection` handles (the reader thread holds the `Arc`, so the strong count
+    /// cannot tell when the user has let go).
+    handles: AtomicUsize,
 }
 
 /// A PostgreSQL connection that many threads, or many futures on any executor, can use at once.
 /// Commands are pipelined: whatever is queued is written in one go and answered in order.
 ///
 /// Cloning is cheap and shares the connection.
-#[derive(Clone)]
 pub struct SharedConnection {
     inner: Arc<Inner>,
+}
+
+impl Clone for SharedConnection {
+    fn clone(&self) -> Self {
+        self.inner.handles.fetch_add(1, Ordering::AcqRel);
+        SharedConnection {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl Drop for SharedConnection {
+    fn drop(&mut self) {
+        // Only a connection kept listening has a thread that outlives its users.
+        if self.inner.handles.fetch_sub(1, Ordering::AcqRel) != 1 || !self.inner.opts.keep_listening
+        {
+            return;
+        }
+        let idle = {
+            let mut st = self.inner.state();
+            st.stop_listening = true;
+            st.engine.in_flight() == 0
+        };
+        if idle {
+            self.close();
+        } else {
+            self.inner.cv.notify_all();
+        }
+    }
 }
 
 impl std::fmt::Debug for SharedConnection {
@@ -329,6 +372,11 @@ impl Inner {
                         self.cv.notify_all();
                         return;
                     }
+                    if st.engine.in_flight() == 0 && self.opts.keep_listening && !st.stop_listening
+                    {
+                        // Listening: stay in `read` so notifications arrive on an idle connection.
+                        break;
+                    }
                     if st.engine.in_flight() == 0 {
                         // Linger briefly: the next command usually follows at once.
                         let since = *idle_since.get_or_insert_with(Instant::now);
@@ -386,6 +434,25 @@ impl Inner {
                 }
             }
         }
+    }
+
+    /// Take a command back that was queued but never written (its caller dropped the handle or
+    /// timed out). True if it was removed: the server never sees it. A command already written is
+    /// left to finish and its answer is discarded.
+    fn unsend(&self, id: CommandId) -> bool {
+        let mut st = self.state();
+        if !st.engine.cancel_unsent(id) {
+            return false;
+        }
+        if st.leased == Some(id) {
+            st.leased = None;
+        }
+        let slot = st.slots.remove(&id);
+        drop(st);
+        drop(slot);
+        // room in the queue, or the lease, may have been freed
+        self.cv.notify_all();
+        true
     }
 
     fn exit_pump(&self) {
@@ -476,6 +543,7 @@ impl SharedConnection {
                     closed: false,
                     dead: None,
                     leased: None,
+                    stop_listening: false,
                 }),
                 cv: Condvar::new(),
                 writer: Mutex::new(writer),
@@ -484,6 +552,7 @@ impl SharedConnection {
                 opts,
                 unsupported,
                 enums: Mutex::new(HashMap::new()),
+                handles: AtomicUsize::new(1),
             }),
         })
     }
@@ -504,9 +573,39 @@ impl SharedConnection {
     }
 
     /// Notifications received so far; empties the queue. They arrive while commands are in
-    /// flight (the reader only runs then).
+    /// flight, and at any time with [`Options::keep_listening`].
     pub fn take_notifications(&self) -> Vec<Notification> {
         self.inner.state().engine.take_notifications()
+    }
+
+    /// Block until a notification is available and return it (the oldest first), or until
+    /// `timeout` passes (`Ok(None)`). An error means the connection is closed or has failed. Set
+    /// [`Options::keep_listening`] to receive notifications while no command is in flight;
+    /// without it they are read only during commands, so an idle wait would not see them.
+    pub fn wait_for_notification(&self, timeout: Duration) -> Result<Option<Notification>> {
+        let deadline = Instant::now() + timeout;
+        let inner = &self.inner;
+        let mut st = inner.state();
+        loop {
+            if let Some(n) = st.engine.next_notification() {
+                return Ok(Some(n));
+            }
+            if let Some(reason) = &st.dead {
+                return Err(Error::Closed {
+                    retry_safe: true,
+                    reason: reason.clone(),
+                });
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            st = inner
+                .cv
+                .wait_timeout(st, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
     }
 
     /// True while the reader thread exists. It exists only while commands are in flight and for
@@ -549,6 +648,98 @@ impl SharedConnection {
             pending: Some(p),
             finished: false,
         })
+    }
+
+    /// Open a server-side cursor on `sql`. Blocks for the round trip (and for preparing the
+    /// statement the first time).
+    ///
+    /// A portal exists only inside a transaction block, and a shared connection has **one session
+    /// for everyone**: the transaction is the connection's, so `BEGIN` it first (with
+    /// [`SharedConnection::exec`]) and keep other threads' statements out of it, or they run inside
+    /// it too. Outside a transaction this returns a usage error. Fetches are ordinary commands: they
+    /// queue with everything else and are answered in order, so while one portal is half read other
+    /// commands, and other portals, run between its fetches.
+    pub fn portal(&self, sql: &str, params: &[Value<'_>]) -> Result<Portal> {
+        let stmt = self.prepared(sql, params)?;
+        let inner = &self.inner;
+        let (pending, name) = {
+            let mut st = inner.admit(false)?;
+            let (id, name) = st.engine.open_portal(&stmt, params)?;
+            let slot = Slot::new(false);
+            st.slots.insert(id, slot.clone());
+            inner.ensure_pump(&mut st);
+            inner.flush(st);
+            (
+                Pending {
+                    slot,
+                    inner: inner.clone(),
+                    id,
+                },
+                name,
+            )
+        };
+        pending.wait()?;
+        if self.tx_status() != TxStatus::InTransaction {
+            return Err(Error::Pg(PgError::Usage(
+                "a portal needs an open transaction (exec BEGIN first): the server destroys portals when a transaction ends",
+            )));
+        }
+        Ok(Portal {
+            name,
+            stmt,
+            flags: Arc::new(PortalFlags::default()),
+        })
+    }
+
+    /// Queue a fetch of up to `max_rows` more rows from a portal (`0` for all the rest) without
+    /// waiting. Wait for it, or `.await` it; the result is the rows as chunks.
+    pub fn submit_fetch(&self, portal: &Portal, max_rows: usize) -> Result<PendingFetch> {
+        if portal.is_done() {
+            return Err(Error::Pg(PgError::Usage("the portal has no more rows")));
+        }
+        let limit = i32::try_from(max_rows).map_err(|_| {
+            Error::Pg(PgError::Usage(
+                "max_rows does not fit the protocol's 32-bit limit",
+            ))
+        })?;
+        let inner = &self.inner;
+        let mut st = inner.admit(false)?;
+        let id = st.engine.fetch_portal(&portal.stmt, &portal.name, limit)?;
+        let slot = Slot::new(false);
+        st.slots.insert(id, slot.clone());
+        inner.ensure_pump(&mut st);
+        inner.flush(st);
+        Ok(PendingFetch {
+            pending: Pending {
+                slot,
+                inner: inner.clone(),
+                id,
+            },
+            flags: portal.flags.clone(),
+        })
+    }
+
+    /// Read up to `max_rows` more rows from a portal (`0` for all the rest). Blocks the calling
+    /// thread. A finished portal returns no rows and `done`.
+    pub fn fetch(&self, portal: &Portal, max_rows: usize) -> Result<Fetched> {
+        if portal.is_done() {
+            return Ok(Fetched {
+                chunks: Vec::new(),
+                done: true,
+            });
+        }
+        self.submit_fetch(portal, max_rows)?.wait()
+    }
+
+    /// Close a portal on the server now instead of at the end of the transaction.
+    pub fn close_portal(&self, portal: Portal) {
+        if portal.is_done() {
+            return;
+        }
+        let mut st = self.inner.state();
+        st.engine.close_portal(&portal.name);
+        self.inner.ensure_pump(&mut st);
+        self.inner.flush(st);
     }
 
     /// Start a batch of statements that share one Sync: it is atomic, and an error skips the rest.
@@ -720,6 +911,99 @@ impl Drop for Inner {
     }
 }
 
+#[derive(Debug, Default)]
+struct PortalFlags {
+    done: AtomicBool,
+    rows: AtomicU64,
+}
+
+/// A server-side cursor on a [`SharedConnection`]. See [`SharedConnection::portal`].
+///
+/// Dropping it sends nothing: the server drops the portal when the transaction ends.
+#[derive(Debug)]
+pub struct Portal {
+    name: String,
+    stmt: Arc<Prepared>,
+    flags: Arc<PortalFlags>,
+}
+
+impl Portal {
+    /// The result columns.
+    pub fn fields(&self) -> &[karez_chunk::Field] {
+        self.stmt.plan.fields()
+    }
+
+    /// True once every row has been read, or an error made the portal unusable.
+    pub fn is_done(&self) -> bool {
+        self.flags.done.load(Ordering::Acquire)
+    }
+
+    /// Rows fetched so far.
+    pub fn rows_fetched(&self) -> u64 {
+        self.flags.rows.load(Ordering::Acquire)
+    }
+}
+
+/// A queued portal fetch. Wait for it with [`PendingFetch::wait`], or `.await` it.
+pub struct PendingFetch {
+    pending: Pending,
+    flags: Arc<PortalFlags>,
+}
+
+impl std::fmt::Debug for PendingFetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingFetch").finish()
+    }
+}
+
+impl PendingFetch {
+    fn finish(flags: &PortalFlags, r: Result<Done>) -> Result<Fetched> {
+        match r {
+            Ok(d) => {
+                let rows: usize = d.chunks.iter().map(Chunk::rows).sum();
+                flags.rows.fetch_add(rows as u64, Ordering::AcqRel);
+                if !d.suspended {
+                    flags.done.store(true, Ordering::Release);
+                }
+                Ok(Fetched {
+                    chunks: d.chunks,
+                    done: !d.suspended,
+                })
+            }
+            Err(e) => {
+                // a timeout leaves the portal where it was; any other error ends it
+                if !matches!(e, Error::Timeout) {
+                    flags.done.store(true, Ordering::Release);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Block until the fetch finishes.
+    pub fn wait(self) -> Result<Fetched> {
+        let flags = self.flags;
+        Self::finish(&flags, self.pending.wait())
+    }
+
+    /// Block until the fetch finishes or `timeout` passes (see [`Pending::wait_timeout`]).
+    pub fn wait_timeout(self, timeout: Duration) -> Result<Fetched> {
+        let flags = self.flags;
+        Self::finish(&flags, self.pending.wait_timeout(timeout))
+    }
+}
+
+impl Future for PendingFetch {
+    type Output = Result<Fetched>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.pending).poll(cx) {
+            Poll::Ready(r) => Poll::Ready(Self::finish(&self.flags, r)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 /// A command that was queued. Wait for it with [`Pending::wait`], or `.await` it.
 pub struct Pending {
     slot: Arc<Slot>,
@@ -771,6 +1055,9 @@ impl Pending {
                     .0;
             }
         }
+        if self.inner.unsend(self.id) {
+            return Err(Error::Timeout);
+        }
         let head = self.inner.state().engine.is_head(self.id);
         if head {
             let _ = self.inner.cancel.cancel();
@@ -795,10 +1082,16 @@ impl Future for Pending {
 
 impl Drop for Pending {
     fn drop(&mut self) {
-        let mut s = lock(&self.slot.m);
-        if !s.taken {
-            s.abandoned = true;
-            s.chunks.clear();
+        let abandoned = {
+            let mut s = lock(&self.slot.m);
+            if !s.taken {
+                s.abandoned = true;
+                s.chunks.clear();
+            }
+            !s.taken
+        };
+        if abandoned {
+            self.inner.unsend(self.id);
         }
     }
 }
@@ -932,6 +1225,37 @@ pub enum OwnedValue {
     Text(String),
     /// `bytea`
     Bytes(Vec<u8>),
+    /// `uuid`
+    Uuid([u8; 16]),
+    /// `date`
+    Date(Date),
+    /// `timestamp`
+    Timestamp(Timestamp),
+    /// `timestamptz`
+    TimestampTz(Timestamp),
+    /// `time`
+    Time(Time),
+    /// `interval`
+    Interval(Interval),
+    /// `numeric`, sent in the binary format with the value's scale
+    Numeric(Decimal128),
+    /// `bool[]`
+    BoolArray(Vec<Option<bool>>),
+    /// `int2[]`
+    I16Array(Vec<Option<i16>>),
+    /// `int4[]`
+    I32Array(Vec<Option<i32>>),
+    /// `int8[]`
+    I64Array(Vec<Option<i64>>),
+    /// `float4[]`
+    F32Array(Vec<Option<f32>>),
+    /// `float8[]`
+    F64Array(Vec<Option<f64>>),
+    /// `text[]`
+    TextArray(Vec<Option<String>>),
+    /// A text-format literal whose type the server infers (an enum label, `inet`, `jsonb`, an
+    /// array literal of another element type).
+    Unknown(String),
 }
 
 impl OwnedValue {
@@ -946,6 +1270,21 @@ impl OwnedValue {
             OwnedValue::F64(v) => Value::F64(*v),
             OwnedValue::Text(v) => Value::Text(v),
             OwnedValue::Bytes(v) => Value::Bytes(v),
+            OwnedValue::Uuid(v) => Value::Uuid(*v),
+            OwnedValue::Date(v) => Value::Date(*v),
+            OwnedValue::Timestamp(v) => Value::Timestamp(*v),
+            OwnedValue::TimestampTz(v) => Value::TimestampTz(*v),
+            OwnedValue::Time(v) => Value::Time(*v),
+            OwnedValue::Interval(v) => Value::Interval(*v),
+            OwnedValue::Numeric(v) => Value::Numeric(*v),
+            OwnedValue::BoolArray(v) => Value::Array(Array::Bool(v)),
+            OwnedValue::I16Array(v) => Value::Array(Array::I16(v)),
+            OwnedValue::I32Array(v) => Value::Array(Array::I32(v)),
+            OwnedValue::I64Array(v) => Value::Array(Array::I64(v)),
+            OwnedValue::F32Array(v) => Value::Array(Array::F32(v)),
+            OwnedValue::F64Array(v) => Value::Array(Array::F64(v)),
+            OwnedValue::TextArray(v) => Value::Array(Array::Strings(v)),
+            OwnedValue::Unknown(v) => Value::Unknown(v),
         }
     }
 }

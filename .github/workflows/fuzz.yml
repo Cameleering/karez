@@ -1,0 +1,44 @@
+# Coverage-guided fuzzing of the byte parsers (fuzz/README.md). It runs when started by hand and
+# once a week, for a short time per target, so a regression in a parser shows up without a
+# long-running job. The work corpus is cached between runs. A crash is uploaded as an artifact.
+name: fuzz
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "120"
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FUZZ_WORK: ${{ github.workspace }}/.fuzz-work
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly Rust and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .fuzz-work
+            ~/karez-fuzz-target
+          key: fuzz-${{ github.run_id }}
+          restore-keys: fuzz-
+      - name: Run every target
+        run: bash fuzz/run.sh "${{ github.event.inputs.seconds || '120' }}"
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

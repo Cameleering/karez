@@ -8,6 +8,7 @@
 //! * [`backend`]: parsers for the messages a server sends,
 //! * [`types`]: binary result decoding straight into a [`karez_chunk::ChunkBuilder`], and
 //!   binary parameter encoding,
+//! * [`copy_binary`]: an encoder for the binary `COPY ... FROM STDIN` stream,
 //! * [`scram`], [`sha256`], [`base64`]: SCRAM-SHA-256 and the primitives it needs, written here
 //!   so the crate stays dependency free.
 //!
@@ -19,16 +20,21 @@
 
 pub mod backend;
 pub mod base64;
+pub mod copy_binary;
 pub mod error;
 pub mod frame;
 pub mod frontend;
+mod numeric;
+pub mod oauth;
 mod render;
 pub mod scram;
 pub mod sha256;
+pub mod sha512;
 pub mod types;
 mod wire;
 
 pub use backend::{BackendMessage, DataRow, ErrorFields, FieldDescription, SqlState, TxStatus};
+pub use copy_binary::BinaryCopyEncoder;
 pub use error::{ProtoError, Result};
 pub use frame::{Frame, FrameReader, DEFAULT_MAX_MESSAGE};
-pub use types::{ResultPlan, Value};
+pub use types::{Array, ResultPlan, Value};

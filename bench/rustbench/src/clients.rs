@@ -527,13 +527,19 @@ fn tp_url(url: &str) -> String {
 }
 
 async fn tp_connect(sh: &Shared) -> tokio_postgres::Client {
-    let url = &tp_url(&sh.cfg.url);
+    tp_connect_cfg(&sh.cfg).await
+}
+
+/// One tokio-postgres connection for `cfg`: TLS (chain and host name verified against `--root-cert`) when the URL asks for it.
+/// The bulk scenarios use this too, so S4 to S6 can run over TLS.
+pub async fn tp_connect_cfg(cfg: &crate::Cfg) -> tokio_postgres::Client {
+    let url = &tp_url(&cfg.url);
     #[cfg(feature = "tls")]
     if url.contains("sslmode=verify") || url.contains("sslmode=require") {
-        let tls = tls_connector(sh);
+        let tls = tls_connector(cfg);
         let (c, conn) = tokio_postgres::connect(url, tls)
             .await
-            .unwrap_or_else(|e| die(&format!("connect: {e}")));
+            .unwrap_or_else(|e| die(&format!("connect: {e} ({:?})", std::error::Error::source(&e))));
         tokio::spawn(async move {
             let _ = conn.await;
         });
@@ -549,9 +555,9 @@ async fn tp_connect(sh: &Shared) -> tokio_postgres::Client {
 }
 
 #[cfg(feature = "tls")]
-fn tls_connector(sh: &Shared) -> tokio_postgres_rustls::MakeRustlsConnect {
+fn tls_connector(cfg: &crate::Cfg) -> tokio_postgres_rustls::MakeRustlsConnect {
     let mut roots = rustls::RootCertStore::empty();
-    if let Some(p) = &sh.cfg.root_cert {
+    if let Some(p) = &cfg.root_cert {
         let f = std::fs::File::open(p).unwrap_or_else(|e| die(&format!("root-cert: {e}")));
         for c in rustls_pemfile::certs(&mut std::io::BufReader::new(f)) {
             roots.add(c.unwrap()).unwrap();

@@ -493,7 +493,7 @@ PostgreSQL ADBC driver, DuckDB JDBC versus the chunk path.
 
 - `#![forbid(unsafe_code)]` in `karez`, `karez-pool`, the three protocol crates, `karez-codec`'s
   scalar paths and `karez-chunk` (bitmap and offset arithmetic stay safe and checked).
-- `unsafe` allowed in `karez-rt` (socket options, SIMD dispatch via `std::arch` with a scalar
+- `unsafe` is allowed in `karez-gss` (FFI to the system GSS-API for Kerberos login, 12 blocks, argued in [gss-safety.md](gss-safety.md); added 2026-11-19), in `karez-rt` (socket options, SIMD dispatch via `std::arch` with a scalar
   fallback and a differential test on every fuzz input), `karez-sqlite`, `karez-odbc`, and the
   export crates' C ABI. Target: **at most 200 `unsafe` blocks at 1.0**, each with a `SAFETY:`
   comment, counted in CI.

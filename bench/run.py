@@ -26,6 +26,11 @@ SCENARIOS = {
     "s2": dict(sql="point select", bound_ms=2.0),
     "s3": dict(sql="12-row select", bound_ms=3.0),
     "s7": dict(sql="point select over TLS", bound_ms=2.0),
+    # Labels of the exit measurements (M1 step 9): the same requests as the scenario in OPEN_ALIASES, with TLS or the pool of S8
+    "s1t": dict(sql="SELECT 1 over TLS", bound_ms=2.0),
+    "s3t": dict(sql="12-row select over TLS", bound_ms=3.0),
+    "s8": dict(sql="point select, 512 workers on a pool of 32", bound_ms=2.0),
+    "s8t": dict(sql="point select, 512 workers on a pool of 32, over TLS", bound_ms=2.0),
     # NYC taxi data (data/load_taxi.py): real rows, NULLs, timestamps
     "r1": dict(sql="taxi point select, 17 columns", bound_ms=3.0),
     "r2": dict(sql="taxi 100-row primary-key range", bound_ms=8.0),
@@ -174,14 +179,17 @@ def run_cell(a, client, scenario, mode, conns, rate, duration, warmup, pool=0, d
     return r
 
 
-def run_bulk(a, client, scenario, repeats, rows):
-    """One bulk cell (closed loop): the adapter prints seconds and CPU-seconds of each timed pass."""
+def run_bulk(a, client, scenario, repeats, rows, tls=False):
+    """One bulk cell (closed loop): the adapter prints seconds and CPU-seconds of each timed pass.
+    With tls the cell connects with `--url-tls` (sslmode=verify-full), as S7 does."""
     spec = CLIENTS[client]
     exe = spec["cmd"][0]
     if not os.path.isabs(exe):
         exe = os.path.join(HERE, exe)
-    cmd = [exe] + spec["cmd"][1:] + ["--client", client, "--url", a.url, "--scenario", scenario, "--repeats", str(repeats),
+    cmd = [exe] + spec["cmd"][1:] + ["--client", client, "--url", (a.url_tls if tls else a.url), "--scenario", scenario, "--repeats", str(repeats),
                                       "--bulk-rows", str(rows), "--rt-threads", str(a.rt_threads)]
+    if tls and a.root_cert:
+        cmd += ["--root-cert", a.root_cert]   # tokio-postgres reads the trust root from this flag, not from the URL
     t = time.monotonic()
     db0 = stat_busy(a.db_host) if getattr(a, "db_host", None) else None
     try:
@@ -193,6 +201,8 @@ def run_bulk(a, client, scenario, repeats, rows):
         return {"failed": True, "client": client, "scenario": scenario, "returncode": p.returncode,
                 "stderr": (p.stderr or "")[-600:]}
     r = json.loads(p.stdout.strip().splitlines()[-1])
+    if tls:
+        r["tls"] = True
     r["orch_wall_s"] = round(time.monotonic() - t, 1)
     # database host CPU over the whole cell (warm-up pass and timed passes): is the server the limit? (perf-program.md 1)
     db1 = stat_busy(a.db_host) if db0 else None
@@ -508,11 +518,24 @@ PROFILES = {
                            ("r2", "unpipelined", 64, 0),
                            ("r4", "unpipelined", 64, 0)],
                   bulk=dict(repeats=3, s5_rows=100000, s6_rows=3_000_000)),
+    # exit (M1 step 9, one lane): S1 to S3 and S8 as open loop, each plain and over TLS; the bulk part is run by lane-exit.sh
+    "exit": dict(repeats=3, duration=10, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
+                 configs=[("s1", "unpipelined", 64, 0), ("s1t", "unpipelined", 64, 0),
+                          ("s2", "unpipelined", 64, 0), ("s7", "unpipelined", 64, 0),
+                          ("s3", "unpipelined", 64, 0), ("s3t", "unpipelined", 64, 0),
+                          ("s8", "unpipelined", 512, 32), ("s8t", "unpipelined", 512, 32)]),
+    # recheck (2026-11-20): S8 again after the pool fix, plain and over TLS; the bulk part is run by lane-recheck.sh
+    "recheck": dict(repeats=3, duration=10, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
+                    configs=[("s8", "unpipelined", 512, 32), ("s8t", "unpipelined", 512, 32)]),
     # repeat (rounds 2 and 3): what is measured again on the other droplets
     "repeat": dict(repeats=5, duration=12, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
                    configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 64, 0),
                             ("r1", "unpipelined", 64, 0), ("r2", "unpipelined", 64, 0), ("r4", "unpipelined", 64, 0)]),
 }
+
+
+# A profile label -> (the scenario the adapter runs, over TLS or not). S7 is S2 over TLS; the others are the exit measurements.
+OPEN_ALIASES = {"s7": ("s2", True), "s1t": ("s1", True), "s3t": ("s3", True), "s8": ("s2", False), "s8t": ("s2", True)}
 
 
 def cmd_campaign(a):
@@ -536,7 +559,8 @@ def cmd_campaign(a):
                 continue
             if sc.startswith("r") and not spec.get("taxi", True):
                 continue
-            if spec.get("scenarios") and sc not in spec["scenarios"]:
+            base, tls_cell = OPEN_ALIASES.get(sc, (sc, False))
+            if spec.get("scenarios") and base not in spec["scenarios"]:
                 continue
             if pool and not spec.get("pool"):
                 continue
@@ -544,10 +568,10 @@ def cmd_campaign(a):
                 continue
             print(f"[{client}] {sc} {mode} conns={conns} pool={pool}", flush=True)
             tags = dict(lane=a.lane, round=a.round, profile=a.profile)
-            if sc == "s7" and (not a.url_tls or not spec.get("tls", True)):
-                print("  skipped S7: " + ("no --url-tls" if not a.url_tls else "this adapter has no TLS support yet")); continue
+            if tls_cell and (not a.url_tls or not spec.get("tls", True)):
+                print(f"  skipped {sc.upper()}: " + ("no --url-tls" if not a.url_tls else "this adapter has no TLS support yet")); continue
             try:
-                runs, rate = sweep(a, log, client, "s2" if sc == "s7" else sc, mode, conns, pool, tags=dict(tags, label=sc), tls=(sc == "s7"))
+                runs, rate = sweep(a, log, client, base, mode, conns, pool, tags=dict(tags, label=sc), tls=tls_cell)
             except DbDown:
                 log.add({"client": client, "phase": "abort", "reason": "database down and not restartable"}, **tags)
                 print("ABORT: database down", flush=True)
@@ -568,12 +592,16 @@ def cmd_campaign(a):
 
 def run_bulk_for(a, log, client, bp, tags):
     spec = CLIENTS[client]
+    tls = bool(getattr(a, "bulk_tls", False))
+    if tls and (not a.url_tls or not spec.get("tls", True)):
+        print(f"[{client}] bulk TLS skipped: " + ("no --url-tls" if not a.url_tls else "this adapter has no TLS support yet"), flush=True)
+        return
     for sc in spec.get("bulk", []):
         if a.only and a.only not in f"bulk-{sc}":
             continue
         rows = {"s4": 1_000_000, "s5": bp["s5_rows"], "s6": bp["s6_rows"], "s8": a.taxi_rows}[sc]
-        print(f"[{client}] bulk {sc} rows={rows}", flush=True)
-        raw = run_bulk(a, client, sc, min(bp["repeats"], 3) if sc == "s8" else bp["repeats"], rows)
+        print(f"[{client}] bulk {sc}{' (TLS)' if tls else ''} rows={rows}", flush=True)
+        raw = run_bulk(a, client, sc, min(bp["repeats"], 3) if sc == "s8" else bp["repeats"], rows, tls=tls)
         log.add(raw, phase="bulk", **tags)
         if raw.get("failed"):
             print("    FAILED", str(raw.get("stderr"))[:300], flush=True)
@@ -587,7 +615,7 @@ def cmd_bulk(a):
     bp = dict(repeats=a.repeats, s5_rows=a.s5_rows, s6_rows=a.s6_rows)
     clients = a.clients.split(",") if a.clients else [c for c in CLIENTS if CLIENTS[c].get("bulk")]
     for client in clients:
-        run_bulk_for(a, log, client, bp, dict(lane=a.lane, round=a.round, profile="bulk"))
+        run_bulk_for(a, log, client, bp, dict(lane=a.lane, round=a.round, profile=("bulk-tls" if getattr(a, "bulk_tls", False) else "bulk")))
 
 
 def cmd_report(a):
@@ -627,14 +655,14 @@ def cmd_report(a):
         out.append("S4 = scan of 1,000,000 rows x 10 columns; S5 = batch insert; S6 = COPY. Rows per second is the "
                    "headline here; CPU-seconds per million rows and peak RSS show the cost. `checksum` column: every client must "
                    "fold the same S4 checksum, or the row says MISMATCH.\n")
-        for sc in ("s4", "s5", "s6", "s8"):
-            grp = [r for r in bulks if r.get("scenario", "").lower() == sc and not r.get("failed")]
+        for sc, tls in [(x, t) for t in (False, True) for x in ("s4", "s5", "s6", "s8")]:
+            grp = [r for r in bulks if r.get("scenario", "").lower() == sc and not r.get("failed") and bool(r.get("tls")) == tls]
             if not grp:
                 continue
             ref = {}
             for r in grp:
                 ref.setdefault((r.get("lane"), r.get("round")), r["runs"][0]["checksum"] if sc in ("s4", "s8") else 0)
-            out.append(f"\n### {sc.upper()}\n")
+            out.append(f"\n### {sc.upper()}{' over TLS (sslmode=verify-full)' if tls else ''}\n")
             out.append("| client | lane/round | rows | median s | rows/s | CPU-s per M rows | peak RSS MB | runs | checksum |")
             out.append("|---|---|---:|---:|---:|---:|---:|---:|---|")
             for r in sorted(grp, key=lambda r: (str(r.get("lane")), str(r.get("round")), statistics.median(x["secs"] for x in r["runs"]))):
@@ -668,6 +696,7 @@ def main():
     p = sub.add_parser("verify"); common_args(p); p.set_defaults(f=cmd_verify)
     p.add_argument("--clients", default=None); p.add_argument("--scenarios", default="s2,s3,r1,r2,r3,r4")
     p = sub.add_parser("bulk"); common_args(p); p.set_defaults(f=cmd_bulk)
+    p.add_argument("--bulk-tls", action="store_true", help="run the bulk scenarios over TLS (needs --url-tls); results are kept apart in the report")
     p.add_argument("--out", required=True); p.add_argument("--clients", default=None); p.add_argument("--lane", default="local")
     p.add_argument("--round", default="1"); p.add_argument("--only", default=None)
     p.add_argument("--s5-rows", type=int, default=100000); p.add_argument("--s6-rows", type=int, default=1000000)

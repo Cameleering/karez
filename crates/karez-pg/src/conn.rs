@@ -4,7 +4,10 @@ use crate::transport::Transport;
 use crate::tx::Isolation;
 use crate::tx::Transaction;
 use karez_chunk::{Chunk, ChunkBuilder, Field, RowRef};
-use karez_proto_pg::scram::{generate_nonce, ScramClient};
+use karez_proto_pg::oauth::{self, OAuthChallenge};
+use karez_proto_pg::scram::{
+    cert_hash_algorithm, certificate_signature_oid, generate_nonce, ChannelBinding, ScramClient,
+};
 use karez_proto_pg::{
     frontend, BackendMessage, ErrorFields, Frame, FrameReader, ProtoError, ResultPlan, TxStatus,
     Value,
@@ -14,6 +17,13 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
+
+mod copy;
+mod pipeline;
+mod portal;
+pub use copy::CopyWriter;
+pub use pipeline::{Batch, BatchOutcome, BatchRows, Pipeline, StepResult};
+pub use portal::{Fetched, Portal, PortalCursor};
 
 const READ_BUF: usize = 64 * 1024;
 const MAX_NOTICES: usize = 64;
@@ -30,6 +40,24 @@ pub struct Notification {
     pub channel: String,
     /// Payload (empty if none was given).
     pub payload: String,
+}
+
+/// The password as a SCRAM exchange must use it. PostgreSQL stores `SASLprep(password)` (RFC 4013:
+/// non-ASCII spaces become spaces, "mapped to nothing" characters such as the soft hyphen are
+/// dropped, then Unicode NFKC) and expects the client to apply the same, so `U+2168` and `IX` are
+/// one password. An ASCII password is unchanged by it. With the `saslprep` feature a password that
+/// can be prepared is prepared; one that cannot (it holds a prohibited character) is used as typed,
+/// which is what PostgreSQL itself does. Without the feature a non-ASCII password is used as typed:
+/// correct when it is already in that form, which is usual for text typed on a keyboard.
+fn scram_password(pw: &str) -> std::borrow::Cow<'_, str> {
+    if pw.is_ascii() {
+        return std::borrow::Cow::Borrowed(pw);
+    }
+    #[cfg(feature = "saslprep")]
+    if let Ok(p) = stringprep::saslprep(pw) {
+        return std::borrow::Cow::Owned(p.into_owned());
+    }
+    std::borrow::Cow::Borrowed(pw)
 }
 
 fn unexpected(what: &BackendMessage<'_>) -> Error {
@@ -75,6 +103,58 @@ impl Side {
             }
             _ => {}
         }
+    }
+}
+
+/// What one statement of a group produced: its row count from the command tag, its decoded rows
+/// if it was a query, and a value error if a value could not be held.
+#[derive(Debug, Default)]
+pub(crate) struct Step {
+    pub(crate) rows: u64,
+    pub(crate) chunks: Vec<Chunk>,
+    pub(crate) value_err: Option<String>,
+}
+
+/// How far `read_replies` reads.
+#[derive(Clone, Copy)]
+enum Until {
+    /// To ReadyForQuery (the group's Sync has been sent).
+    Ready,
+    /// Until this many statements are answered, with no Sync sent yet.
+    Steps(usize),
+}
+
+/// The replies of a group of statements, filled in by `read_replies`.
+struct Replies<'a> {
+    stmts: &'a [Statement],
+    decode: &'a [bool],
+    steps: Vec<Step>,
+    cur: Step,
+    started: bool,
+    err: Option<ErrorFields>,
+}
+
+impl<'a> Replies<'a> {
+    fn new(stmts: &'a [Statement], decode: &'a [bool]) -> Self {
+        Replies {
+            stmts,
+            decode,
+            steps: Vec::with_capacity(stmts.len()),
+            cur: Step::default(),
+            started: false,
+            err: None,
+        }
+    }
+
+    /// The statement in progress is complete: keep its rows and start the next.
+    fn finish_step(&mut self, rows: u64, builder: &mut ChunkBuilder) {
+        if self.started && builder.rows() > 0 {
+            self.cur.chunks.push(builder.chunk().clone());
+        }
+        builder.reset();
+        self.started = false;
+        self.cur.rows = rows;
+        self.steps.push(std::mem::take(&mut self.cur));
     }
 }
 
@@ -179,6 +259,7 @@ pub struct Connection {
     cache_cap: usize,
     tick: u64,
     next_stmt: u64,
+    portal_seq: u64,
     tx_status: TxStatus,
     broken: bool,
     closed: bool,
@@ -229,6 +310,62 @@ fn shuffle(v: &mut [(String, u16)]) {
         let r = RandomState::new().build_hasher().finish();
         v.swap(i, (r % (i as u64 + 1)) as usize);
     }
+}
+
+/// The Kerberos context type: the real one with the `gss` feature, a placeholder without.
+#[cfg(feature = "gss")]
+type GssContext = karez_gss::Context;
+#[cfg(not(feature = "gss"))]
+type GssContext = ();
+
+#[cfg(feature = "gss")]
+fn gss_complete(c: &GssContext) -> bool {
+    c.is_complete()
+}
+#[cfg(not(feature = "gss"))]
+fn gss_complete(_: &GssContext) -> bool {
+    true
+}
+
+/// Start a Kerberos exchange with the service `krbsrvname@host` and return the first token.
+#[cfg(feature = "gss")]
+fn gss_start(cfg: &Config) -> Result<(GssContext, Vec<u8>)> {
+    let target = format!("{}@{}", cfg.krbsrvname, cfg.host);
+    let login = cfg.gss_login().map(|(u, p)| {
+        (
+            u,
+            std::str::from_utf8(p).map_err(|_| ProtoError::InvalidUtf8),
+        )
+    });
+    let creds = match login {
+        Some((user, Ok(password))) => karez_gss::Credentials::Password { user, password },
+        Some((_, Err(e))) => return Err(e.into()),
+        None => karez_gss::Credentials::Default,
+    };
+    let mut ctx = karez_gss::Context::new(&target, creds)
+        .map_err(|e| Error::Auth(format!("Kerberos: {e}")))?;
+    let token = ctx
+        .step(None)
+        .map_err(|e| Error::Auth(format!("Kerberos: {e}")))?;
+    Ok((ctx, token))
+}
+
+#[cfg(not(feature = "gss"))]
+fn gss_start(_cfg: &Config) -> Result<(GssContext, Vec<u8>)> {
+    Err(Error::Auth(
+        "the server asked for Kerberos (GSSAPI), which needs karez-pg's `gss` feature".into(),
+    ))
+}
+
+#[cfg(feature = "gss")]
+fn gss_step(ctx: &mut GssContext, token: &[u8]) -> Result<Vec<u8>> {
+    ctx.step(Some(token))
+        .map_err(|e| Error::Auth(format!("Kerberos: {e}")))
+}
+
+#[cfg(not(feature = "gss"))]
+fn gss_step(_ctx: &mut GssContext, _token: &[u8]) -> Result<Vec<u8>> {
+    Err(Error::Auth("Kerberos needs the `gss` feature".into()))
 }
 
 fn tcp_connect(cfg: &Config) -> Result<TcpStream> {
@@ -500,6 +637,34 @@ impl Connection {
     }
 
     fn connect_host(cfg: &Config) -> Result<Connection> {
+        match Connection::connect_once(cfg, None) {
+            // The server was asked what token it needs (the token source returned none the first
+            // time): get one for that challenge and connect again, once.
+            Err(Error::OAuthChallenge {
+                challenge,
+                discovery: true,
+            }) => {
+                let provider = cfg.oauth.as_ref().ok_or_else(|| {
+                    Error::Auth("the server asked for an OAuth token and none is configured".into())
+                })?;
+                let token = provider
+                    .token(Some(&challenge))
+                    .map_err(|e| Error::Auth(format!("the OAuth token source failed: {e}")))?;
+                if token.is_empty() {
+                    return Err(Error::Auth(
+                        "the OAuth token source returned no token for the server's challenge"
+                            .into(),
+                    ));
+                }
+                Connection::connect_once(cfg, Some(token))
+            }
+            other => other,
+        }
+    }
+
+    /// One connection attempt. `token` replaces the token source's first answer (the retry after a
+    /// discovery).
+    fn connect_once(cfg: &Config, token: Option<String>) -> Result<Connection> {
         let tcp = tcp_connect(cfg)?;
         tcp.set_nodelay(true)?;
         tcp.set_read_timeout(cfg.read_timeout)?;
@@ -524,6 +689,7 @@ impl Connection {
             cache_cap: cfg.statement_cache_size.max(1),
             tick: 0,
             next_stmt: 0,
+            portal_seq: 0,
             tx_status: TxStatus::Idle,
             broken: false,
             closed: false,
@@ -536,14 +702,16 @@ impl Connection {
             connect_timeout: cfg.connect_timeout,
             enum_types: HashMap::new(),
         };
-        conn.startup(cfg)?;
+        conn.startup(cfg, token)?;
         Ok(conn)
     }
 
-    fn startup(&mut self, cfg: &Config) -> Result<()> {
+    fn startup(&mut self, cfg: &Config, token: Option<String>) -> Result<()> {
         enum Step {
             AuthOk,
             Cleartext,
+            Gss,
+            GssContinue(Vec<u8>),
             Md5,
             Sasl(Vec<String>),
             SaslContinue(Vec<u8>),
@@ -565,13 +733,18 @@ impl Connection {
         frontend::startup(&mut self.out, &params)?;
         self.io.send(&self.out)?;
 
+        let mut gss: Option<GssContext> = None;
         let mut scram: Option<ScramClient> = None;
+        // OAuth: whether a token was sent, and the server's JSON error once it arrives
+        let mut oauth: Option<(bool, Option<OAuthChallenge>)> = None;
         let mut exchanged = false;
         let mut verified = false;
         loop {
             let step = match self.io.next_msg(&mut self.side)? {
                 BackendMessage::AuthenticationOk => Step::AuthOk,
                 BackendMessage::AuthenticationCleartextPassword => Step::Cleartext,
+                BackendMessage::AuthenticationGss => Step::Gss,
+                BackendMessage::AuthenticationGssContinue(d) => Step::GssContinue(d.to_vec()),
                 BackendMessage::AuthenticationMd5Password { .. } => Step::Md5,
                 BackendMessage::AuthenticationSasl { mechanisms } => Step::Sasl(mechanisms),
                 BackendMessage::AuthenticationSaslContinue(d) => Step::SaslContinue(d.to_vec()),
@@ -586,9 +759,19 @@ impl Connection {
             };
             match step {
                 Step::AuthOk => {
-                    if !exchanged && !cfg.auth.trust {
+                    // A server that checked our client certificate (`sslcert`) over TLS says
+                    // AuthenticationOk with no exchange: that is the login the user asked for, not
+                    // a downgrade. Without a certificate it is `trust`, which must be allowed.
+                    let by_certificate = cfg.ssl_cert.is_some() && self.io.stream.is_tls();
+                    if !exchanged && !cfg.auth.trust && !by_certificate {
                         return Err(Error::Auth(
                             "the server did not ask for authentication; allow that explicitly with auth=trust"
+                                .into(),
+                        ));
+                    }
+                    if gss.as_ref().is_some_and(|g| !gss_complete(g)) {
+                        return Err(Error::Auth(
+                            "the server finished Kerberos login before the security context was established (no mutual authentication)"
                                 .into(),
                         ));
                     }
@@ -597,6 +780,31 @@ impl Connection {
                             "the server finished SCRAM without proving it knows the password"
                                 .into(),
                         ));
+                    }
+                }
+                Step::Gss => {
+                    if !cfg.auth.gss {
+                        return Err(Error::Auth(
+                            "the server asked for Kerberos (GSSAPI); allow that explicitly with auth=gss"
+                                .into(),
+                        ));
+                    }
+                    let (ctx, token) = gss_start(cfg)?;
+                    self.out.clear();
+                    frontend::gss_response(&mut self.out, &token)?;
+                    self.io.send(&self.out)?;
+                    gss = Some(ctx);
+                    exchanged = true;
+                }
+                Step::GssContinue(d) => {
+                    let ctx = gss
+                        .as_mut()
+                        .ok_or_else(|| Error::Auth("unexpected GSSAPI continue".into()))?;
+                    let out = gss_step(ctx, &d)?;
+                    if !out.is_empty() {
+                        self.out.clear();
+                        frontend::gss_response(&mut self.out, &out)?;
+                        self.io.send(&self.out)?;
                     }
                 }
                 Step::Cleartext => {
@@ -620,14 +828,44 @@ impl Connection {
                     ))
                 }
                 Step::Sasl(mechs) => {
+                    let offers = |m: &str| mechs.iter().any(|x| x == m);
+                    // OAuth is used only when the application set a token source and allowed it,
+                    // and the server offers it; otherwise the choice is SCRAM
+                    if cfg.auth.oauth && offers(oauth::MECHANISM) {
+                        let provider = cfg.oauth.as_ref().ok_or_else(|| {
+                            Error::Auth(
+                                "the server offers OAUTHBEARER and auth= allows it, but no token source is set"
+                                    .into(),
+                            )
+                        })?;
+                        let tok = match token.as_deref() {
+                            Some(t) => t.to_string(),
+                            None => provider.token(None).map_err(|e| {
+                                Error::Auth(format!("the OAuth token source failed: {e}"))
+                            })?,
+                        };
+                        let first = oauth::initial_response(&tok)?;
+                        self.out.clear();
+                        frontend::sasl_initial_response(&mut self.out, oauth::MECHANISM, &first)?;
+                        self.io.send(&self.out)?;
+                        oauth = Some((!tok.is_empty(), None));
+                        exchanged = true;
+                        continue;
+                    }
                     if !cfg.auth.scram {
                         return Err(Error::Auth(
                             "SCRAM authentication is not allowed by auth=".into(),
                         ));
                     }
-                    if !mechs.iter().any(|m| m == "SCRAM-SHA-256") {
+                    let binding = self.scram_binding(cfg, &mechs)?;
+                    let mech = if matches!(binding, ChannelBinding::TlsServerEndPoint(_)) {
+                        "SCRAM-SHA-256-PLUS"
+                    } else {
+                        "SCRAM-SHA-256"
+                    };
+                    if !offers(mech) {
                         return Err(Error::Auth(format!(
-                            "server offers {mechs:?}; only SCRAM-SHA-256 without channel binding is supported"
+                            "server offers {mechs:?}; this client needs {mech}"
                         )));
                     }
                     let pw = cfg
@@ -638,16 +876,32 @@ impl Connection {
                                 "the server needs a (UTF-8) password and none was given".into(),
                             )
                         })?;
-                    let c = ScramClient::new("", pw, generate_nonce());
+                    let prepared = scram_password(pw);
+                    let c = ScramClient::with_binding("", &prepared, generate_nonce(), binding);
                     self.out.clear();
                     frontend::sasl_initial_response(
                         &mut self.out,
-                        "SCRAM-SHA-256",
+                        c.mechanism(),
                         c.client_first().as_bytes(),
                     )?;
                     self.io.send(&self.out)?;
                     scram = Some(c);
                     exchanged = true;
+                }
+                Step::SaslContinue(d) if oauth.is_some() => {
+                    // the server rejected the token and sent its JSON error; the RFC wants a single
+                    // 0x01 in answer, after which the server ends the exchange with an error
+                    let (sent_token, ch) = oauth.as_mut().expect("checked");
+                    if ch.is_some() {
+                        return Err(Error::Auth(
+                            "the server sent a second OAuth error message".into(),
+                        ));
+                    }
+                    *ch = Some(oauth::parse_challenge(&d));
+                    let _ = sent_token;
+                    self.out.clear();
+                    frontend::sasl_response(&mut self.out, oauth::ERROR_ACK)?;
+                    self.io.send(&self.out)?;
                 }
                 Step::SaslContinue(d) => {
                     let c = scram
@@ -659,6 +913,9 @@ impl Connection {
                     frontend::sasl_response(&mut self.out, fin.as_bytes())?;
                     self.io.send(&self.out)?;
                 }
+                Step::SaslFinal(_) if oauth.is_some() => {
+                    // nothing to verify: the token itself was the proof
+                }
                 Step::SaslFinal(d) => {
                     let c = scram
                         .as_ref()
@@ -667,7 +924,30 @@ impl Connection {
                     c.verify_server_final(sf)?;
                     verified = true;
                 }
-                Step::Failed(f) => return Err(Error::Server(ServerError::new(*f))),
+                Step::Failed(mut f) => {
+                    // A non-ASCII password sent as typed: PostgreSQL stores passwords after
+                    // SASLprep, so a password that SASLprep would change fails here. Say so.
+                    if scram.is_some()
+                        && f.code == "28P01"
+                        && f.hint.is_none()
+                        && !cfg!(feature = "saslprep")
+                        && cfg.password_bytes().is_some_and(|p| !p.is_ascii())
+                    {
+                        f.hint = Some(
+                            "the password has non-ASCII characters, which PostgreSQL normalises (SASLprep) before it checks a SCRAM login;                              enable the `saslprep` feature of karez-pg, or use an ASCII password"
+                                .into(),
+                        );
+                    }
+                    if let Some((sent_token, Some(challenge))) = oauth.take() {
+                        // the error that follows the JSON challenge: report what the server
+                        // said it needs, not the bare "authentication failed"
+                        return Err(Error::OAuthChallenge {
+                            challenge,
+                            discovery: !sent_token,
+                        });
+                    }
+                    return Err(Error::Server(ServerError::new(*f)));
+                }
                 Step::Key(pid, secret) => {
                     self.process_id = pid;
                     self.secret = secret;
@@ -679,6 +959,57 @@ impl Connection {
                 Step::Skip => {}
             }
         }
+    }
+
+    /// The channel-binding choice for a SCRAM exchange on this connection, from the policy, whether
+    /// the connection is TLS, what the server offers, and the server certificate.
+    fn scram_binding(&self, cfg: &Config, mechs: &[String]) -> Result<ChannelBinding> {
+        use crate::config::ChannelBindingMode as M;
+        let offers_plus = mechs.iter().any(|m| m == "SCRAM-SHA-256-PLUS");
+        let tls = self.io.stream.is_tls();
+        match cfg.channel_binding {
+            M::Disable => Ok(ChannelBinding::None),
+            mode => {
+                if !tls {
+                    return if mode == M::Require {
+                        Err(Error::Auth(
+                            "channel_binding=require needs a TLS connection".into(),
+                        ))
+                    } else {
+                        Ok(ChannelBinding::None)
+                    };
+                }
+                if !offers_plus {
+                    return if mode == M::Require {
+                        Err(Error::Auth(
+                            "channel_binding=require, but the server did not offer SCRAM-SHA-256-PLUS"
+                                .into(),
+                        ))
+                    } else {
+                        // we could bind and the server did not offer it: `y` lets a server that
+                        // does support it detect that the offer was stripped on the way
+                        Ok(ChannelBinding::Supported)
+                    };
+                }
+                let data = self.server_certificate_hash();
+                match (data, mode) {
+                    (Some(d), _) => Ok(ChannelBinding::TlsServerEndPoint(d)),
+                    (None, M::Require) => Err(Error::Auth(
+                        "channel_binding=require, but the server certificate's signature algorithm has no hash to bind to"
+                            .into(),
+                    )),
+                    (None, _) => Ok(ChannelBinding::None),
+                }
+            }
+        }
+    }
+
+    /// The `tls-server-end-point` data (RFC 5929) for the server's certificate: its hash under the
+    /// hash of its own signature algorithm, with SHA-256 for MD5 and SHA-1.
+    fn server_certificate_hash(&self) -> Option<Vec<u8>> {
+        let der = self.io.stream.server_certificate()?;
+        let alg = cert_hash_algorithm(certificate_signature_oid(&der)?)?;
+        Some(alg.digest(&der))
     }
 
     /// Give up the connection object and return its socket and session facts, for a layer that
@@ -807,13 +1138,41 @@ impl Connection {
     }
 
     fn copy_in_inner(&mut self, sql: &str, data: &mut dyn Read) -> Result<u64> {
+        self.copy_in_begin(sql)?;
+        let mut buf = vec![0u8; READ_BUF];
+        let mut io_err = None;
+        loop {
+            match data.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => self.copy_in_send(&buf[..n])?,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    io_err = Some(e);
+                    break;
+                }
+            }
+        }
+        let fail = io_err.as_ref().map(|e| format!("client read error: {e}"));
+        let (rows, err) = self.copy_in_end(fail.as_deref())?;
+        if let Some(e) = io_err {
+            return Err(Error::Caller(e));
+        }
+        match err {
+            Some(f) => Err(Error::Server(ServerError::new(f))),
+            None => Ok(rows),
+        }
+    }
+
+    /// Send the COPY statement and wait for the server to be ready for data. Returns whether the
+    /// stream is binary and the column count. Pair with [`Connection::copy_in_end`].
+    fn copy_in_begin(&mut self, sql: &str) -> Result<(bool, u16)> {
         self.out.clear();
         frontend::query(&mut self.out, sql)?;
         self.io.send(&self.out)?;
         let mut err = None;
         loop {
             match self.io.next_msg(&mut self.side)? {
-                BackendMessage::CopyInResponse { .. } => break,
+                BackendMessage::CopyInResponse { binary, columns } => return Ok((binary, columns)),
                 BackendMessage::ErrorResponse(f) => err = Some(f),
                 BackendMessage::CopyOutResponse { .. } => {
                     // Wrong direction: stop the stream the server is about to send.
@@ -836,47 +1195,36 @@ impl Connection {
                 other => return Err(unexpected(&other)),
             }
         }
-        let mut buf = vec![0u8; READ_BUF];
-        let mut io_err = None;
-        loop {
-            match data.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    self.out.clear();
-                    frontend::copy_data(&mut self.out, &buf[..n])?;
-                    self.io.send(&self.out)?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    io_err = Some(e);
-                    break;
-                }
-            }
-        }
+    }
+
+    /// Send one `CopyData` message.
+    fn copy_in_send(&mut self, data: &[u8]) -> Result<()> {
         self.out.clear();
-        match &io_err {
-            Some(e) => frontend::copy_fail(&mut self.out, &format!("client read error: {e}"))?,
+        frontend::copy_data(&mut self.out, data)?;
+        self.io.send(&self.out)
+    }
+
+    /// End the stream (`CopyFail` with the message when `fail` is set, `CopyDone` otherwise) and
+    /// read to `ReadyForQuery`. Returns the row count and the server's error, if it sent one.
+    fn copy_in_end(&mut self, fail: Option<&str>) -> Result<(u64, Option<ErrorFields>)> {
+        self.out.clear();
+        match fail {
+            Some(m) => frontend::copy_fail(&mut self.out, m)?,
             None => frontend::copy_done(&mut self.out),
         }
         self.io.send(&self.out)?;
         let mut rows = 0;
+        let mut err = None;
         loop {
             match self.io.next_msg(&mut self.side)? {
                 BackendMessage::CommandComplete(tag) => rows = rows_from_tag(&tag),
                 BackendMessage::ErrorResponse(f) => err = Some(f),
                 BackendMessage::ReadyForQuery(s) => {
                     self.tx_status = s;
-                    break;
+                    return Ok((rows, err));
                 }
                 other => return Err(unexpected(&other)),
             }
-        }
-        if let Some(e) = io_err {
-            return Err(Error::Caller(e));
-        }
-        match err {
-            Some(f) => Err(Error::Server(ServerError::new(f))),
-            None => Ok(rows),
         }
     }
 
@@ -990,10 +1338,35 @@ impl Connection {
             Self::check_params(&stmt, params)?;
             stmts.push(stmt);
         }
+        let decode = vec![false; stmts.len()];
+        let params: Vec<&[Value<'_>]> = items.iter().map(|(_, p)| *p).collect();
+        let (steps, err) = self.run_group(&stmts, &params, &decode)?;
+        if let Some(f) = err {
+            return Err(Error::Server(ServerError::new(f)));
+        }
+        if steps.len() != items.len() {
+            return Err(Error::Proto(ProtoError::InvalidValue(
+                "batch result count differs from statement count",
+            )));
+        }
+        Ok(steps.iter().map(|s| s.rows).collect())
+    }
+
+    /// Run prepared statements with one Sync: encode every Bind and Execute, send them (in windows
+    /// or with a writer thread when the batch is large), and read the replies. `decode[i]` says
+    /// whether statement `i`'s rows are decoded into chunks (a query) or discarded (an execute).
+    /// Returns the steps that completed, and the server's error if one stopped the group; the
+    /// statements after the failing one were skipped by the server.
+    fn run_group(
+        &mut self,
+        stmts: &[Statement],
+        params: &[&[Value<'_>]],
+        decode: &[bool],
+    ) -> Result<(Vec<Step>, Option<ErrorFields>)> {
         self.out.clear();
         // where each statement's Bind and Execute end in `out`, for sending a batch in windows
-        let mut bounds = Vec::with_capacity(items.len());
-        for ((_, params), stmt) in items.iter().zip(&stmts) {
+        let mut bounds = Vec::with_capacity(stmts.len());
+        for (params, stmt) in params.iter().zip(stmts) {
             self.scratch.clear();
             let mut ranges = Vec::with_capacity(params.len());
             for p in params.iter() {
@@ -1016,22 +1389,18 @@ impl Connection {
             bounds.push(self.out.len());
         }
         frontend::sync(&mut self.out);
-        let counts = if self.out.len() <= OVERLAP_WRITE_BYTES {
+        let mut rep = Replies::new(stmts, decode);
+        if self.out.len() <= OVERLAP_WRITE_BYTES {
             self.io.send(&self.out)?;
-            self.read_batch(items.len())?
+            self.read_replies(&mut rep, Until::Ready)?;
         } else if self.io.stream.is_tls() {
             // A TLS stream cannot be split between a reader and a writer thread, so the batch goes
             // out in windows of about 64 KiB, each followed by a Flush and a read of its results.
-            self.send_in_windows(&bounds)?
+            self.send_in_windows(&bounds, &mut rep)?;
         } else {
-            self.write_while_reading(items.len())?
-        };
-        if counts.len() != items.len() {
-            return Err(Error::Proto(ProtoError::InvalidValue(
-                "batch result count differs from statement count",
-            )));
+            self.write_while_reading(&mut rep)?;
         }
-        Ok(counts)
+        Ok((rep.steps, rep.err))
     }
 
     /// Send the encoded batch (`self.out`, statement ends in `bounds`, then a Sync) in windows of
@@ -1039,19 +1408,22 @@ impl Connection {
     /// next. Never more than about one window is unread by the server, so neither side can block
     /// the other, and no second thread is needed. The batch still ends in one Sync, so it is one
     /// implicit transaction, as in the unwindowed path.
-    fn send_in_windows(&mut self, bounds: &[usize]) -> Result<Vec<u64>> {
+    fn send_in_windows(&mut self, bounds: &[usize], rep: &mut Replies<'_>) -> Result<()> {
         let out = std::mem::take(&mut self.out);
-        let r = self.send_in_windows_inner(&out, bounds);
+        let r = self.send_in_windows_inner(&out, bounds, rep);
         self.out = out;
         self.out.clear();
         r
     }
 
-    fn send_in_windows_inner(&mut self, out: &[u8], bounds: &[usize]) -> Result<Vec<u64>> {
-        let mut counts = Vec::with_capacity(bounds.len());
-        let (mut start, mut in_window) = (0usize, 0usize);
+    fn send_in_windows_inner(
+        &mut self,
+        out: &[u8],
+        bounds: &[usize],
+        rep: &mut Replies<'_>,
+    ) -> Result<()> {
+        let mut start = 0usize;
         for (i, &end) in bounds.iter().enumerate() {
-            in_window += 1;
             let last = i + 1 == bounds.len();
             if last || end - start < OVERLAP_WRITE_BYTES {
                 continue;
@@ -1060,63 +1432,28 @@ impl Connection {
             frontend::flush(&mut msg);
             self.io.send(&out[start..end])?;
             self.io.send(&msg)?;
-            self.read_window(in_window, &mut counts)?;
+            // read until the statements sent so far are answered; after an error the server skips
+            // to the next Sync, so `read_replies` sends it and reads to ReadyForQuery
+            if self.read_replies(rep, Until::Steps(i + 1))? {
+                return Ok(());
+            }
             start = end;
-            in_window = 0;
         }
         // the rest and the Sync
         self.io.send(&out[start..])?;
-        let mut tail = self.read_batch(in_window)?;
-        counts.append(&mut tail);
-        Ok(counts)
-    }
-
-    /// Read the results of `n` statements sent with a Flush and no Sync. After a server error the
-    /// server skips input until a Sync: send it, read to ReadyForQuery, and return the error.
-    fn read_window(&mut self, n: usize, counts: &mut Vec<u64>) -> Result<()> {
-        let mut seen = 0;
-        while seen < n {
-            match self.io.next_msg(&mut self.side)? {
-                BackendMessage::BindComplete
-                | BackendMessage::DataRow(_)
-                | BackendMessage::PortalSuspended => {}
-                BackendMessage::CommandComplete(tag) => {
-                    counts.push(rows_from_tag(&tag));
-                    seen += 1;
-                }
-                BackendMessage::EmptyQueryResponse => {
-                    counts.push(0);
-                    seen += 1;
-                }
-                BackendMessage::ErrorResponse(f) => {
-                    let mut sync = Vec::new();
-                    frontend::sync(&mut sync);
-                    self.io.send(&sync)?;
-                    loop {
-                        if let BackendMessage::ReadyForQuery(st) =
-                            self.io.next_msg(&mut self.side)?
-                        {
-                            self.tx_status = st;
-                            break;
-                        }
-                    }
-                    return Err(Error::Server(ServerError::new(f)));
-                }
-                other => return Err(unexpected(&other)),
-            }
-        }
+        self.read_replies(rep, Until::Ready)?;
         Ok(())
     }
 
     /// Send the encoded batch from a helper thread while this thread reads the results. A server
     /// stops reading its input when it cannot write its output, so a client that writes
     /// everything before reading anything can block forever (both sides stuck in `write`).
-    fn write_while_reading(&mut self, n: usize) -> Result<Vec<u64>> {
+    fn write_while_reading(&mut self, rep: &mut Replies<'_>) -> Result<()> {
         let out = std::mem::take(&mut self.out);
         let mut writer = self.io.stream.try_clone_plain()?;
         let (read, written) = std::thread::scope(|sc| {
             let w = sc.spawn(move || writer.write_all(&out).map(|()| out));
-            let read = self.read_batch(n);
+            let read = self.read_replies(rep, Until::Ready);
             if matches!(&read, Err(e) if e.is_fatal()) || self.broken {
                 // Unblock the writer: the connection is unusable after this error anyway. A
                 // server error is not fatal: the server reads on to the Sync, so the writer ends.
@@ -1128,43 +1465,104 @@ impl Connection {
             (read, written)
         });
         match (read, written) {
-            (Ok(counts), Ok(out)) => {
+            (Ok(_), Ok(out)) => {
                 self.out = out;
                 self.out.clear();
-                Ok(counts)
+                Ok(())
             }
             (Err(e), _) => Err(e),
             (Ok(_), Err(e)) => Err(Error::Io(e)),
         }
     }
 
-    /// Read the replies to a batch of Bind/Execute pairs followed by one Sync.
-    fn read_batch(&mut self, n: usize) -> Result<Vec<u64>> {
-        let mut counts = Vec::with_capacity(n);
-        let mut err = None;
+    /// Read replies of a Bind and Execute group into `rep`. Returns true if the server's
+    /// ReadyForQuery was reached (the group is over), false if `until` was met first.
+    fn read_replies(&mut self, rep: &mut Replies<'_>, until: Until) -> Result<bool> {
         loop {
             let m = match self.io.next_msg(&mut self.side) {
                 Ok(m) => m,
-                Err(e) => return Err(self.server_error_or(err.take(), e)),
+                Err(e) => return Err(self.server_error_or(rep.err.take(), e)),
             };
             match m {
-                BackendMessage::BindComplete
-                | BackendMessage::DataRow(_)
-                | BackendMessage::PortalSuspended => {}
-                BackendMessage::CommandComplete(tag) => counts.push(rows_from_tag(&tag)),
-                BackendMessage::EmptyQueryResponse => counts.push(0),
-                BackendMessage::ErrorResponse(f) => err = Some(f),
+                BackendMessage::BindComplete | BackendMessage::PortalSuspended => {}
+                BackendMessage::DataRow(d) => {
+                    let i = rep.steps.len();
+                    if rep.err.is_none()
+                        && rep.cur.value_err.is_none()
+                        && rep.decode.get(i).copied().unwrap_or(false)
+                    {
+                        let plan = &rep.stmts[i].inner.plan;
+                        if !rep.started {
+                            self.builder.set_schema(plan.fields().to_vec());
+                            rep.started = true;
+                        }
+                        match plan.decode_row(d.body, &mut self.builder) {
+                            Ok(()) => {
+                                if self.builder.is_full() {
+                                    rep.cur.chunks.push(self.builder.chunk().clone());
+                                    self.builder.reset();
+                                }
+                            }
+                            // a value this version cannot hold: the stream is intact, so the step
+                            // fails with a value error and the group carries on
+                            Err(ProtoError::BadValue { oid, what }) => {
+                                rep.cur.value_err =
+                                    Some(format!("value of type oid {oid}: {what}"));
+                            }
+                            Err(ProtoError::Chunk(c)) => rep.cur.value_err = Some(c.to_string()),
+                            Err(e) => {
+                                self.broken = true; // unread messages remain
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                BackendMessage::CommandComplete(_) | BackendMessage::EmptyQueryResponse
+                    if rep.steps.len() >= rep.stmts.len() =>
+                {
+                    self.broken = true;
+                    return Err(Error::Proto(ProtoError::InvalidValue(
+                        "more command completions than statements in the group",
+                    )));
+                }
+                BackendMessage::CommandComplete(tag) => {
+                    rep.finish_step(rows_from_tag(&tag), &mut self.builder);
+                    if matches!(until, Until::Steps(n) if rep.steps.len() >= n) {
+                        return Ok(false);
+                    }
+                }
+                BackendMessage::EmptyQueryResponse => {
+                    rep.finish_step(0, &mut self.builder);
+                    if matches!(until, Until::Steps(n) if rep.steps.len() >= n) {
+                        return Ok(false);
+                    }
+                }
+                BackendMessage::ErrorResponse(f) => {
+                    rep.err = Some(f);
+                    if matches!(until, Until::Steps(_)) {
+                        // no Sync has been sent yet and the server is skipping input until one
+                        // arrives: send it and read to ReadyForQuery
+                        let mut sync = Vec::new();
+                        frontend::sync(&mut sync);
+                        self.io.send(&sync)?;
+                        loop {
+                            if let BackendMessage::ReadyForQuery(st) =
+                                self.io.next_msg(&mut self.side)?
+                            {
+                                self.tx_status = st;
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
                 BackendMessage::ReadyForQuery(s) => {
                     self.tx_status = s;
-                    break;
+                    self.builder.reset();
+                    return Ok(true);
                 }
                 other => return Err(unexpected(&other)),
             }
         }
-        if let Some(f) = err {
-            return Err(Error::Server(ServerError::new(f)));
-        }
-        Ok(counts)
     }
 
     /// Backend process id of this session.
@@ -1195,6 +1593,79 @@ impl Connection {
     /// True once a fatal error has made the connection unusable.
     pub fn is_broken(&self) -> bool {
         self.broken
+    }
+
+    /// Probe an idle connection without a round trip: is the server still there?
+    ///
+    /// Reads whatever the server has already sent, without waiting. End of stream, a reset, an
+    /// `ErrorResponse` (a server shutting down or terminating the session sends `FATAL` first)
+    /// or any message a command did not ask for means the connection is dead, and it is marked
+    /// broken. `ParameterStatus`, notices and notifications are kept for the next command. A
+    /// connection with a command in progress (a cursor or a copy open) is not idle and this
+    /// returns `false` for it. A server that vanished without closing the socket (a cable
+    /// pulled, a firewall that drops packets) cannot be seen this way; only a command, or the
+    /// operating system's keep-alive, finds it.
+    pub fn is_alive(&mut self) -> bool {
+        if self.broken {
+            return false;
+        }
+        let alive = self.probe_idle();
+        if !alive {
+            self.broken = true;
+        }
+        alive
+    }
+
+    fn probe_idle(&mut self) -> bool {
+        if self.io.stream.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let mut alive = true;
+        // an idle server sends nothing, or a few messages; a bound keeps a babbling one from
+        // holding this forever
+        for _ in 0..64 {
+            match self.io.stream.read(&mut self.io.buf) {
+                Ok(0) => {
+                    alive = false;
+                    break;
+                }
+                Ok(n) => self.io.reader.push(&self.io.buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    alive = false;
+                    break;
+                }
+            }
+        }
+        if self.io.stream.set_nonblocking(false).is_err() {
+            return false;
+        }
+        while alive {
+            match self.io.reader.frame_ready() {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => return false,
+            }
+            let Ok(Some((tag, span))) = self.io.reader.next_span() else {
+                return false;
+            };
+            let Ok(msg) = BackendMessage::parse(Frame {
+                tag,
+                body: self.io.reader.span(span),
+            }) else {
+                return false;
+            };
+            match msg {
+                BackendMessage::ParameterStatus { .. }
+                | BackendMessage::NoticeResponse(_)
+                | BackendMessage::NotificationResponse { .. } => self.side.absorb(msg),
+                // an ErrorResponse here is the server saying goodbye; anything else is a stream
+                // nobody should reuse
+                _ => alive = false,
+            }
+        }
+        alive
     }
 
     fn track<T>(&mut self, r: Result<T>) -> Result<T> {
@@ -1684,6 +2155,12 @@ impl Drop for Connection {
 ///
 /// Dropping a cursor before the end reads and discards the rest of the result so the connection
 /// stays usable.
+///
+/// A `Cursor` reads the result from the socket as it goes, so it **owns the connection until it
+/// ends**: this is how the protocol delivers one result, and no other statement can run meanwhile.
+/// To read a large result while the connection serves other statements, or to read several results
+/// in turn, use a [`PortalCursor`] (`Connection::portal_cursor`), which fetches a few rows at a time
+/// and takes the connection per call, inside a transaction.
 pub struct Cursor<'c> {
     conn: &'c mut Connection,
     stmt: Statement,

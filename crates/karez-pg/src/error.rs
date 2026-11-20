@@ -85,6 +85,16 @@ pub enum Error {
     Tls(String),
     /// Authentication could not be completed (policy, method, or server proof).
     Auth(String),
+    /// The server did not accept the OAuth bearer token (it is missing, expired or refused). The
+    /// challenge says what the server needs: its `scope` and the `openid_configuration` URL of the
+    /// provider the token must come from. `discovery` is true if the client sent no token to find
+    /// that out (the client then asks its token source and tries once more by itself).
+    OAuthChallenge {
+        /// What the server's error said.
+        challenge: karez_proto_pg::oauth::OAuthChallenge,
+        /// True for the answer to a request without a token.
+        discovery: bool,
+    },
     /// A result column has a type this version cannot decode.
     UnsupportedType {
         /// Column name.
@@ -106,6 +116,9 @@ pub enum Error {
     Broken,
     /// The call was made in a state where it is not allowed.
     Usage(&'static str),
+    /// A statement of a pipeline that was not run because an earlier statement of the same group
+    /// failed: the server skips the rest of a group after an error.
+    Skipped,
     /// A configuration with several hosts, or with `target_session_attrs` other than `any`, found
     /// no host to use. `attempts` says what happened on each host, in the order tried.
     /// `transient` is true if any attempt failed in a way that may pass (a host that was
@@ -189,6 +202,13 @@ impl fmt::Display for Error {
             Error::Config(m) => write!(f, "configuration error: {m}"),
             Error::Tls(m) => write!(f, "TLS error: {m}"),
             Error::Auth(m) => write!(f, "authentication failed: {m}"),
+            Error::OAuthChallenge { challenge, .. } => write!(
+                f,
+                "the server did not accept the OAuth token (status {}, scope {}, provider {})",
+                challenge.status.as_deref().unwrap_or("unknown"),
+                challenge.scope.as_deref().unwrap_or("unknown"),
+                challenge.openid_configuration.as_deref().unwrap_or("unknown"),
+            ),
             Error::UnsupportedType {
                 column,
                 oid,
@@ -203,6 +223,10 @@ impl fmt::Display for Error {
             Error::Closed => write!(f, "connection closed by the server"),
             Error::Broken => write!(f, "connection is broken by an earlier error"),
             Error::Usage(m) => write!(f, "{m}"),
+            Error::Skipped => write!(
+                f,
+                "not run: an earlier statement of the same pipeline failed"
+            ),
             Error::NoSuitableHost { attempts, .. } => {
                 write!(f, "no host could be used: {attempts}")
             }

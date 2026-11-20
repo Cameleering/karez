@@ -44,6 +44,10 @@ impl Transport {
         if cfg.ssl_mode == SslMode::Disable {
             return Ok(Transport::Plain(stream));
         }
+        if cfg.ssl_negotiation == crate::config::SslNegotiation::Direct {
+            // no SSLRequest: the handshake starts at once (PostgreSQL 17 and later)
+            return Self::start_tls(stream, cfg);
+        }
         let mut req = Vec::with_capacity(8);
         frontend::ssl_request(&mut req);
         stream.write_all(&req)?;
@@ -101,12 +105,29 @@ impl Transport {
         }
     }
 
+    /// The server's certificate (DER) as presented in the handshake, for channel binding.
+    pub(crate) fn server_certificate(&self) -> Option<Vec<u8>> {
+        match self {
+            #[cfg(feature = "tls")]
+            Transport::Tls(s) => s
+                .conn
+                .peer_certificates()
+                .and_then(|c| c.first())
+                .map(|c| c.as_ref().to_vec()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_tls(&self) -> bool {
         !matches!(self, Transport::Plain(_) | Transport::Taken)
     }
 
     pub(crate) fn set_read_timeout(&self, d: Option<Duration>) -> std::io::Result<()> {
         self.tcp().set_read_timeout(d)
+    }
+
+    pub(crate) fn set_nonblocking(&self, on: bool) -> std::io::Result<()> {
+        self.tcp().set_nonblocking(on)
     }
 
     pub(crate) fn read_timeout(&self) -> std::io::Result<Option<Duration>> {

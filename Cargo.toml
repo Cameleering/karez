@@ -5,10 +5,14 @@ members = [
     "crates/karez-proto-pg",
     "crates/karez-pool",
     "crates/karez-pg",
+    "crates/karez-gss",
     "crates/karez-rt",
     "crates/karez-compat-tests",
     "crates/karez",
 ]
+
+# the fuzz targets live in fuzz/, which is its own workspace (it has a dependency on libFuzzer)
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.0"

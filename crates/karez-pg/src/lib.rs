@@ -21,6 +21,7 @@ mod batch;
 mod config;
 mod conn;
 mod error;
+pub mod metadata;
 mod pool;
 mod scan;
 #[cfg(feature = "tls")]
@@ -28,12 +29,21 @@ mod tls;
 mod transport;
 mod tx;
 
-pub use config::{AuthPolicy, Config, LoadBalance, SslMode, TargetSessionAttrs, UnsupportedTypes};
-pub use conn::{CancelToken, Connection, Cursor, Notification, RawParts, Statement};
+pub use config::{
+    AuthPolicy, ChannelBindingMode, Config, LoadBalance, SslMode, SslNegotiation,
+    TargetSessionAttrs, TokenProvider, UnsupportedTypes,
+};
+pub use conn::{
+    Batch, BatchOutcome, BatchRows, CancelToken, Connection, CopyWriter, Cursor, Fetched,
+    Notification, Pipeline, Portal, PortalCursor, RawParts, Statement, StepResult,
+};
 pub use error::{Error, Result, ServerError};
-pub use karez_chunk::{Chunk, Column, ColumnType, Date, Field, RowRef, Timestamp};
+pub use karez_chunk::{
+    Chunk, Column, ColumnType, Date, Decimal128, Field, Interval, RowRef, Time, Timestamp,
+};
+pub use karez_proto_pg::oauth::OAuthChallenge;
 pub use karez_proto_pg::types::oid;
-pub use karez_proto_pg::{ErrorFields, TxStatus, Value};
+pub use karez_proto_pg::{Array, ErrorFields, TxStatus, Value};
 pub use pool::{Pool, PooledConnection};
 #[cfg(feature = "tls")]
 pub use rustls::ClientConnection as TlsConnection;

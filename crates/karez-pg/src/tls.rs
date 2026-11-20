@@ -139,7 +139,49 @@ impl ServerCertVerifier for AcceptAny {
     }
 }
 
-/// Run the TLS handshake over `stream` (after the server answered `S` to the SSLRequest).
+/// The client certificate chain and key from `sslcert` and `sslkey`, if set. Both or neither.
+fn client_auth(
+    cfg: &Config,
+) -> Result<
+    Option<(
+        Vec<CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    )>,
+> {
+    use rustls::pki_types::PrivateKeyDer;
+    let (cert_path, key_path) = match (&cfg.ssl_cert, &cfg.ssl_key) {
+        (None, None) => return Ok(None),
+        (Some(c), Some(k)) => (c, k),
+        _ => {
+            return Err(Error::Tls(
+                "sslcert and sslkey must be given together".into(),
+            ))
+        }
+    };
+    let bytes = std::fs::read(cert_path)
+        .map_err(|e| Error::Tls(format!("cannot read sslcert {cert_path:?}: {e}")))?;
+    let chain = CertificateDer::pem_slice_iter(&bytes)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| Error::Tls(format!("sslcert {cert_path:?}: {e}")))?;
+    if chain.is_empty() {
+        return Err(Error::Tls(format!(
+            "sslcert {cert_path:?} holds no certificate"
+        )));
+    }
+    let key_bytes = std::fs::read(key_path)
+        .map_err(|e| Error::Tls(format!("cannot read sslkey {key_path:?}: {e}")))?;
+    // PKCS#8, PKCS#1 ("RSA PRIVATE KEY") and SEC1 ("EC PRIVATE KEY") are all read; an encrypted key
+    // ("ENCRYPTED PRIVATE KEY") is not, and says so
+    let key = PrivateKeyDer::from_pem_slice(&key_bytes).map_err(|e| {
+        Error::Tls(format!(
+            "sslkey {key_path:?}: {e} (a key protected by a passphrase is not supported)"
+        ))
+    })?;
+    Ok(Some((chain, key)))
+}
+
+/// Run the TLS handshake over `stream` (after the server answered `S` to the SSLRequest, or at once
+/// for `sslnegotiation=direct`).
 pub(crate) fn wrap(
     mut stream: TcpStream,
     cfg: &Config,
@@ -148,10 +190,16 @@ pub(crate) fn wrap(
     let builder = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(tls_err)?;
+    let auth = client_auth(cfg)?;
+    // the verifier decides how the server is checked; the client certificate, if any, is separate
     let config = match cfg.ssl_mode {
-        SslMode::VerifyFull => builder
-            .with_root_certificates(roots(cfg)?)
-            .with_no_client_auth(),
+        SslMode::VerifyFull => {
+            let b = builder.with_root_certificates(roots(cfg)?);
+            match auth {
+                Some((chain, key)) => b.with_client_auth_cert(chain, key).map_err(tls_err)?,
+                None => b.with_no_client_auth(),
+            }
+        }
         SslMode::VerifyCa => {
             let inner = WebPkiServerVerifier::builder_with_provider(
                 Arc::new(roots(cfg)?),
@@ -159,17 +207,30 @@ pub(crate) fn wrap(
             )
             .build()
             .map_err(tls_err)?;
-            builder
+            let b = builder
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(ChainOnly(inner)))
-                .with_no_client_auth()
+                .with_custom_certificate_verifier(Arc::new(ChainOnly(inner)));
+            match auth {
+                Some((chain, key)) => b.with_client_auth_cert(chain, key).map_err(tls_err)?,
+                None => b.with_no_client_auth(),
+            }
         }
-        SslMode::Require => builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAny(provider)))
-            .with_no_client_auth(),
+        SslMode::Require => {
+            let b = builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(AcceptAny(provider)));
+            match auth {
+                Some((chain, key)) => b.with_client_auth_cert(chain, key).map_err(tls_err)?,
+                None => b.with_no_client_auth(),
+            }
+        }
         SslMode::Disable => return Err(Error::Usage("TLS requested with sslmode=disable")),
     };
+    let mut config = config;
+    if cfg.ssl_negotiation == crate::config::SslNegotiation::Direct {
+        // a server that accepts a direct handshake requires this protocol name (PostgreSQL 17)
+        config.alpn_protocols = vec![b"postgresql".to_vec()];
+    }
     let name = ServerName::try_from(cfg.host.clone())
         .map_err(|e| Error::Tls(format!("{:?} is not a valid server name: {e}", cfg.host)))?;
     let mut conn = ClientConnection::new(Arc::new(config), name).map_err(tls_err)?;

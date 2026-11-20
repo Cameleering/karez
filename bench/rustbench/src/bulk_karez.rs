@@ -275,7 +275,38 @@ impl Read for GenReader {
     }
 }
 
+/// Set by the `karez-blocking-binary` client: S6 with binary COPY (`Connection::copy_in_binary`), the same rows.
+pub static BINARY_COPY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn copy_in_binary(conn: &mut Connection, rows: i64) -> Result<(u64, u64), String> {
+    use karez_pg::Value;
+    let e = |e: karez_pg::Error| e.to_string();
+    conn.execute("TRUNCATE bench_ins", &[]).map_err(e)?;
+    let mut w = conn.copy_in_binary(COPY_BINARY_SQL).map_err(e)?;
+    for i in 1..=rows {
+        let r = gen_row(i);
+        w.row(&[
+            Value::I64(r.id),
+            Value::I32(r.a),
+            Value::I32(r.b),
+            Value::I64(r.c),
+            Value::F64(r.d),
+            Value::F64(r.e),
+            Value::Text(&r.s1),
+            Value::Text(&r.s2),
+            Value::Bool(r.flag),
+            Value::I16(r.f),
+        ])
+        .map_err(e)?;
+    }
+    let n = w.finish().map_err(e)?;
+    Ok((n, 0))
+}
+
 fn copy_in(conn: &mut Connection, rows: i64) -> Result<(u64, u64), String> {
+    if BINARY_COPY.load(std::sync::atomic::Ordering::Relaxed) {
+        return copy_in_binary(conn, rows);
+    }
     let e = |e: karez_pg::Error| e.to_string();
     conn.execute("TRUNCATE bench_ins", &[]).map_err(e)?;
     let mut r = GenReader { next: 1, end: rows, buf: Vec::new(), pos: 0 };
@@ -303,7 +334,7 @@ pub fn run(cfg: &Cfg, chunk: bool) -> (String, Vec<Pass>) {
             _ => copy_in(&mut conn, cfg.bulk_rows),
         }));
     }
-    (format!("karez-pg {}{}", env!("CARGO_PKG_VERSION"), if chunk { " (chunk path)" } else { " (row view)" }), passes)
+    (format!("karez-pg {}{}", env!("CARGO_PKG_VERSION"), if chunk { " (chunk path)" } else if BINARY_COPY.load(std::sync::atomic::Ordering::Relaxed) { " (binary COPY)" } else { " (row view)" }), passes)
 }
 
 /// Prototype of a partitioned scan (perf-program.md 3.1): `KAREZ_PARTS` connections (default 4), each scans one key range
