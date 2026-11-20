@@ -313,3 +313,9 @@ Results: `bench/results/2026-11-19-exit-c4/` (gzipped raw cells, `verify.txt`, t
 What it supports: S6 binary COPY of karez at 1.36x PgBulkInsert plain and 1.43x over TLS (gate of 1.5x not met; the server's insert backend is the probable limit); S1 to S3 plain and over TLS level among karez, tokio-postgres, pgx, libpq and tuned pgjdbc; TLS bulk reads for nine clients. It found a collapse of `karez-pool` on S8 (512 workers, pool of 32) and a 44% slowdown of the chunk path over TLS (not reproduced locally on 2026-11-20; see m1-plan.md step 9).
 
 Limits: another region and droplet pair than the earlier `c-4` campaigns (not comparable with them); one lane; n=3; SLO rates are search steps (differences under about 10% are noise); no taxi scenarios; the S8 wait-time distribution was not attempted. `setup-db.sh` now writes the machine record when the taxi files are not staged, so `up` no longer stops there.
+
+### 2026-11-20, the recheck on `c-4` in `sfo2`
+
+Results: `bench/results/2026-11-20-recheck-c4/` (`REPORT.md`, `lane1/out/lane1-round1-recheck/cells.jsonl`). `bench/cloud/lane-recheck.sh` (profile `recheck`, round label `x2`): S4 chunk path, row view and tokio-postgres, plain and over TLS, in alternating order, then S8 plain and over TLS for karez-blocking, libpq and pgx. Two `c-4` in `sfo2` (`nyc1` had none left; the owner's tenth spend exception), 35 minutes, about $0.15. `[measured here, 2026-11-20]`.
+
+What it supports: S8 after the pool fix, karez at 31,040 requests a second plain and 30,100 over TLS (libpq 38,000 and 31,871, pgx 37,636 and 26,468). The 44% slowdown of the chunk path over TLS did not reproduce (+19% over TLS, like the row view). Limits: another region and pair, one lane; S4 on this pair was slow and unstable for every client (0.7 to 1.85 s per pass), so it is not a clean measurement.

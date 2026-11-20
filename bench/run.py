@@ -524,6 +524,9 @@ PROFILES = {
                           ("s2", "unpipelined", 64, 0), ("s7", "unpipelined", 64, 0),
                           ("s3", "unpipelined", 64, 0), ("s3t", "unpipelined", 64, 0),
                           ("s8", "unpipelined", 512, 32), ("s8t", "unpipelined", 512, 32)]),
+    # recheck (2026-11-20): S8 again after the pool fix, plain and over TLS; the bulk part is run by lane-recheck.sh
+    "recheck": dict(repeats=3, duration=10, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
+                    configs=[("s8", "unpipelined", 512, 32), ("s8t", "unpipelined", 512, 32)]),
     # repeat (rounds 2 and 3): what is measured again on the other droplets
     "repeat": dict(repeats=5, duration=12, warmup=3, probe_s=3, probe_warm=1, bisect_steps=4,
                    configs=[("s1", "unpipelined", 64, 0), ("s2", "unpipelined", 64, 0),
