@@ -23,7 +23,10 @@ impl Manager for Mock {
 }
 
 fn main() {
-    let a: Vec<u64> = std::env::args().skip(1).filter_map(|s| s.parse().ok()).collect();
+    let a: Vec<u64> = std::env::args()
+        .skip(1)
+        .filter_map(|s| s.parse().ok())
+        .collect();
     let (threads, size, hold_us, secs) = (
         a.first().copied().unwrap_or(512) as usize,
         a.get(1).copied().unwrap_or(32) as usize,

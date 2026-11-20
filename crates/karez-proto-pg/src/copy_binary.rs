@@ -130,7 +130,8 @@ mod tests {
     #[test]
     fn the_stream_has_the_documented_layout() {
         let mut e = BinaryCopyEncoder::new(3);
-        e.row(&[Value::I32(7), Value::Null, Value::Text("ab")]).unwrap();
+        e.row(&[Value::I32(7), Value::Null, Value::Text("ab")])
+            .unwrap();
         e.finish();
         let mut want: Vec<u8> = b"PGCOPY\n\xff\r\n\0".to_vec();
         want.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // flags, extension length
@@ -148,8 +149,15 @@ mod tests {
         let mut e = BinaryCopyEncoder::new(2);
         let before = e.len();
         assert!(e.row(&[Value::I32(1)]).is_err(), "wrong count");
-        assert!(e.row(&[Value::I32(1), Value::Unknown("x")]).is_err(), "text literal");
-        assert!(e.row(&[Value::I32(1), Value::Time(karez_chunk::Time(-1))]).is_err(), "out of range");
+        assert!(
+            e.row(&[Value::I32(1), Value::Unknown("x")]).is_err(),
+            "text literal"
+        );
+        assert!(
+            e.row(&[Value::I32(1), Value::Time(karez_chunk::Time(-1))])
+                .is_err(),
+            "out of range"
+        );
         assert_eq!(e.len(), before);
         assert_eq!(e.rows(), 0);
         e.row(&[Value::I32(1), Value::I32(2)]).unwrap();

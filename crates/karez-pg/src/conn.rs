@@ -42,6 +42,24 @@ pub struct Notification {
     pub payload: String,
 }
 
+/// The password as a SCRAM exchange must use it. PostgreSQL stores `SASLprep(password)` (RFC 4013:
+/// non-ASCII spaces become spaces, "mapped to nothing" characters such as the soft hyphen are
+/// dropped, then Unicode NFKC) and expects the client to apply the same, so `U+2168` and `IX` are
+/// one password. An ASCII password is unchanged by it. With the `saslprep` feature a password that
+/// can be prepared is prepared; one that cannot (it holds a prohibited character) is used as typed,
+/// which is what PostgreSQL itself does. Without the feature a non-ASCII password is used as typed:
+/// correct when it is already in that form, which is usual for text typed on a keyboard.
+fn scram_password(pw: &str) -> std::borrow::Cow<'_, str> {
+    if pw.is_ascii() {
+        return std::borrow::Cow::Borrowed(pw);
+    }
+    #[cfg(feature = "saslprep")]
+    if let Ok(p) = stringprep::saslprep(pw) {
+        return std::borrow::Cow::Owned(p.into_owned());
+    }
+    std::borrow::Cow::Borrowed(pw)
+}
+
 fn unexpected(what: &BackendMessage<'_>) -> Error {
     let _ = what;
     Error::Proto(ProtoError::InvalidValue("unexpected message"))
@@ -858,7 +876,8 @@ impl Connection {
                                 "the server needs a (UTF-8) password and none was given".into(),
                             )
                         })?;
-                    let c = ScramClient::with_binding("", pw, generate_nonce(), binding);
+                    let prepared = scram_password(pw);
+                    let c = ScramClient::with_binding("", &prepared, generate_nonce(), binding);
                     self.out.clear();
                     frontend::sasl_initial_response(
                         &mut self.out,
@@ -905,7 +924,20 @@ impl Connection {
                     c.verify_server_final(sf)?;
                     verified = true;
                 }
-                Step::Failed(f) => {
+                Step::Failed(mut f) => {
+                    // A non-ASCII password sent as typed: PostgreSQL stores passwords after
+                    // SASLprep, so a password that SASLprep would change fails here. Say so.
+                    if scram.is_some()
+                        && f.code == "28P01"
+                        && f.hint.is_none()
+                        && !cfg!(feature = "saslprep")
+                        && cfg.password_bytes().is_some_and(|p| !p.is_ascii())
+                    {
+                        f.hint = Some(
+                            "the password has non-ASCII characters, which PostgreSQL normalises (SASLprep) before it checks a SCRAM login;                              enable the `saslprep` feature of karez-pg, or use an ASCII password"
+                                .into(),
+                        );
+                    }
                     if let Some((sent_token, Some(challenge))) = oauth.take() {
                         // the error that follows the JSON challenge: report what the server
                         // said it needs, not the bare "authentication failed"
@@ -1561,6 +1593,79 @@ impl Connection {
     /// True once a fatal error has made the connection unusable.
     pub fn is_broken(&self) -> bool {
         self.broken
+    }
+
+    /// Probe an idle connection without a round trip: is the server still there?
+    ///
+    /// Reads whatever the server has already sent, without waiting. End of stream, a reset, an
+    /// `ErrorResponse` (a server shutting down or terminating the session sends `FATAL` first)
+    /// or any message a command did not ask for means the connection is dead, and it is marked
+    /// broken. `ParameterStatus`, notices and notifications are kept for the next command. A
+    /// connection with a command in progress (a cursor or a copy open) is not idle and this
+    /// returns `false` for it. A server that vanished without closing the socket (a cable
+    /// pulled, a firewall that drops packets) cannot be seen this way; only a command, or the
+    /// operating system's keep-alive, finds it.
+    pub fn is_alive(&mut self) -> bool {
+        if self.broken {
+            return false;
+        }
+        let alive = self.probe_idle();
+        if !alive {
+            self.broken = true;
+        }
+        alive
+    }
+
+    fn probe_idle(&mut self) -> bool {
+        if self.io.stream.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let mut alive = true;
+        // an idle server sends nothing, or a few messages; a bound keeps a babbling one from
+        // holding this forever
+        for _ in 0..64 {
+            match self.io.stream.read(&mut self.io.buf) {
+                Ok(0) => {
+                    alive = false;
+                    break;
+                }
+                Ok(n) => self.io.reader.push(&self.io.buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    alive = false;
+                    break;
+                }
+            }
+        }
+        if self.io.stream.set_nonblocking(false).is_err() {
+            return false;
+        }
+        while alive {
+            match self.io.reader.frame_ready() {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => return false,
+            }
+            let Ok(Some((tag, span))) = self.io.reader.next_span() else {
+                return false;
+            };
+            let Ok(msg) = BackendMessage::parse(Frame {
+                tag,
+                body: self.io.reader.span(span),
+            }) else {
+                return false;
+            };
+            match msg {
+                BackendMessage::ParameterStatus { .. }
+                | BackendMessage::NoticeResponse(_)
+                | BackendMessage::NotificationResponse { .. } => self.side.absorb(msg),
+                // an ErrorResponse here is the server saying goodbye; anything else is a stream
+                // nobody should reuse
+                _ => alive = false,
+            }
+        }
+        alive
     }
 
     fn track<T>(&mut self, r: Result<T>) -> Result<T> {

@@ -3,7 +3,9 @@
 //! certificate, which is the one binding PostgreSQL implements (mechanism `SCRAM-SHA-256-PLUS`).
 //!
 //! Limits: the password is used as given (no SASLprep normalisation), which is identical for
-//! ASCII passwords. A non-ASCII password may fail against a server that normalised it.
+//! ASCII passwords. A non-ASCII password may fail against a server that normalised it, so a
+//! caller prepares it first: `karez-pg` does, with its `saslprep` feature (this crate has no
+//! dependency and std has no Unicode tables).
 
 use crate::base64;
 use crate::error::{ProtoError, Result};

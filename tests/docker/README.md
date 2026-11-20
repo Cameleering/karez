@@ -46,6 +46,16 @@ KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_REQU
 docker compose -f tests/docker/standby.yaml down -v
 ```
 
+The failover test (`crates/karez-pg/tests/failover.rs`) **destroys this fixture** (it kills the primary and promotes the standby), so it runs only with `KAREZ_TEST_FAILOVER=1`, needs the `docker` command, and the fixture must be recreated afterwards (`down -v`, then `up -d --wait`):
+
+```sh
+KAREZ_TEST_PRIMARY=127.0.0.1:54361 KAREZ_TEST_STANDBY=127.0.0.1:54362 KAREZ_TEST_FAILOVER=1 KAREZ_REQUIRE_FAILOVER=1 cargo test -p karez-pg --test failover
+```
+
+## SASLprep
+
+`crates/karez-pg/tests/saslprep.rs` creates a role `karez_prep` as the superuser (the `pg_hba.conf` here has a rule for it) with a password the server normalises (`U+2168`, which is `IX` after SASLprep). Run it without and with the feature: `cargo test -p karez-pg [--features saslprep] --test saslprep`.
+
 ## TLS
 
 Every server has TLS on with a throwaway CA generated at start and written to `tests/docker/certs/ca-<port>.crt`

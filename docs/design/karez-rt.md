@@ -221,13 +221,17 @@ Deviations and gaps:
   caller reads the socket itself when one command is in flight) is **not** built; instead the reader lingers
   for `Options::idle_linger` (default 50 ms) after its last command, which removed the cost of starting a
   thread per command (smoke run in the results note). "No thread while idle" holds after the linger.
-- A dropped `Pending` or `Stream` discards its answer when it arrives, but a command still queued is **not**
-  removed: it runs. The design said it would be removed.
-- `LISTEN` notifications are read only while commands are in flight; an idle shared connection has no reader.
+- A dropped `Pending` or `Stream` (or a `wait_timeout` that expired) takes its command back if it was never
+  written (`Engine::cancel_unsent`, 2026-11-20): nothing is sent for it. A plain run in a Sync group of its own
+  qualifies; a command already written, a prepare, a close, a portal open and a group do not, and their
+  answers are discarded when they arrive.
+- `LISTEN` notifications are read only while commands are in flight, **unless `Options::keep_listening` is
+  set** (2026-11-20): then the reader stays in `read` while idle and `wait_for_notification` returns them. Off by
+  default, so an idle connection has no thread.
 - Statement-cache eviction and duplicate prepares queue a Close; a stale plan (0A000, 26000) drops the entry and
   the error is returned (no retry).
 - The first use of a statement blocks the caller for one round trip, async callers included.
-- `Pipeline` takes owned values of the nine basic types only (`OwnedValue`).
+- `Pipeline` takes owned values (`OwnedValue`): the nine basic types, and since 2026-11-19 uuid, date, timestamp, timestamptz, time, interval, numeric, arrays of the seven basic types and an unknown-typed text literal.
 
 ## 14. Risks and open questions
 

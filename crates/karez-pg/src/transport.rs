@@ -126,6 +126,10 @@ impl Transport {
         self.tcp().set_read_timeout(d)
     }
 
+    pub(crate) fn set_nonblocking(&self, on: bool) -> std::io::Result<()> {
+        self.tcp().set_nonblocking(on)
+    }
+
     pub(crate) fn read_timeout(&self) -> std::io::Result<Option<Duration>> {
         self.tcp().read_timeout()
     }

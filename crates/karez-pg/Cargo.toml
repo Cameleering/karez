@@ -14,6 +14,7 @@ karez-gss = { path = "../karez-gss", optional = true }
 karez-pool = { path = "../karez-pool" }
 karez-proto-pg = { path = "../karez-proto-pg" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+stringprep = { version = "0.1.5", optional = true }
 webpki-roots = { version = "1.0.12", optional = true }
 
 [lints]
@@ -26,3 +27,7 @@ tls = ["dep:rustls", "dep:webpki-roots"]
 # Kerberos login (GSSAPI) through the system library, in the `karez-gss` crate (the one crate here
 # with FFI to a security library; Unix only). Off by default: the core has no unsafe code.
 gss = ["dep:karez-gss"]
+# SASLprep (RFC 4013) for SCRAM passwords with non-ASCII characters, as PostgreSQL applies it when it
+# stores a password: the `stringprep` crate (Unicode tables, which std lacks). Off by default: with it
+# off, a non-ASCII password is sent as typed, which works whenever it is already in normalised form.
+saslprep = ["dep:stringprep"]

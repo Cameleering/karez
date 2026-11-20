@@ -2100,6 +2100,59 @@ fn the_pool_serves_waiters_in_arrival_order() -> R {
     Ok(())
 }
 
+/// `Connection::is_alive` on an idle connection: true while the server is there, false once it has
+/// terminated the session (it sends FATAL, then closes), and the connection is then marked broken.
+fn alive_then_terminated(mut c: Connection, addr: &str) -> R {
+    assert!(c.is_alive(), "a fresh idle connection is alive");
+    assert_eq!(one_i64(&mut c, "SELECT 1::int8", &[])?, 1);
+    assert!(c.is_alive(), "and after a query");
+    // a notice and a parameter change arrive while idle: they are kept, not taken for a death
+    c.execute("SET application_name = 'karez_alive'", &[])?;
+    assert!(c.is_alive());
+    let pid = one_i64(&mut c, "SELECT pg_backend_pid()::int8", &[])?;
+    let mut other = connect(addr)?;
+    other.execute(
+        "SELECT pg_terminate_backend($1::int4)",
+        &[Value::i32(pid as i32)],
+    )?;
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!c.is_alive(), "the server terminated the session");
+    assert!(c.is_broken());
+    assert!(c.execute("SELECT 1", &[]).is_err());
+    Ok(())
+}
+
+#[test]
+fn an_idle_connection_knows_when_the_server_has_gone() -> R {
+    let addr = need_server!();
+    alive_then_terminated(connect(&addr)?, &addr)
+}
+
+#[test]
+fn a_pool_replaces_an_idle_connection_the_server_terminated() -> R {
+    let addr = need_server!();
+    let pool = karez_pg::Pool::new(
+        Config::from_url(&url(&addr, "karez_scram", Some(SCRAM_PW), "karez", "")).unwrap(),
+        2,
+    )?;
+    pool.set_validate_after(Duration::ZERO);
+    let pid = |pool: &karez_pg::Pool| -> Result<i64, Error> {
+        let mut c = pool.get()?;
+        one_i64(&mut c, "SELECT pg_backend_pid()::int8", &[])
+    };
+    let first = pid(&pool)?;
+    let mut other = connect(&addr)?;
+    other.execute(
+        "SELECT pg_terminate_backend($1::int4)",
+        &[Value::i32(first as i32)],
+    )?;
+    std::thread::sleep(Duration::from_millis(300));
+    let second = pid(&pool)?;
+    assert_ne!(first, second);
+    assert_eq!(pool.size(), 1, "the dead one's slot was reused");
+    Ok(())
+}
+
 // ---- TLS (feature `tls`; the fixture server has TLS on with a throwaway CA) ---------------
 
 #[cfg(feature = "tls")]
@@ -2181,6 +2234,17 @@ mod tls {
         assert_eq!(c.tx_status(), karez_pg::TxStatus::Idle);
         assert_eq!(one_i64(&mut c, "SELECT 5::int8", &[])?, 5);
         Ok(())
+    }
+
+    #[test]
+    fn an_idle_tls_connection_knows_when_the_server_has_gone() -> R {
+        let addr = need_server!();
+        let c = Connection::connect(&tls_config_by_name(
+            &addr,
+            SslMode::VerifyFull,
+            Some(ca(&addr)),
+        ))?;
+        alive_then_terminated(c, &addr)
     }
 
     #[test]

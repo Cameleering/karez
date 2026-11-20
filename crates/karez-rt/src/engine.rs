@@ -113,6 +113,9 @@ struct Entry {
     kind: Kind,
     /// Its bytes have been handed out by `take_output`.
     sent: bool,
+    /// How many bytes of `Core::out` it owns while unsent (the first entry of a group owns the
+    /// whole group's bytes, the others none).
+    out_len: usize,
     /// Ends a Sync group: its answer ends with ReadyForQuery.
     sync: bool,
     /// The server's CommandComplete (or EmptyQueryResponse) was seen.
@@ -129,6 +132,8 @@ struct Core {
     out: Vec<u8>,
     scratch: Vec<u8>,
     queue: VecDeque<Entry>,
+    /// Bytes of `out` that belong to entries already pushed.
+    out_pushed: usize,
     events: VecDeque<Event>,
     next_id: CommandId,
     next_stmt: u64,
@@ -191,6 +196,7 @@ impl Engine {
                 out: Vec::with_capacity(512),
                 scratch: Vec::new(),
                 queue: VecDeque::new(),
+                out_pushed: 0,
                 events: VecDeque::new(),
                 next_id: 1,
                 next_stmt: 0,
@@ -226,6 +232,11 @@ impl Engine {
         self.core.params.get(name).map(String::as_str)
     }
 
+    /// The oldest notification received, if any.
+    pub fn next_notification(&mut self) -> Option<Notification> {
+        self.core.notifications.pop_front()
+    }
+
     /// Notifications received, oldest first; empties the queue.
     pub fn take_notifications(&mut self) -> Vec<Notification> {
         self.core.notifications.drain(..).collect()
@@ -241,7 +252,41 @@ impl Engine {
         for e in &mut self.core.queue {
             e.sent = true;
         }
+        self.core.out_pushed = 0;
         std::mem::take(&mut self.core.out)
+    }
+
+    /// Take a command back that has not been written yet: its bytes leave the output and nothing
+    /// is ever sent to the server for it. Returns false (and changes nothing) if its bytes were
+    /// handed out, if it is not a plain `Run` (a prepare, a close and a portal open have effects
+    /// the cache or the caller rely on), or if it shares a Sync with other statements (a group is
+    /// answered as one).
+    pub fn cancel_unsent(&mut self, id: CommandId) -> bool {
+        let c = &mut self.core;
+        let Some(i) = c.queue.iter().position(|e| e.id == id) else {
+            return false;
+        };
+        let e = &c.queue[i];
+        let own_group = e.sync && (i == 0 || c.queue[i - 1].sync);
+        if e.sent || !own_group || !matches!(e.kind, Kind::Run { .. }) {
+            return false;
+        }
+        // the bytes of every unsent entry before it come first in `out`
+        let start: usize = c
+            .queue
+            .iter()
+            .take(i)
+            .filter(|e| !e.sent)
+            .map(|e| e.out_len)
+            .sum();
+        let len = c.queue[i].out_len;
+        if start + len > c.out.len() {
+            return false;
+        }
+        c.out.drain(start..start + len);
+        c.out_pushed -= len;
+        c.queue.remove(i);
+        true
     }
 
     /// The next completed result, if any.
@@ -468,6 +513,7 @@ impl Engine {
             });
         }
         self.core.out.clear();
+        self.core.out_pushed = 0;
     }
 
     /// Feed bytes received from the server. An error means the stream cannot continue (bad
@@ -494,10 +540,13 @@ impl Core {
     fn push(&mut self, kind: Kind, sync: bool) -> CommandId {
         let id = self.next_id;
         self.next_id += 1;
+        let out_len = self.out.len() - self.out_pushed;
+        self.out_pushed = self.out.len();
         self.queue.push_back(Entry {
             id,
             kind,
             sent: false,
+            out_len,
             sync,
             replied: false,
             err: None,

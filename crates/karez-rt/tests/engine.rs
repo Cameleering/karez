@@ -286,3 +286,74 @@ fn malformed_server_bytes_are_an_error_not_a_panic() {
         drain(&mut e);
     }
 }
+
+/// What the engine writes for runs of the statement with these parameters, with nothing taken back.
+fn bytes_of(params: &[i32]) -> Vec<u8> {
+    let mut e = engine();
+    let stmt = prepared(&mut e);
+    for p in params {
+        e.run(&stmt, &[Value::i32(*p)], Class::Exec).unwrap();
+    }
+    e.take_output()
+}
+
+#[test]
+fn an_unwritten_command_can_be_taken_back_and_a_written_one_cannot() {
+    let mut e = engine();
+    let stmt = prepared(&mut e);
+    let ids: Vec<_> = (1..=4)
+        .map(|p| e.run(&stmt, &[Value::i32(p)], Class::Collect).unwrap())
+        .collect();
+    // the middle, the first and the last: what is left is exactly what was never taken back
+    assert!(e.cancel_unsent(ids[1]));
+    assert!(e.cancel_unsent(ids[3]));
+    assert_eq!(e.in_flight(), 2);
+    assert!(!e.cancel_unsent(ids[1]), "already gone");
+    assert!(!e.cancel_unsent(9999));
+    let out = e.take_output();
+    assert_eq!(out, bytes_of(&[1, 3]), "the bytes of 2 and 4 are not sent");
+    // written: no longer cancellable; the answers of the other two arrive in order
+    assert!(!e.cancel_unsent(ids[0]));
+    e.feed(&run_reply(1)).unwrap();
+    e.feed(&run_reply(2)).unwrap();
+    let evs = drain(&mut e);
+    let got: Vec<_> = evs
+        .iter()
+        .map(|ev| match ev {
+            Event::Done { id, result } => (*id, result.as_ref().unwrap().rows),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(got, vec![(ids[0], 1), (ids[2], 2)]);
+    assert_eq!(e.in_flight(), 0);
+}
+
+#[test]
+fn only_a_plain_run_in_a_group_of_its_own_can_be_taken_back() {
+    let mut e = engine();
+    let stmt = prepared(&mut e);
+    let first = e.run(&stmt, &[Value::i32(1)], Class::Exec).unwrap();
+    let group = e
+        .run_group(&[
+            (&stmt, &[Value::i32(2)][..], Class::Exec),
+            (&stmt, &[Value::i32(3)][..], Class::Exec),
+        ])
+        .unwrap();
+    let last = e.run(&stmt, &[Value::i32(4)], Class::Exec).unwrap();
+    assert!(!e.cancel_unsent(group[0]), "a group shares one Sync");
+    assert!(!e.cancel_unsent(group[1]), "a group shares one Sync");
+    assert!(e.cancel_unsent(last), "its own group, after a group");
+    assert!(e.cancel_unsent(first));
+    let out = e.take_output();
+    let mut want = engine();
+    let s2 = prepared(&mut want);
+    want.run_group(&[
+        (&s2, &[Value::i32(2)][..], Class::Exec),
+        (&s2, &[Value::i32(3)][..], Class::Exec),
+    ])
+    .unwrap();
+    assert_eq!(out, want.take_output());
+    // a prepare is never taken back: the statement cache depends on its answer
+    let prep = e.prepare("SELECT $1::int + 1", &[23]).unwrap();
+    assert!(!e.cancel_unsent(prep));
+}

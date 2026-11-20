@@ -34,8 +34,8 @@ pub use config::{
     TargetSessionAttrs, TokenProvider, UnsupportedTypes,
 };
 pub use conn::{
-    Batch, BatchOutcome, BatchRows, CancelToken, Connection, CopyWriter, Cursor, Fetched, Notification,
-    Pipeline, Portal, PortalCursor, RawParts, Statement, StepResult,
+    Batch, BatchOutcome, BatchRows, CancelToken, Connection, CopyWriter, Cursor, Fetched,
+    Notification, Pipeline, Portal, PortalCursor, RawParts, Statement, StepResult,
 };
 pub use error::{Error, Result, ServerError};
 pub use karez_chunk::{

@@ -12,15 +12,20 @@
 //! * A connection goes back when its guard is dropped, after [`Manager::recycle`] has looked at it.
 //!   `recycle` runs outside the pool's lock, so it may do network I/O (a `ROLLBACK`, say). If it
 //!   returns `false` the connection is discarded and its slot is free again.
-//! * Connections are not tested before they are handed out, so a server restart shows up as an
-//!   error on first use; the driver's `recycle` then discards the broken connection and the next
-//!   `get` opens a new one.
+//! * A connection that has sat idle for a while (by default one second, see
+//!   [`Pool::set_validate_after`]) is checked with [`Manager::validate`] before it is handed out; one
+//!   that fails is dropped and replaced by a new connection in the same place in the queue, so a
+//!   server that went away (a failover, a restart) does not show up as an error on first use. A
+//!   connection that was idle for less than that is handed out without a check, so a pool that
+//!   is busy pays nothing. A connection that dies within that window still fails on first use; the
+//!   driver's `recycle` then discards it and the next `get` opens a new one.
 
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -38,6 +43,14 @@ pub trait Manager: Send + Sync + 'static {
     /// example roll back an open transaction). Return `true` to keep it, `false` to discard it.
     /// Called without the pool's lock held.
     fn recycle(&self, conn: &mut Self::Connection) -> bool;
+
+    /// Check a connection that has been idle before it is handed out. Return `false` if it is
+    /// dead (the pool drops it and opens another). Must not wait on the network for long: a
+    /// non-blocking probe of the socket is the intended use. Called without the pool's lock held.
+    /// The default accepts every connection.
+    fn validate(&self, _conn: &mut Self::Connection) -> bool {
+        true
+    }
 }
 
 /// Why [`Pool::get`] or [`Pool::new`] failed.
@@ -80,7 +93,8 @@ struct Waiter {
 }
 
 struct State<C> {
-    idle: Vec<C>,
+    /// Idle connections and when each went idle; the last in is the first out.
+    idle: Vec<(C, Instant)>,
     /// Connections that exist: idle, checked out, or being opened.
     total: usize,
     /// The threads waiting for a connection, in arrival order.
@@ -102,6 +116,8 @@ struct Shared<M: Manager> {
     manager: M,
     max: usize,
     state: Mutex<State<M::Connection>>,
+    /// An idle connection older than this is validated before it is handed out (milliseconds).
+    validate_after_ms: AtomicU64,
     /// Loop turns of waiting threads, to test that a release wakes one thread and not all.
     #[cfg(test)]
     turns: std::sync::atomic::AtomicUsize,
@@ -154,10 +170,18 @@ impl<M: Manager> Pool<M> {
                     waiters: VecDeque::new(),
                     next_ticket: 0,
                 }),
+                validate_after_ms: AtomicU64::new(1000),
                 #[cfg(test)]
                 turns: std::sync::atomic::AtomicUsize::new(0),
             }),
         })
+    }
+
+    /// Validate a connection that has been idle at least this long before handing it out (default
+    /// one second; `Duration::ZERO` checks every idle connection every time).
+    pub fn set_validate_after(&self, after: Duration) {
+        let ms = u64::try_from(after.as_millis()).unwrap_or(u64::MAX);
+        self.shared.validate_after_ms.store(ms, Ordering::Relaxed);
     }
 
     /// The manager this pool was built with.
@@ -194,8 +218,9 @@ impl<M: Manager> Pool<M> {
         let mut st = self.shared.lock();
         // Nobody is waiting: take a connection, or a free slot, at once.
         if st.waiters.is_empty() {
-            if let Some(c) = st.idle.pop() {
-                return Ok(self.guard(c));
+            if let Some((c, since)) = st.idle.pop() {
+                drop(st);
+                return self.checked(c, since);
             }
             if st.total < self.shared.max {
                 st.total += 1;
@@ -218,11 +243,11 @@ impl<M: Manager> Pool<M> {
                 .turns
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if st.waiters.front().map(|w| w.ticket) == Some(ticket) {
-                if let Some(c) = st.idle.pop() {
+                if let Some((c, since)) = st.idle.pop() {
                     st.waiters.pop_front();
                     st.wake_front(); // the next in line may be able to go too
                     drop(st);
-                    return Ok(self.guard(c));
+                    return self.checked(c, since);
                 }
                 if st.total < self.shared.max {
                     st.total += 1;
@@ -250,6 +275,27 @@ impl<M: Manager> Pool<M> {
                 }
             };
         }
+    }
+
+    /// Hand out a connection taken from the idle list, after checking it if it has been idle long
+    /// enough. A dead one is replaced in the same slot (the count does not change).
+    fn checked(
+        &self,
+        mut c: M::Connection,
+        since: Instant,
+    ) -> Result<Pooled<M>, PoolError<M::Error>> {
+        let after = Duration::from_millis(self.shared.validate_after_ms.load(Ordering::Relaxed));
+        if since.elapsed() >= after {
+            let alive = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.shared.manager.validate(&mut c)
+            }))
+            .unwrap_or(false);
+            if !alive {
+                drop(c);
+                return self.open();
+            }
+        }
+        Ok(self.guard(c))
     }
 
     /// Open the connection for a slot already counted in `total`. A failure gives the slot back.
@@ -325,7 +371,7 @@ impl<M: Manager> Drop for Pooled<M> {
         };
         let mut st = self.shared.lock();
         match keep {
-            Some(c) => st.idle.push(c),
+            Some(c) => st.idle.push((c, Instant::now())),
             None => st.total -= 1,
         }
         st.wake_front();
@@ -367,6 +413,86 @@ mod tests {
         fn recycle(&self, _: &mut usize) -> bool {
             self.keep
         }
+    }
+
+    /// Connections are numbers; the ones in `dead` fail validation.
+    struct Checked {
+        opened: AtomicUsize,
+        validated: AtomicUsize,
+        dead: Mutex<Vec<usize>>,
+    }
+
+    impl Manager for Checked {
+        type Connection = usize;
+        type Error = &'static str;
+        fn connect(&self) -> Result<usize, &'static str> {
+            Ok(self.opened.fetch_add(1, Ordering::SeqCst))
+        }
+        fn recycle(&self, _: &mut usize) -> bool {
+            true
+        }
+        fn validate(&self, c: &mut usize) -> bool {
+            self.validated.fetch_add(1, Ordering::SeqCst);
+            !self.dead.lock().unwrap().contains(c)
+        }
+    }
+
+    fn checked() -> Pool<Checked> {
+        Pool::new(
+            Checked {
+                opened: AtomicUsize::new(0),
+                validated: AtomicUsize::new(0),
+                dead: Mutex::new(Vec::new()),
+            },
+            3,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_dead_idle_connection_is_replaced_before_it_is_handed_out() {
+        let pool = checked();
+        pool.set_validate_after(Duration::ZERO);
+        let (a, b) = (pool.get().unwrap(), pool.get().unwrap());
+        assert_eq!((*a, *b), (0, 1));
+        drop((a, b));
+        assert_eq!((pool.size(), pool.idle()), (2, 2));
+        pool.manager().dead.lock().unwrap().extend([0, 1]); // the server went away
+        let c = pool.get().unwrap();
+        assert_eq!(*c, 2, "a new connection, not the dead one");
+        let d = pool.get().unwrap();
+        assert_eq!(*d, 3, "the second dead one is replaced too");
+        assert_eq!(pool.size(), 2, "the slots were reused, none leaked");
+        assert_eq!(pool.manager().validated.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_connection_that_was_idle_only_briefly_is_not_checked() {
+        let pool = checked();
+        assert_eq!(*pool.get().unwrap(), 0);
+        pool.manager().dead.lock().unwrap().push(0);
+        // idle for a moment, under the default one second: handed out without a check
+        let a = pool.get().unwrap();
+        assert_eq!(*a, 0);
+        assert_eq!(pool.manager().validated.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_waiter_gets_a_replacement_for_a_dead_connection_in_its_place() {
+        let pool = checked();
+        pool.set_validate_after(Duration::ZERO);
+        let held: Vec<_> = (0..3).map(|_| pool.get().unwrap()).collect();
+        let p = pool.clone();
+        let waiter = thread::spawn(move || *p.get().unwrap());
+        thread::sleep(Duration::from_millis(50));
+        pool.manager().dead.lock().unwrap().extend([0, 1, 2]);
+        drop(held); // all three go idle and dead; the waiter is woken for the front one
+        assert_eq!(
+            waiter.join().unwrap(),
+            3,
+            "it got a new connection, not a dead one"
+        );
+        assert!(pool.size() <= 3);
     }
 
     #[test]

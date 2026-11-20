@@ -55,7 +55,9 @@ fn count(c: &mut Connection, table: &str) -> Result<i64, Error> {
 /// One text per table: every row as text, in id order, hashed by the server.
 fn digest(c: &mut Connection, table: &str) -> Result<String, Error> {
     let mut cur = c.query(
-        &format!("SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY id), ''))::text FROM {table} t"),
+        &format!(
+            "SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY id), ''))::text FROM {table} t"
+        ),
         &[],
     )?;
     let v = cur.next()?.expect("a row").get::<String>(0)?;
@@ -84,42 +86,183 @@ impl RowData {
         let r = |rng: &mut SplitMix64| rng.next_u64();
         let len = (r(rng) % 40) as usize;
         let text: String = (0..len)
-            .map(|_| char::from_u32(0x20 + (r(rng) % 0x5f) as u32 + if r(rng) % 7 == 0 { 0x400 } else { 0 }).unwrap())
+            .map(|_| {
+                char::from_u32(
+                    0x20 + (r(rng) % 0x5f) as u32 + if r(rng) % 7 == 0 { 0x400 } else { 0 },
+                )
+                .unwrap()
+            })
             .collect();
         let bytes: Vec<u8> = (0..(r(rng) % 30) as usize).map(|_| r(rng) as u8).collect();
         let ai: Vec<Option<i32>> = (0..(r(rng) % 5) as usize)
-            .map(|_| if r(rng) % 4 == 0 { None } else { Some(r(rng) as i32) })
+            .map(|_| {
+                if r(rng) % 4 == 0 {
+                    None
+                } else {
+                    Some(r(rng) as i32)
+                }
+            })
             .collect();
         let at_owned: Vec<Option<String>> = (0..(r(rng) % 4) as usize)
-            .map(|k| if r(rng) % 4 == 0 { None } else { Some(format!("e{i}-{k}")) })
+            .map(|k| {
+                if r(rng) % 4 == 0 {
+                    None
+                } else {
+                    Some(format!("e{i}-{k}"))
+                }
+            })
             .collect();
-        RowData { text, bytes, ai, at_owned }
+        RowData {
+            text,
+            bytes,
+            ai,
+            at_owned,
+        }
     }
 }
 
-fn values<'a>(i: i64, rng: &mut SplitMix64, d: &'a RowData, at: &'a [Option<&'a str>]) -> Vec<Value<'a>> {
+fn values<'a>(
+    i: i64,
+    rng: &mut SplitMix64,
+    d: &'a RowData,
+    at: &'a [Option<&'a str>],
+) -> Vec<Value<'a>> {
     let r = |rng: &mut SplitMix64| rng.next_u64();
     let null = |rng: &mut SplitMix64| r(rng) % 6 == 0;
     let mut v: Vec<Value> = Vec::new();
     v.push(Value::I64(i));
     let edge = i < 8;
-    v.push(if null(rng) { Value::Null } else { Value::Bool(r(rng) % 2 == 0) });
-    v.push(if edge { Value::I16([i16::MIN, i16::MAX, 0, -1, 1, 255, -256, 12345][i as usize]) } else if null(rng) { Value::Null } else { Value::I16(r(rng) as i16) });
-    v.push(if edge { Value::I32([i32::MIN, i32::MAX, 0, -1, 1, 65535, -65536, 7][i as usize]) } else if null(rng) { Value::Null } else { Value::I32(r(rng) as i32) });
-    v.push(if edge { Value::I64([i64::MIN, i64::MAX, 0, -1, 1, 1 << 40, -(1 << 40), 7][i as usize]) } else if null(rng) { Value::Null } else { Value::I64(r(rng) as i64) });
-    v.push(if edge { Value::F32([0.0, -0.0, f32::MAX, f32::MIN_POSITIVE, f32::INFINITY, f32::NEG_INFINITY, 1.5, -2.25][i as usize]) } else if null(rng) { Value::Null } else { Value::F32(f32::from_bits(r(rng) as u32 & 0x7f7f_ffff)) });
-    v.push(if edge { Value::F64([0.0, -0.0, f64::MAX, f64::MIN_POSITIVE, f64::INFINITY, f64::NEG_INFINITY, 0.1, -1e300][i as usize]) } else if null(rng) { Value::Null } else { Value::F64(f64::from_bits(r(rng) & 0x7fef_ffff_ffff_ffff)) });
-    v.push(if null(rng) { Value::Null } else { Value::Text(&d.text) });
-    v.push(if null(rng) { Value::Null } else { Value::Bytes(&d.bytes) });
-    v.push(if null(rng) { Value::Null } else { let mut u = [0u8; 16]; u[..8].copy_from_slice(&r(rng).to_be_bytes()); u[8..].copy_from_slice(&r(rng).to_be_bytes()); Value::Uuid(u) });
-    v.push(if null(rng) { Value::Null } else { Value::Date(Date((r(rng) % 4_000_000) as i32 - 1_000_000)) });
-    v.push(if null(rng) { Value::Null } else { Value::Timestamp(Timestamp((r(rng) % 8_000_000_000_000_000) as i64 - 4_000_000_000_000_000)) });
-    v.push(if null(rng) { Value::Null } else { Value::TimestampTz(Timestamp((r(rng) % 8_000_000_000_000_000) as i64 - 4_000_000_000_000_000)) });
-    v.push(if null(rng) { Value::Null } else { Value::Time(Time((r(rng) % 86_400_000_001) as i64)) });
-    v.push(if null(rng) { Value::Null } else { Value::Interval(Interval { months: r(rng) as i32 % 100_000, days: r(rng) as i32 % 100_000, micros: (r(rng) % 1_000_000_000_000) as i64 - 500_000_000_000 }) });
-    v.push(if null(rng) { Value::Null } else { Value::Numeric(Decimal128 { unscaled: (r(rng) as i64 as i128) * 1_000_003, scale: (r(rng) % 8) as u8 }) });
-    v.push(if null(rng) { Value::Null } else { Value::Array(Array::I32(&d.ai)) });
-    v.push(if null(rng) { Value::Null } else { Value::Array(Array::Text(at)) });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Bool(r(rng) % 2 == 0)
+    });
+    v.push(if edge {
+        Value::I16([i16::MIN, i16::MAX, 0, -1, 1, 255, -256, 12345][i as usize])
+    } else if null(rng) {
+        Value::Null
+    } else {
+        Value::I16(r(rng) as i16)
+    });
+    v.push(if edge {
+        Value::I32([i32::MIN, i32::MAX, 0, -1, 1, 65535, -65536, 7][i as usize])
+    } else if null(rng) {
+        Value::Null
+    } else {
+        Value::I32(r(rng) as i32)
+    });
+    v.push(if edge {
+        Value::I64([i64::MIN, i64::MAX, 0, -1, 1, 1 << 40, -(1 << 40), 7][i as usize])
+    } else if null(rng) {
+        Value::Null
+    } else {
+        Value::I64(r(rng) as i64)
+    });
+    v.push(if edge {
+        Value::F32(
+            [
+                0.0,
+                -0.0,
+                f32::MAX,
+                f32::MIN_POSITIVE,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                1.5,
+                -2.25,
+            ][i as usize],
+        )
+    } else if null(rng) {
+        Value::Null
+    } else {
+        Value::F32(f32::from_bits(r(rng) as u32 & 0x7f7f_ffff))
+    });
+    v.push(if edge {
+        Value::F64(
+            [
+                0.0,
+                -0.0,
+                f64::MAX,
+                f64::MIN_POSITIVE,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                0.1,
+                -1e300,
+            ][i as usize],
+        )
+    } else if null(rng) {
+        Value::Null
+    } else {
+        Value::F64(f64::from_bits(r(rng) & 0x7fef_ffff_ffff_ffff))
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Text(&d.text)
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Bytes(&d.bytes)
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        let mut u = [0u8; 16];
+        u[..8].copy_from_slice(&r(rng).to_be_bytes());
+        u[8..].copy_from_slice(&r(rng).to_be_bytes());
+        Value::Uuid(u)
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Date(Date((r(rng) % 4_000_000) as i32 - 1_000_000))
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Timestamp(Timestamp(
+            (r(rng) % 8_000_000_000_000_000) as i64 - 4_000_000_000_000_000,
+        ))
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::TimestampTz(Timestamp(
+            (r(rng) % 8_000_000_000_000_000) as i64 - 4_000_000_000_000_000,
+        ))
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Time(Time((r(rng) % 86_400_000_001) as i64))
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Interval(Interval {
+            months: r(rng) as i32 % 100_000,
+            days: r(rng) as i32 % 100_000,
+            micros: (r(rng) % 1_000_000_000_000) as i64 - 500_000_000_000,
+        })
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Numeric(Decimal128 {
+            unscaled: (r(rng) as i64 as i128) * 1_000_003,
+            scale: (r(rng) % 8) as u8,
+        })
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Array(Array::I32(&d.ai))
+    });
+    v.push(if null(rng) {
+        Value::Null
+    } else {
+        Value::Array(Array::Text(at))
+    });
     v
 }
 
@@ -136,7 +279,10 @@ fn binary_copy_loads_what_insert_loads_for_every_type() -> R {
     }
     let rows = 3000i64;
     let mut rng = SplitMix64::new(77);
-    let mut w = c.copy_in_binary(&format!("COPY {a} ({}) FROM STDIN (FORMAT binary)", names()))?;
+    let mut w = c.copy_in_binary(&format!(
+        "COPY {a} ({}) FROM STDIN (FORMAT binary)",
+        names()
+    ))?;
     let mut all = Vec::new();
     for i in 0..rows {
         let d = RowData::make(i, &mut rng);
@@ -167,7 +313,11 @@ fn binary_copy_loads_what_insert_loads_for_every_type() -> R {
     }
     assert_eq!(count(&mut c, &a)?, rows);
     assert_eq!(count(&mut c, &b)?, rows);
-    assert_eq!(digest(&mut c, &a)?, digest(&mut c, &b)?, "the two tables differ");
+    assert_eq!(
+        digest(&mut c, &a)?,
+        digest(&mut c, &b)?,
+        "the two tables differ"
+    );
     Ok(())
 }
 
@@ -176,7 +326,10 @@ fn errors_leave_the_connection_usable_and_load_nothing() -> R {
     let addr = need_server!();
     let mut c = connect(&addr)?;
     let t = format!("karez_bc_e_{}", std::process::id());
-    c.execute(&format!("CREATE TEMP TABLE {t} (id int4 PRIMARY KEY, name text)"), &[])?;
+    c.execute(
+        &format!("CREATE TEMP TABLE {t} (id int4 PRIMARY KEY, name text)"),
+        &[],
+    )?;
     let sql = format!("COPY {t} (id, name) FROM STDIN (FORMAT binary)");
 
     // a wrong number of values is refused by the client; the writer takes the next row
@@ -211,7 +364,8 @@ fn errors_leave_the_connection_usable_and_load_nothing() -> R {
 
     // a statement that is not binary is refused, and the connection is fine afterwards
     assert!(matches!(
-        c.copy_in_binary(&format!("COPY {t} (id, name) FROM STDIN (FORMAT csv)")).err(),
+        c.copy_in_binary(&format!("COPY {t} (id, name) FROM STDIN (FORMAT csv)"))
+            .err(),
         Some(Error::Usage(_))
     ));
     assert!(c.copy_in_binary("SELECT 1").is_err());
@@ -224,7 +378,10 @@ fn a_large_load_crosses_the_send_threshold_and_rolls_back_with_its_transaction()
     let addr = need_server!();
     let mut c = connect(&addr)?;
     let t = format!("karez_bc_l_{}", std::process::id());
-    c.execute(&format!("CREATE TEMP TABLE {t} (id int8, a float8, s text)"), &[])?;
+    c.execute(
+        &format!("CREATE TEMP TABLE {t} (id int8, a float8, s text)"),
+        &[],
+    )?;
     let sql = format!("COPY {t} FROM STDIN (FORMAT binary)");
     let n = 300_000u64;
     let mut w = c.copy_in_binary(&sql)?;
@@ -233,7 +390,11 @@ fn a_large_load_crosses_the_send_threshold_and_rolls_back_with_its_transaction()
         s.clear();
         s.push_str("row-");
         s.push_str(&i.to_string());
-        w.row(&[Value::I64(i as i64), Value::F64(i as f64 / 3.0), Value::Text(&s)])?;
+        w.row(&[
+            Value::I64(i as i64),
+            Value::F64(i as f64 / 3.0),
+            Value::Text(&s),
+        ])?;
     }
     assert_eq!(w.finish()?, n);
     assert_eq!(count(&mut c, &t)?, n as i64);
